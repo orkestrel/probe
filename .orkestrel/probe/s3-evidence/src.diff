@@ -1,0 +1,180 @@
+diff --git a/src/server/stages/LintStage.ts b/src/server/stages/LintStage.ts
+index 28efaa0..e93d5de 100644
+--- a/src/server/stages/LintStage.ts
++++ b/src/server/stages/LintStage.ts
+@@ -3,7 +3,7 @@ import type { StageInterface } from '../types.js'
+ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+ import { randomUUID } from 'node:crypto'
+ import { spawn } from 'node:child_process'
+-import { extname } from 'node:path'
++import { basename } from 'node:path'
+ import { pathToFileURL } from 'node:url'
+ import {
+ 	inferDocumentLanguage,
+@@ -42,6 +42,10 @@ export class LintStage implements StageInterface {
+ 	#sequence = 0
+ 	#closing: Promise<void> | undefined
+ 	#destroyed = false
++	// How the language server ended, while it runs. Node leaves `exitCode` at `null` for a child
++	// killed by a signal, so reading the child reports a signalled server as alive and every write
++	// after that vanishes into a dead pipe.
++	#ending: string | undefined
+ 
+ 	/**
+ 	 * Starts warming the target workspace's Oxlint language server.
+@@ -91,14 +95,25 @@ export class LintStage implements StageInterface {
+ 		// Abandon every document in flight rather than waiting for it: a server that never publishes
+ 		// its diagnostics would otherwise hold teardown open for the life of the process.
+ 		this.#fail(new Error('The lint stage has been destroyed'))
+-		if (child === undefined || child.exitCode !== null) return
+-		await this.#request('shutdown', undefined)
+-		const ending = new Promise<void>((resolve, reject) => {
++		if (child === undefined || this.#ending !== undefined) return
++		const released = new Promise<void>((resolve) => {
+ 			child.once('exit', () => resolve())
+-			child.once('error', (error) => reject(error))
++			child.once('close', () => resolve())
+ 		})
+-		this.#notify('exit', undefined)
+-		await ending
++		await this.#retire(child)
++		await released
++	}
++
++	// Asks the language server to shut down and signals it when that conversation fails. A server
++	// that died mid-teardown, or that never answers, still has to release its resources, and
++	// teardown must not wait on a reply a dead pipe swallowed.
++	async #retire(child: ChildProcessWithoutNullStreams): Promise<void> {
++		try {
++			await this.#request('shutdown', undefined)
++			this.#notify('exit', undefined)
++		} catch {
++			child.kill('SIGKILL')
++		}
+ 	}
+ 
+ 	async #warm(): Promise<ChildProcessWithoutNullStreams> {
+@@ -110,6 +125,10 @@ export class LintStage implements StageInterface {
+ 		this.#child = child
+ 		child.stderr.resume()
+ 		child.stdout.on('data', (chunk: Buffer) => this.#read(chunk))
++		// A write racing the server's death reports `EPIPE` on this stream rather than throwing, and
++		// an unobserved stream error ends the resident host. Report it as a stage fault so the
++		// coordinator can recycle around it.
++		child.stdin.on('error', (error) => this.#fail(error))
+ 		child.on('error', (error) => this.#fail(error))
+ 		child.on('exit', (code, signal) => this.#exit(code, signal))
+ 		await this.#request('initialize', {
+@@ -135,20 +154,39 @@ export class LintStage implements StageInterface {
+ 			this.#publishes.set(uri, resolve)
+ 			this.#refusals.set(uri, reject)
+ 		})
+-		this.#notify('textDocument/didOpen', {
+-			textDocument: {
+-				uri,
+-				languageId: inferDocumentLanguage(source.path),
+-				version: this.#sequence,
+-				text: source.text,
+-			},
+-		})
+-		return diagnostics.finally(() => {
+-			this.#notify('textDocument/didClose', { textDocument: { uri } })
+-			this.#documents.delete(uri)
+-			this.#publishes.delete(uri)
+-			this.#refusals.delete(uri)
+-		})
++		// Attach the cleanup before opening the document. An open that throws would otherwise leave
++		// this promise pending with no handler, and the next failure rejects it into the host.
++		const inspected = diagnostics.finally(() => this.#close(uri))
++		try {
++			this.#notify('textDocument/didOpen', {
++				textDocument: {
++					uri,
++					languageId: inferDocumentLanguage(source.path),
++					version: this.#sequence,
++					text: source.text,
++				},
++			})
++		} catch (error) {
++			this.#refusals.get(uri)?.(new Error(messageFromUnknown(error)))
++		}
++		return inspected
++	}
++
++	// Whether the language server can still receive a message. A server that ended, and one that
++	// closed its input while its process lives, both take no further writes.
++	get #reachable(): boolean {
++		return this.#ending === undefined && this.#child?.stdin.writable === true
++	}
++
++	// Releases one document. The deletes run before the notification because an unreachable server
++	// refuses the write, and a throw here would replace the diagnosis the caller is receiving and
++	// leave this document registered for the life of the stage.
++	#close(uri: string): void {
++		this.#documents.delete(uri)
++		this.#publishes.delete(uri)
++		this.#refusals.delete(uri)
++		if (this.#destroyed || !this.#reachable) return
++		this.#notify('textDocument/didClose', { textDocument: { uri } })
+ 	}
+ 
+ 	#file(source: Source): string {
+@@ -161,9 +199,12 @@ export class LintStage implements StageInterface {
+ 			(axis === 'src' || axis === 'app') && environment !== undefined && environment !== ''
+ 				? `${axis}/${environment}`
+ 				: 'tests'
++		// Keep the declared file name. Oxlint keys its overrides on globs, so a synthesized name that
++		// dropped it selects a different rule set from the one the workspace's own gate applies, and
++		// the stage reports a finding that gate exempts.
+ 		return resolveWorkspaceFile(
+ 			this.#workspace,
+-			`${directory}/probe-${randomUUID()}${extname(declared)}`,
++			`${directory}/probe-${randomUUID()}.${basename(declared)}`,
+ 		)
+ 	}
+ 
+@@ -174,7 +215,16 @@ export class LintStage implements StageInterface {
+ 			this.#responses.set(id, resolve)
+ 			this.#failures.set(id, reject)
+ 		})
+-		this.#send({ jsonrpc: '2.0', id, method, params })
++		try {
++			this.#send({ jsonrpc: '2.0', id, method, params })
++		} catch (error) {
++			// Forget the request before refusing it. A request the stage never sent has no reply to
++			// wait for, and leaving its entry behind holds this promise for the life of the stage.
++			const reject = this.#failures.get(id)
++			this.#responses.delete(id)
++			this.#failures.delete(id)
++			reject?.(new Error(messageFromUnknown(error)))
++		}
+ 		return response
+ 	}
+ 
+@@ -185,9 +235,13 @@ export class LintStage implements StageInterface {
+ 
+ 	#send(message: unknown): void {
+ 		const child = this.#child
+-		if (child === undefined || child.exitCode !== null) {
+-			throw new Error('The Oxlint language server is not running')
++		if (this.#ending !== undefined) {
++			throw new Error(`The Oxlint language server exited with ${this.#ending}`)
+ 		}
++		if (child === undefined) throw new Error('The Oxlint language server is not running')
++		// A server that closed its input is unreachable while its process still lives, so a write
++		// here would neither fail nor ever be answered.
++		if (!child.stdin.writable) throw new Error('The Oxlint language server closed its input')
+ 		const content = JSON.stringify(message)
+ 		const header = `Content-Length: ${Buffer.byteLength(content)}\r\n\r\n`
+ 		child.stdin.write(header + content)
+@@ -291,8 +345,8 @@ export class LintStage implements StageInterface {
+ 	}
+ 
+ 	#exit(code: number | null, signal: NodeJS.Signals | null): void {
++		this.#ending = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+ 		if (this.#destroyed && code === 0) return
+-		const ending = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+-		this.#fail(new Error(`The Oxlint language server exited with ${ending}`))
++		this.#fail(new Error(`The Oxlint language server exited with ${this.#ending}`))
+ 	}
+ }
