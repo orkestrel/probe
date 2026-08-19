@@ -5,6 +5,7 @@ describe('src server entry', () => {
 	it('publishes the coordinator, stages, factories, and server leaves', () => {
 		expect(Object.keys(entry).sort()).toStrictEqual([
 			'LintStage',
+			'Overlay',
 			'Probe',
 			'RuntimeStage',
 			'TypeStage',

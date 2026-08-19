@@ -1,5 +1,5 @@
 import type { Case, Check, Finding, Source, Stage } from '@src/core'
-import type { StageInterface } from '../types.js'
+import type { OverlayInterface, StageInterface } from '../types.js'
 import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
@@ -11,6 +11,7 @@ import {
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
 } from '../helpers.js'
+import { Overlay } from '../Overlay.js'
 
 /**
  * Inspects TypeScript source through resident language services from the target workspace.
@@ -20,8 +21,11 @@ import {
  * workspace declares. A candidate source file is checked against the project a call names, or
  * against its own scoped environment project when a call names none, while the test uses the root
  * project. Disk snapshots use their modification time as the service version so dependency edits
- * cannot leave a warm answer stale. A project outside the declared set holds one recycled slot,
- * so a caller varying the project cannot grow the resident set.
+ * cannot leave a warm answer stale. Candidate text lives in an overlay the inspection owns, and
+ * the language-service host answers existence, reads, and versions from it, so a candidate that
+ * exists only as text is importable and a candidate that shadows a disk file is checked as the
+ * text the case supplied. A project outside the declared set holds one recycled slot, so a caller
+ * varying the project cannot grow the resident set.
  *
  * @example
  * ```ts
@@ -37,10 +41,8 @@ export class TypeStage implements StageInterface {
 	readonly #resident = new Set<string>()
 	readonly #options = new Map<string, CompilerOptions>()
 	readonly #files = new Map<string, readonly string[]>()
-	readonly #overlays = new Map<string, string>()
-	readonly #versions = new Map<string, number>()
+	#overlay: OverlayInterface = new Overlay()
 	#recycled: string | undefined
-	#revision = 0
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -63,6 +65,18 @@ export class TypeStage implements StageInterface {
 	}
 
 	/**
+	 * Candidate paths this stage currently holds as text.
+	 *
+	 * @remarks
+	 * An inspection installs its own overlay and releases it when it ends, whatever ended it, so
+	 * this is empty between inspections and after teardown. Only the paths are reported: the text
+	 * belongs to the case that supplied it.
+	 */
+	get candidates(): readonly string[] {
+		return this.#overlay.paths
+	}
+
+	/**
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
 	 * @remarks
@@ -81,11 +95,15 @@ export class TypeStage implements StageInterface {
 		const started = performance.now()
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
-		const applied: string[] = []
+		// Each inspection owns its candidate set and reads it through its own reference, so the
+		// clear below releases what this inspection recorded and nothing else. The resident
+		// services read whichever overlay is installed, so a caller admits one inspection at a
+		// time the way `Probe` does.
+		const overlay = new Overlay()
+		this.#overlay = overlay
 		try {
-			this.#revision += 1
-			this.#overlay(subject.test, applied)
-			for (const source of subject.files) this.#overlay(source, applied)
+			this.#record(subject.test, overlay)
+			for (const source of subject.files) this.#record(source, overlay)
 			const findings: Finding[] = []
 			const root = this.#service(typescript, 'tsconfig.json')
 			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
@@ -100,10 +118,7 @@ export class TypeStage implements StageInterface {
 				findings,
 			}
 		} finally {
-			for (const path of applied) {
-				this.#overlays.delete(path)
-				this.#versions.delete(path)
-			}
+			overlay.clear()
 		}
 	}
 
@@ -125,8 +140,7 @@ export class TypeStage implements StageInterface {
 		this.#recycled = undefined
 		this.#options.clear()
 		this.#files.clear()
-		this.#overlays.clear()
-		this.#versions.clear()
+		this.#overlay.clear()
 	}
 
 	async #warm(): Promise<typeof TypeScript> {
@@ -160,11 +174,11 @@ export class TypeStage implements StageInterface {
 		return projects
 	}
 
-	#overlay(source: Source, applied: string[]): void {
-		const path = resolveWorkspaceFile(this.#workspace, source.path)
-		applied.push(path)
-		this.#overlays.set(path, source.text)
-		this.#versions.set(path, this.#revision)
+	// Resolution happens here rather than in the overlay, because the workspace a candidate's
+	// declared path is relative to is the stage's knowledge. A path that escapes the workspace
+	// throws before the overlay records it, and the inspection's clear releases the rest.
+	#record(source: Source, overlay: OverlayInterface): void {
+		overlay.set(resolveWorkspaceFile(this.#workspace, source.path), source.text)
 	}
 
 	// Keyed by the resolved project file rather than by the caller's spelling of it, so
@@ -193,15 +207,20 @@ export class TypeStage implements StageInterface {
 		this.#files.set(path, parsed.fileNames)
 		const service = typescript.createLanguageService({
 			getCompilationSettings: () => this.#options.get(path) ?? {},
-			getScriptFileNames: () => [...(this.#files.get(path) ?? []), ...this.#overlays.keys()],
+			getScriptFileNames: () => [...(this.#files.get(path) ?? []), ...this.#overlay.paths],
 			getScriptVersion: (file) => this.#version(file),
 			getScriptSnapshot: (file) => this.#snapshot(typescript, file),
 			getCurrentDirectory: () => this.#workspace,
 			getDefaultLibFileName: (options) => typescript.getDefaultLibFilePath(options),
-			fileExists: typescript.sys.fileExists,
-			readFile: (file) => this.#overlays.get(file) ?? typescript.sys.readFile(file),
+			fileExists: (file) =>
+				this.#overlay.text(file) !== undefined || typescript.sys.fileExists(file),
+			readFile: (file) => this.#overlay.text(file) ?? typescript.sys.readFile(file),
+			// Listings stay on disk. A candidate that entered one would reach the file set this
+			// stage caches per project at service creation, and outlive the inspection that
+			// declared it, so glob and directory-discovery imports fail closed.
 			readDirectory: typescript.sys.readDirectory,
-			directoryExists: typescript.sys.directoryExists,
+			directoryExists: (directory) =>
+				typescript.sys.directoryExists(directory) || this.#overlay.covers(directory),
 			getDirectories: typescript.sys.getDirectories,
 			useCaseSensitiveFileNames: () => typescript.sys.useCaseSensitiveFileNames,
 			getNewLine: () => typescript.sys.newLine,
@@ -225,8 +244,7 @@ export class TypeStage implements StageInterface {
 	}
 
 	#version(file: string): string {
-		const overlay = this.#versions.get(file)
-		if (this.#overlays.has(file) && overlay !== undefined) return `virtual:${overlay}`
+		if (this.#overlay.text(file) !== undefined) return `virtual:${this.#overlay.revision}`
 		try {
 			return `disk:${statSync(file).mtimeMs}`
 		} catch {
@@ -235,7 +253,7 @@ export class TypeStage implements StageInterface {
 	}
 
 	#snapshot(typescript: typeof TypeScript, file: string): IScriptSnapshot | undefined {
-		const text = this.#overlays.get(file) ?? typescript.sys.readFile(file)
+		const text = this.#overlay.text(file) ?? typescript.sys.readFile(file)
 		return text === undefined ? undefined : typescript.ScriptSnapshot.fromString(text)
 	}
 

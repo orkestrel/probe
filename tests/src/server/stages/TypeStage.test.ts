@@ -1,9 +1,7 @@
-import { Session } from 'node:inspector/promises'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isRecord } from '@orkestrel/contract'
 import { waitForDelay } from '@orkestrel/test'
 import { TypeStage } from '@src/server'
 import { describe, expect, it } from 'vitest'
@@ -98,6 +96,82 @@ describe('type stage', () => {
 		},
 	)
 
+	it('imports a candidate that exists only as overlay text', { timeout: 60_000 }, async () => {
+		const id = randomUUID()
+		const candidate = `src/core/overlay-only-${id}.ts`
+		const stage = new TypeStage(ROOT)
+		try {
+			const check = await stage.inspect(
+				{
+					files: [{ path: candidate, text: "export const SIGNAL = 'overlay'\n" }],
+					test: {
+						path: `tmp/probe/overlay-only-${id}.test.ts`,
+						text: `import { SIGNAL } from '../../src/core/overlay-only-${id}.js'\nconst VALUE: 'overlay' = SIGNAL\nvoid VALUE\n`,
+					},
+				},
+				'tsconfig.json',
+			)
+			expect(check.findings).toStrictEqual([])
+			// The candidate is text the agent supplied, so importing it must never put it on disk.
+			expect(existsSync(resolve(ROOT, candidate))).toBe(false)
+		} finally {
+			await stage.destroy()
+		}
+	})
+
+	it('imports a candidate whose directory does not exist', { timeout: 60_000 }, async () => {
+		const id = randomUUID()
+		const directory = `src/overlay-absent-${id}`
+		const stage = new TypeStage(ROOT)
+		try {
+			const check = await stage.inspect(
+				{
+					files: [{ path: `${directory}/signal.ts`, text: "export const SIGNAL = 'overlay'\n" }],
+					test: {
+						path: `tmp/probe/overlay-absent-${id}.test.ts`,
+						text: `import { SIGNAL } from '../../${directory}/signal.js'\nconst VALUE: 'overlay' = SIGNAL\nvoid VALUE\n`,
+					},
+				},
+				'tsconfig.json',
+			)
+			expect(check.findings).toStrictEqual([])
+			expect(existsSync(resolve(ROOT, directory))).toBe(false)
+		} finally {
+			await stage.destroy()
+		}
+	})
+
+	it(
+		'reads the agent text where a candidate shadows a disk file',
+		{ timeout: 60_000 },
+		async () => {
+			const id = randomUUID()
+			const candidate = `tmp/probe/overlay-shadow-${id}.ts`
+			const candidateFile = resolve(ROOT, candidate)
+			const disk = "export const SIGNAL = 'disk'\n"
+			const stage = new TypeStage(ROOT)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			writeFileSync(candidateFile, disk, 'utf8')
+			try {
+				const check = await stage.inspect(
+					{
+						files: [{ path: candidate, text: "export const SIGNAL = 'overlay'\n" }],
+						test: {
+							path: `tmp/probe/overlay-shadow-${id}.test.ts`,
+							text: `import { SIGNAL } from './overlay-shadow-${id}.js'\nconst VALUE: 'overlay' = SIGNAL\nvoid VALUE\n`,
+						},
+					},
+					'tsconfig.json',
+				)
+				expect(check.findings).toStrictEqual([])
+				expect(readFileSync(candidateFile, 'utf8')).toBe(disk)
+			} finally {
+				await stage.destroy()
+				rmSync(candidateFile, { force: true })
+			}
+		},
+	)
+
 	it.each(['first', 'middle', 'last'])(
 		'removes every applied overlay when an escaping source is %s',
 		{ timeout: 60_000 },
@@ -135,6 +209,9 @@ describe('type stage', () => {
 						test: { path: testPath, text: "export const TEST_SIGNAL = 'overlay'\n" },
 					}),
 				).rejects.toThrow('Path escapes the workspace: ../outside.ts')
+				// The failing inspection releases every candidate it had recorded, wherever the
+				// escaping source sat in the list.
+				expect(stage.candidates).toStrictEqual([])
 				const later = await stage.inspect({
 					files: [],
 					test: {
@@ -155,86 +232,76 @@ describe('type stage', () => {
 		},
 	)
 
-	it('releases candidate versions after every inspection', { timeout: 60_000 }, async () => {
-		const id = randomUUID()
-		const stage = new TypeStage(ROOT)
-		const session = new Session()
-		try {
-			for (const sequence of [1, 2, 3]) {
-				await stage.inspect({
-					files: [
-						{
-							path: `src/core/version-release-${id}-${sequence}.ts`,
-							text: `export const VALUE = ${sequence}\n`,
+	it(
+		'reads disk again after the inspection that overlaid a path ends',
+		{ timeout: 60_000 },
+		async () => {
+			const id = randomUUID()
+			const candidate = `tmp/probe/overlay-release-${id}.ts`
+			const candidateFile = resolve(ROOT, candidate)
+			const stage = new TypeStage(ROOT)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			writeFileSync(candidateFile, "export const SIGNAL = 'disk'\n", 'utf8')
+			try {
+				const overlaid = await stage.inspect(
+					{
+						files: [{ path: candidate, text: "export const SIGNAL = 'overlay'\n" }],
+						test: {
+							path: `tmp/probe/overlay-release-${id}-overlaid.test.ts`,
+							text: `import { SIGNAL } from './overlay-release-${id}.js'\nconst VALUE: 'overlay' = SIGNAL\nvoid VALUE\n`,
 						},
-					],
+					},
+					'tsconfig.json',
+				)
+				// The same import in the next inspection reads the disk text, so nothing the first
+				// inspection recorded survives it: neither the text nor the version that served it.
+				const released = await stage.inspect({
+					files: [],
 					test: {
-						path: `tests/src/core/version-release-${id}-${sequence}.test.ts`,
-						text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
+						path: `tmp/probe/overlay-release-${id}-released.test.ts`,
+						text: `import { SIGNAL } from './overlay-release-${id}.js'\nconst VALUE: 'disk' = SIGNAL\nvoid VALUE\n`,
 					},
 				})
+				expect(overlaid.findings).toStrictEqual([])
+				expect(released.findings).toStrictEqual([])
+				expect(stage.candidates).toStrictEqual([])
+				await stage.destroy()
+				expect(stage.candidates).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+				rmSync(candidateFile, { force: true })
 			}
-			Reflect.set(globalThis, '__probeTypeStage', stage)
-			session.connect()
-			await session.post('Runtime.enable')
-			const evaluated = await session.post('Runtime.evaluate', {
-				expression: 'globalThis.__probeTypeStage',
-			})
-			const stageId = evaluated.result.objectId
-			if (stageId === undefined) throw new Error('The debugger did not expose the type stage')
-			const properties: unknown = await session.post('Runtime.getProperties', {
-				objectId: stageId,
-				ownProperties: true,
-			})
-			if (!isRecord(properties) || !Array.isArray(properties.privateProperties)) {
-				throw new Error('The debugger did not expose private properties')
-			}
-			const versions = properties.privateProperties.find(
-				(property: unknown) => isRecord(property) && property.name === '#versions',
-			)
-			if (!isRecord(versions) || !isRecord(versions.value)) {
-				throw new Error('The debugger did not expose the type stage version map')
-			}
-			const versionsId = versions.value.objectId
-			if (typeof versionsId !== 'string') {
-				throw new Error('The debugger exposed an invalid version map identity')
-			}
-			const size = await session.post('Runtime.callFunctionOn', {
-				objectId: versionsId,
-				functionDeclaration: 'function () { return this.size }',
-				returnByValue: true,
-			})
-			expect(size.result.value).toBe(0)
-		} finally {
-			session.disconnect()
-			Reflect.deleteProperty(globalThis, '__probeTypeStage')
-			await stage.destroy()
-		}
-	})
+		},
+	)
 
 	it('bounds equivalent and caller-named project services', { timeout: 60_000 }, async () => {
 		const id = randomUUID()
-		const firstProject = `tmp/probe/type-project-first-${id}.json`
-		const secondProject = `tmp/probe/type-project-second-${id}.json`
+		const first = `tmp/probe/type-project-first-${id}.json`
+		const second = `tmp/probe/type-project-second-${id}.json`
+		const firstFile = resolve(ROOT, first)
+		const secondFile = resolve(ROOT, second)
+		const strict =
+			'{"compilerOptions":{"noImplicitAny":true},"files":["../../src/core/index.ts"]}\n'
+		const lenient =
+			'{"compilerOptions":{"noImplicitAny":false},"files":["../../src/core/index.ts"]}\n'
 		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
-		writeFileSync(
-			resolve(ROOT, firstProject),
-			'{"compilerOptions":{"strict":true},"files":["../../src/core/index.ts"]}\n',
-		)
-		writeFileSync(
-			resolve(ROOT, secondProject),
-			'{"compilerOptions":{"strict":true},"files":["../../src/core/index.ts"]}\n',
-		)
+		writeFileSync(firstFile, strict, 'utf8')
+		writeFileSync(secondFile, strict, 'utf8')
 		const stage = new TypeStage(ROOT)
-		const session = new Session()
 		const subject = {
-			files: [{ path: 'src/core/cache-choice.ts', text: "export const VALUE = 'ok'\n" }],
+			files: [
+				{
+					path: `tmp/probe/type-project-${id}.ts`,
+					text: 'export function identity(value) {\n\treturn value\n}\n',
+				},
+			],
 			test: {
-				path: 'tests/src/core/cache-choice.test.ts',
+				path: `tmp/probe/type-project-${id}.test.ts`,
 				text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
 			},
 		}
 		try {
+			const named = await stage.inspect(subject, first)
 			for (const project of [
 				'configs/src/tsconfig.core.json',
 				'./configs/src/tsconfig.core.json',
@@ -242,69 +309,23 @@ describe('type stage', () => {
 			]) {
 				await stage.inspect(subject, project)
 			}
-			Reflect.set(globalThis, '__probeTypeStage', stage)
-			session.connect()
-			await session.post('Runtime.enable')
-			const evaluated = await session.post('Runtime.evaluate', {
-				expression: 'globalThis.__probeTypeStage',
-			})
-			const stageId = evaluated.result.objectId
-			if (stageId === undefined) throw new Error('The debugger did not expose the type stage')
-			const properties: unknown = await session.post('Runtime.getProperties', {
-				objectId: stageId,
-				ownProperties: true,
-			})
-			if (!isRecord(properties) || !Array.isArray(properties.privateProperties)) {
-				throw new Error('The debugger did not expose private properties')
-			}
-			const services = properties.privateProperties.find(
-				(property: unknown) => isRecord(property) && property.name === '#services',
-			)
-			const residentProperty = properties.privateProperties.find(
-				(property: unknown) => isRecord(property) && property.name === '#resident',
-			)
-			if (!isRecord(services) || !isRecord(services.value)) {
-				throw new Error('The debugger did not expose the type stage service map')
-			}
-			if (!isRecord(residentProperty) || !isRecord(residentProperty.value)) {
-				throw new Error('The debugger did not expose the type stage resident set')
-			}
-			const servicesId = services.value.objectId
-			const residentId = residentProperty.value.objectId
-			if (servicesId === undefined || residentId === undefined) {
-				throw new Error('The debugger did not expose the type stage service collections')
-			}
-			if (typeof servicesId !== 'string' || typeof residentId !== 'string') {
-				throw new Error('The debugger exposed invalid service collection identities')
-			}
-			const resident = await session.post('Runtime.callFunctionOn', {
-				objectId: residentId,
-				functionDeclaration: 'function () { return this.size }',
-				returnByValue: true,
-			})
-			const equivalent = await session.post('Runtime.callFunctionOn', {
-				objectId: servicesId,
-				functionDeclaration: 'function () { return this.size }',
-				returnByValue: true,
-			})
-			if (typeof resident.result.value !== 'number') {
-				throw new Error('The debugger did not report the resident service count')
-			}
-			expect(equivalent.result.value).toBe(resident.result.value)
-			await stage.inspect(subject, firstProject)
-			await stage.inspect(subject, secondProject)
-			const bounded = await session.post('Runtime.callFunctionOn', {
-				objectId: servicesId,
-				functionDeclaration: 'function () { return this.size }',
-				returnByValue: true,
-			})
-			expect(bounded.result.value).toBe(resident.result.value + 1)
+			// A service the stage keeps answers from the settings it was created with, so the
+			// rewritten configuration is what distinguishes a retained service from a rebuilt one.
+			writeFileSync(firstFile, lenient, 'utf8')
+			const retained = await stage.inspect(subject, first)
+			await stage.inspect(subject, second)
+			const recycled = await stage.inspect(subject, first)
+			// Three spellings of one resident project reach one service and take no recycled
+			// slot, so the first caller-named project survives them.
+			expect(named.findings.length).toBeGreaterThan(0)
+			expect(retained.findings.length).toBeGreaterThan(0)
+			// A second caller-named project takes the one slot the first held, so the stage reads
+			// the rewritten configuration and cannot grow past that slot.
+			expect(recycled.findings).toStrictEqual([])
 		} finally {
-			session.disconnect()
-			Reflect.deleteProperty(globalThis, '__probeTypeStage')
 			await stage.destroy()
-			rmSync(resolve(ROOT, firstProject), { force: true })
-			rmSync(resolve(ROOT, secondProject), { force: true })
+			rmSync(firstFile, { force: true })
+			rmSync(secondFile, { force: true })
 		}
 	})
 

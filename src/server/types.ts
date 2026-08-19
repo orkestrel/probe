@@ -20,6 +20,67 @@ export interface Inspection {
 }
 
 /**
+ * Holds the candidate sources one inspection substitutes for the files a tool would read from disk.
+ *
+ * @remarks
+ * A stage records every candidate the inspection carries before it reads any of them, and clears
+ * the set when the inspection ends, whatever ended it. The entity names no tool: each stage adapts
+ * one overlay to the host its own tool expects, so a language service, a document protocol, and a
+ * module resolver read one candidate set through three adapters rather than through one shared
+ * filesystem. Paths are absolute and the stage resolves them, because only the stage knows the
+ * workspace a candidate's declared path is relative to. `revision` identifies the set, so a
+ * resident tool that caches by version reads fresh text for a path this overlay holds and reads
+ * disk again after `clear`.
+ *
+ * @example
+ * ```ts
+ * const overlay = new Overlay()
+ * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+ * console.log(overlay.text('/srv/checkout/src/core/greeting.ts'))
+ * overlay.clear()
+ * ```
+ */
+export interface OverlayInterface {
+	/** Identity of the candidate set this overlay holds. */
+	readonly revision: string
+	/** Absolute path of every candidate this overlay holds. */
+	readonly paths: readonly string[]
+	/**
+	 * Records one candidate's text against the absolute path it stands in for.
+	 *
+	 * @param path - The absolute path the candidate replaces
+	 * @param text - The candidate's full contents
+	 * @returns Nothing
+	 */
+	set(path: string, text: string): void
+	/**
+	 * Reads the candidate text recorded for one absolute path.
+	 *
+	 * @param path - The absolute path to read
+	 * @returns The recorded text, or `undefined` when this overlay holds no candidate there
+	 */
+	text(path: string): string | undefined
+	/**
+	 * Checks whether a candidate sits beneath one directory.
+	 *
+	 * @remarks
+	 * A tool asking whether a directory exists is answered from disk first, so this reports only
+	 * the directories the candidate set adds. A directory listing is a separate question and stays
+	 * on disk: a candidate that entered one would outlive the inspection that declared it.
+	 *
+	 * @param directory - The absolute directory path to check
+	 * @returns True if a candidate path sits beneath the directory; false otherwise
+	 */
+	covers(directory: string): boolean
+	/**
+	 * Releases every candidate.
+	 *
+	 * @returns Nothing
+	 */
+	clear(): void
+}
+
+/**
  * Inspects one case with a resident workspace tool.
  *
  * @remarks
