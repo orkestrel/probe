@@ -35,7 +35,10 @@ describe('runtime stage', () => {
 				})
 				expect(passing.findings).toStrictEqual([])
 				expect(failing.findings.length).toBeGreaterThan(0)
-				expect(failing.findings[0]?.path).toBe('tmp/probe/runtime-failing.test.ts')
+				expect(failing.findings[0]).toMatchObject({
+					origin: 'code',
+					path: 'tmp/probe/runtime-failing.test.ts',
+				})
 			} finally {
 				await stage.destroy()
 			}
@@ -53,7 +56,11 @@ describe('runtime stage', () => {
 				},
 			})
 			expect(check.findings).toStrictEqual([
-				{ path: 'tmp/probe/runtime-skipped.test.ts', message: 'Vitest ran no tests in the module' },
+				{
+					origin: 'instrument',
+					path: 'tmp/probe/runtime-skipped.test.ts',
+					message: 'Vitest ran no tests in the module',
+				},
 			])
 		} finally {
 			await stage.destroy()
@@ -79,6 +86,7 @@ describe('runtime stage', () => {
 			})
 			expect(check.findings).toStrictEqual([
 				{
+					origin: 'instrument',
 					path: 'tmp/probe/runtime-context-skip.test.ts',
 					message: 'Vitest did not run the test (skips)',
 				},
@@ -105,6 +113,69 @@ describe('runtime stage', () => {
 		}
 	})
 
+	it(
+		'issues a receipt only for a control whose own code failed at the declared stage',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const skipped = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/runtime-receipt-skipped.test.ts',
+						text: "import { test } from 'vitest'\ntest('skips', (context) => { context.skip(); throw new Error('never reached') })\n",
+					},
+				})
+				const failed = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/runtime-receipt-failed.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
+					},
+				})
+				const passed = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/runtime-receipt-passed.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+					},
+				})
+				const base: Verdict = {
+					id: 'receipt-origin',
+					toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
+					checks: [
+						{ stage: 'type', elapsed: 0, findings: [] },
+						{ stage: 'lint', elapsed: 0, findings: [] },
+						passed,
+					],
+					control: [failed],
+					elapsed: 0,
+				}
+				const token = 'probe:receipt-origin:runtime:typescript@test:oxlint@test:vitest@test'
+
+				// The stage marks a test it never ran as its own fault and a failed expectation as
+				// the candidate's, which is what the three outcomes below are read from.
+				expect(skipped.findings).toStrictEqual([
+					{
+						origin: 'instrument',
+						path: 'tmp/probe/runtime-receipt-skipped.test.ts',
+						message: 'Vitest did not run the test (skips)',
+					},
+				])
+				expect(failed.findings[0]?.origin).toBe('code')
+				expect(passed.findings).toStrictEqual([])
+
+				// The three controls reach this assertion through the real stage and differ only in
+				// what it reported about them, so each verdict turns on that report alone.
+				expect(computeReceipt({ ...base, control: [skipped] }, 'runtime')).toBeUndefined()
+				expect(computeReceipt(base, 'runtime')).toBe(token)
+				expect(computeReceipt({ ...base, control: [passed] }, 'runtime')).toBeUndefined()
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
+
 	it('reports an empty module when its project permits no tests', { timeout: 60_000 }, async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
@@ -121,7 +192,11 @@ describe('runtime stage', () => {
 				test: { path: 'tmp/probe/empty.test.ts', text: '' },
 			})
 			expect(check.findings).toStrictEqual([
-				{ path: 'tmp/probe/empty.test.ts', message: 'Vitest ran no tests in the module' },
+				{
+					origin: 'instrument',
+					path: 'tmp/probe/empty.test.ts',
+					message: 'Vitest ran no tests in the module',
+				},
 			])
 		} finally {
 			await stage.destroy()
@@ -173,8 +248,9 @@ describe('runtime stage', () => {
 				})
 				expect(check.findings).toStrictEqual([
 					{
+						origin: 'instrument',
 						path: 'tests/unmapped.test.ts',
-						message: 'Vitest ran no tests because no configured project matches the test path',
+						message: 'The runtime stage found no configured Vitest project matching the test path',
 					},
 				])
 			} finally {
@@ -203,8 +279,9 @@ describe('runtime stage', () => {
 			})
 			expect(check.findings).toStrictEqual([
 				{
+					origin: 'instrument',
 					path: 'tmp/probe/missing-project.test.ts',
-					message: 'Vitest has no configured project named probe',
+					message: 'The runtime stage found no configured Vitest project named probe',
 				},
 			])
 		} finally {
@@ -320,8 +397,10 @@ describe('runtime stage', () => {
 				).resolves.toMatchObject({
 					findings: [
 						{
+							origin: 'instrument',
 							path: 'tests/unmapped.test.ts',
-							message: 'Vitest ran no tests because no configured project matches the test path',
+							message:
+								'The runtime stage found no configured Vitest project matching the test path',
 						},
 					],
 				})
@@ -374,9 +453,14 @@ describe('runtime stage', () => {
 					},
 				})
 				expect(check.findings).toHaveLength(1)
-				expect(check.findings[0]).toMatchObject({ path: `tmp/probe/${marker}.test.ts` })
+				expect(check.findings[0]?.origin).toBe('instrument')
+				// The generated specification is the file that could not be deleted. The caller's
+				// own path names a file the caller wrote and this stage never touched.
+				expect(check.findings[0]?.path).toMatch(
+					new RegExp(`^tmp/probe/${marker}\\.test\\.probe-[0-9a-f-]+\\.ts$`),
+				)
 				expect(check.findings[0]?.message).toContain(
-					'Vitest could not delete the generated specification',
+					'The runtime stage could not delete the generated specification',
 				)
 			} finally {
 				await stage.destroy()

@@ -13,11 +13,16 @@ import { describe, expect, it } from 'vitest'
 describe('core formatting helpers', () => {
 	it('renders findings with and without a line', () => {
 		expect(
-			formatFinding({ path: 'src/core/greeting.ts', message: 'not assignable', line: 3 }),
+			formatFinding({
+				origin: 'code',
+				path: 'src/core/greeting.ts',
+				message: 'not assignable',
+				line: 3,
+			}),
 		).toBe('src/core/greeting.ts:3 not assignable')
-		expect(formatFinding({ path: 'src/core/greeting.ts', message: 'not assignable' })).toBe(
-			'src/core/greeting.ts not assignable',
-		)
+		expect(
+			formatFinding({ origin: 'code', path: 'src/core/greeting.ts', message: 'not assignable' }),
+		).toBe('src/core/greeting.ts not assignable')
 	})
 
 	it('renders zero, one, and multiple findings with correct summaries and order', () => {
@@ -28,7 +33,7 @@ describe('core formatting helpers', () => {
 			formatCheck({
 				stage: 'type',
 				elapsed: 23,
-				findings: [{ path: 'src/core/first.ts', message: 'first', line: 4 }],
+				findings: [{ origin: 'code', path: 'src/core/first.ts', message: 'first', line: 4 }],
 			}),
 		).toBe('type: 1 finding (23 ms)\n  src/core/first.ts:4 first')
 		expect(
@@ -36,8 +41,13 @@ describe('core formatting helpers', () => {
 				stage: 'runtime',
 				elapsed: 31,
 				findings: [
-					{ path: 'tests/src/core/first.test.ts', message: 'first failure' },
-					{ path: 'tests/src/core/second.test.ts', message: 'second failure', line: 8 },
+					{ origin: 'code', path: 'tests/src/core/first.test.ts', message: 'first failure' },
+					{
+						origin: 'code',
+						path: 'tests/src/core/second.test.ts',
+						message: 'second failure',
+						line: 8,
+					},
 				],
 			}),
 		).toBe(
@@ -62,7 +72,9 @@ describe('core formatting helpers', () => {
 			{
 				stage: 'type',
 				elapsed: 14,
-				findings: [{ path: 'src/core/control.ts', message: 'not assignable', line: 1 }],
+				findings: [
+					{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable', line: 1 },
+				],
 			},
 			{ stage: 'lint', elapsed: 15, findings: [] },
 			{ stage: 'runtime', elapsed: 16, findings: [] },
@@ -108,7 +120,7 @@ describe('core receipt helper', () => {
 				{
 					stage: 'type',
 					elapsed: 1,
-					findings: [{ path: 'src/core/control.ts', message: 'not assignable' }],
+					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' }],
 				},
 			],
 			elapsed: 7,
@@ -126,7 +138,11 @@ describe('core receipt helper', () => {
 	})
 
 	it('refuses receipts for each incomplete or disproven verdict state', () => {
-		const finding = { path: 'src/core/control.ts', message: 'not assignable' }
+		const finding: Finding = {
+			origin: 'code',
+			path: 'src/core/control.ts',
+			message: 'not assignable',
+		}
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
 			oxlint: '1.78.0',
@@ -168,6 +184,55 @@ describe('core receipt helper', () => {
 		).toBeUndefined()
 	})
 
+	it('decides a receipt on the control code findings and ignores its instrument ones', () => {
+		const toolchain: Toolchain = {
+			typescript: '6.0.3',
+			oxlint: '1.78.0',
+			vitest: '4.1.10',
+		}
+		const broke: Finding = {
+			origin: 'code',
+			path: 'tests/src/core/greeting.test.ts',
+			message: 'expected 4 to be 5',
+		}
+		const unrun: Finding = {
+			origin: 'instrument',
+			path: 'tests/src/core/greeting.test.ts',
+			message: 'Vitest did not run the test (greets)',
+		}
+		const base: Verdict = {
+			id: '01J8Z0',
+			toolchain,
+			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
+			control: [{ stage: 'runtime', elapsed: 1, findings: [broke] }],
+			elapsed: 7,
+		}
+		const token = 'probe:01J8Z0:runtime:typescript@6.0.3:oxlint@1.78.0:vitest@4.1.10'
+
+		// Every verdict below differs from the one before it in the control's findings alone, so
+		// the origin is the only thing deciding the outcome.
+		expect(computeReceipt(base, 'runtime')).toBe(token)
+		expect(
+			computeReceipt(
+				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [unrun] }] },
+				'runtime',
+			),
+		).toBeUndefined()
+		expect(
+			computeReceipt(
+				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [] }] },
+				'runtime',
+			),
+		).toBeUndefined()
+		// A control that broke and whose stage also faulted still broke where it said it would.
+		expect(
+			computeReceipt(
+				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [unrun, broke] }] },
+				'runtime',
+			),
+		).toBe(token)
+	})
+
 	it('refuses a receipt for a case whose stage reported a fault in its own instrument', () => {
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
@@ -177,9 +242,10 @@ describe('core receipt helper', () => {
 		// The stage's own fault, not the candidate's: nothing here is a message about the code the
 		// case supplied, and the case still cannot be certified clean.
 		const fault: Finding = {
-			path: 'tests/src/core/greeting.test.ts',
+			origin: 'instrument',
+			path: 'tests/src/core/greeting.probe-4f1a.test.ts',
 			message:
-				'Vitest could not delete the generated specification (EPERM: operation not permitted)',
+				'The runtime stage could not delete the generated specification (EPERM: operation not permitted)',
 		}
 		const clean: readonly Check[] = PROBE_STAGES.map((stage) => ({
 			stage,
@@ -197,7 +263,13 @@ describe('core receipt helper', () => {
 				{
 					stage: 'runtime',
 					elapsed: 1,
-					findings: [{ path: 'tests/src/core/greeting.test.ts', message: 'expected 4 to be 5' }],
+					findings: [
+						{
+							origin: 'code',
+							path: 'tests/src/core/greeting.test.ts',
+							message: 'expected 4 to be 5',
+						},
+					],
 				},
 			],
 			elapsed: 7,

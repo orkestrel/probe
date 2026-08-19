@@ -29,8 +29,13 @@ describe('type stage', () => {
 			expect(clean.findings).toStrictEqual([])
 			expect(broken.findings.length).toBeGreaterThan(0)
 			expect(broken.findings).toEqual(
-				expect.arrayContaining([expect.objectContaining({ path: 'src/core/type-stage.ts' })]),
+				expect.arrayContaining([
+					expect.objectContaining({ origin: 'code', path: 'src/core/type-stage.ts' }),
+				]),
 			)
+			// A compiler diagnostic about the candidate is the candidate's fault, so every finding
+			// this stage returns for one carries the origin that can disprove a claim.
+			expect(broken.findings.every((finding) => finding.origin === 'code')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}

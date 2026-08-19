@@ -33,6 +33,12 @@ import {
  * median inspection cost 206 ms and 215 ms, so budget one call in 64 at 260 ms to 285 ms above the
  * rest.
  *
+ * Only a failure Vitest reported about the candidate carries `origin: 'code'`. Everything the
+ * stage raises about its own machinery — a project it could not select, a specification it could
+ * not delete or evict, a module that ran no test — carries `origin: 'instrument'` and says so in
+ * the stage's own voice, because a control whose test never ran disproved nothing and must not
+ * earn a receipt.
+ *
  * @example
  * ```ts
  * const stage = new RuntimeStage('/srv/checkout')
@@ -167,15 +173,16 @@ export class RuntimeStage implements StageInterface {
 		} finally {
 			process.exitCode = exitCode
 			this.#revisions.delete(file)
-			cleanup = await this.#evict(vitest, file, subject.test.path)
+			cleanup = await this.#evict(vitest, file)
 			try {
 				if (existsSync(file)) unlinkSync(file)
 			} catch (error) {
 				cleanup = [
 					...cleanup,
 					{
-						path: subject.test.path,
-						message: `Vitest could not delete the generated specification (${messageFromUnknown(error)})`,
+						origin: 'instrument',
+						path: relativeWorkspaceFile(this.#workspace, file),
+						message: `The runtime stage could not delete the generated specification (${messageFromUnknown(error)})`,
 					},
 				]
 			}
@@ -197,17 +204,23 @@ export class RuntimeStage implements StageInterface {
 		const name = inferTestProject(relative(this.#workspace, resolve(this.#workspace, path)))
 		if (name === undefined) {
 			return {
+				origin: 'instrument',
 				path,
-				message: 'Vitest ran no tests because no configured project matches the test path',
+				message: 'The runtime stage found no configured Vitest project matching the test path',
 			}
 		}
 		const project = vitest.projects.find((candidate) => candidate.name === name)
-		if (project === undefined)
-			return { path, message: `Vitest has no configured project named ${name}` }
+		if (project === undefined) {
+			return {
+				origin: 'instrument',
+				path,
+				message: `The runtime stage found no configured Vitest project named ${name}`,
+			}
+		}
 		return project
 	}
 
-	async #evict(vitest: Vitest, file: string, original: string): Promise<readonly Finding[]> {
+	async #evict(vitest: Vitest, file: string): Promise<readonly Finding[]> {
 		try {
 			const ids: string[] = []
 			for (const [id, task] of vitest.state.idMap) {
@@ -243,8 +256,9 @@ export class RuntimeStage implements StageInterface {
 		} catch (error) {
 			return [
 				{
-					path: original,
-					message: `Vitest could not evict the generated specification (${messageFromUnknown(error)})`,
+					origin: 'instrument',
+					path: relativeWorkspaceFile(this.#workspace, file),
+					message: `The runtime stage could not evict the generated specification (${messageFromUnknown(error)})`,
 				},
 			]
 		}
@@ -322,10 +336,15 @@ export class RuntimeStage implements StageInterface {
 			const state: string = module.state()
 			if (state === 'passed') {
 				if (Array.from(module.children.allTests()).length === 0) {
-					findings.push({ path: original, message: 'Vitest ran no tests in the module' })
+					findings.push({
+						origin: 'instrument',
+						path: original,
+						message: 'Vitest ran no tests in the module',
+					})
 				}
 				for (const test of module.children.allTests('skipped')) {
 					findings.push({
+						origin: 'instrument',
 						path: original,
 						message: `Vitest did not run the test (${test.fullName})`,
 					})
@@ -333,23 +352,33 @@ export class RuntimeStage implements StageInterface {
 				continue
 			}
 			if (state === 'skipped') {
-				findings.push({ path: original, message: 'Vitest ran no tests in the module' })
+				findings.push({
+					origin: 'instrument',
+					path: original,
+					message: 'Vitest ran no tests in the module',
+				})
 				continue
 			}
 			if (state === 'failed') {
 				if (findings.length === before) {
-					findings.push({ path: original, message: 'Vitest reported a failed test module' })
+					findings.push({
+						origin: 'code',
+						path: original,
+						message: 'Vitest reported a failed test module',
+					})
 				}
 				continue
 			}
 			if (state === 'pending' || state === 'queued') {
 				findings.push({
+					origin: 'instrument',
 					path: original,
 					message: `Vitest did not finish the test module (${state})`,
 				})
 				continue
 			}
 			findings.push({
+				origin: 'instrument',
 				path: original,
 				message: `Vitest reported an unrecognized test module state (${state})`,
 			})
@@ -358,18 +387,24 @@ export class RuntimeStage implements StageInterface {
 			findings.push(this.#finding(error, file, original))
 		}
 		if (result.testModules.length === 0 && findings.length === 0) {
-			findings.push({ path: original, message: 'Vitest returned no test module' })
+			findings.push({
+				origin: 'instrument',
+				path: original,
+				message: 'Vitest returned no test module',
+			})
 		}
 		return findings
 	}
 
+	// Every error reaching here came out of a run Vitest completed over the candidate's own test,
+	// so each one is that code failing rather than this stage faulting.
 	#finding(error: unknown, specification: string, original: string): Finding {
 		const message = messageFromUnknown(error)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
-			return { path: original, message }
+			return { origin: 'code', path: original, message }
 		}
 		const stacks = error.stacks
-		if (!Array.isArray(stacks)) return { path: original, message }
+		if (!Array.isArray(stacks)) return { origin: 'code', path: original, message }
 		for (const stack of stacks) {
 			if (typeof stack !== 'object' || stack === null) continue
 			if (!('file' in stack) || typeof stack.file !== 'string') continue
@@ -380,9 +415,11 @@ export class RuntimeStage implements StageInterface {
 					: resolve(this.#workspace, stack.file)
 			const path =
 				reported === specification ? original : relativeWorkspaceFile(this.#workspace, reported)
-			if (!('line' in stack) || typeof stack.line !== 'number') return { path, message }
-			return { path, message, line: stack.line }
+			if (!('line' in stack) || typeof stack.line !== 'number') {
+				return { origin: 'code', path, message }
+			}
+			return { origin: 'code', path, message, line: stack.line }
 		}
-		return { path: original, message }
+		return { origin: 'code', path: original, message }
 	}
 }

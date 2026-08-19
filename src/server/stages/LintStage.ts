@@ -258,6 +258,9 @@ export class LintStage implements StageInterface {
 		publish(this.#findings(params.uri, params.diagnostics))
 	}
 
+	// Every finding here is one diagnostic Oxlint published about the text the caller supplied, so
+	// each one is that code failing. A server this stage cannot drive rejects the inspection
+	// instead, so no fault of its own reaches a caller as a finding.
 	#findings(uri: string, diagnostics: readonly unknown[]): readonly Finding[] {
 		const path = this.#documents.get(uri)
 		if (path === undefined) return []
@@ -270,20 +273,20 @@ export class LintStage implements StageInterface {
 				typeof diagnostic.range !== 'object' ||
 				diagnostic.range === null
 			) {
-				findings.push({ path, message: diagnostic.message })
+				findings.push({ origin: 'code', path, message: diagnostic.message })
 				continue
 			}
 			const range = diagnostic.range
 			if (!('start' in range) || typeof range.start !== 'object' || range.start === null) {
-				findings.push({ path, message: diagnostic.message })
+				findings.push({ origin: 'code', path, message: diagnostic.message })
 				continue
 			}
 			const start = range.start
 			if (!('line' in start) || typeof start.line !== 'number') {
-				findings.push({ path, message: diagnostic.message })
+				findings.push({ origin: 'code', path, message: diagnostic.message })
 				continue
 			}
-			findings.push({ path, message: diagnostic.message, line: start.line + 1 })
+			findings.push({ origin: 'code', path, message: diagnostic.message, line: start.line + 1 })
 		}
 		return findings
 	}

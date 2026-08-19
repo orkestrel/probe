@@ -262,13 +262,13 @@ export class TypeStage implements StageInterface {
 	}
 
 	#finding(typescript: typeof TypeScript, diagnostic: Diagnostic, project: string): Finding {
-		const path =
-			diagnostic.file === undefined
-				? project
-				: relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
 		const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-		if (diagnostic.file === undefined || diagnostic.start === undefined) return { path, message }
+		// A diagnostic naming no file is about the compilation this stage configured rather than
+		// about the candidate, so it reports against the project and disproves nothing.
+		if (diagnostic.file === undefined) return { origin: 'instrument', path: project, message }
+		const path = relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
+		if (diagnostic.start === undefined) return { origin: 'code', path, message }
 		const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
-		return { path, message, line: position.line + 1 }
+		return { origin: 'code', path, message, line: position.line + 1 }
 	}
 }

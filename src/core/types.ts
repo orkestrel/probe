@@ -111,16 +111,39 @@ export interface Claim {
 }
 
 /**
- * Carries one message a tool reported and where it reported it.
+ * Names where the fault one finding reports lives.
+ *
+ * @remarks
+ * `code` is a diagnostic the stage's tool reported about the candidate's source. `instrument` is
+ * the stage's own report that its inspection did not complete over that source — a specification
+ * it could not delete, a project it could not select, a module that ran no test. The two are
+ * irreducible modes rather than labels, because only a `code` finding disproves a claim: a control
+ * whose test never ran has produced no evidence about the code it was written to break.
+ *
+ * @example
+ * ```ts
+ * const origin: FindingOrigin = 'code'
+ * ```
+ */
+export type FindingOrigin = 'code' | 'instrument'
+
+/**
+ * Carries one message a stage reported, where it reported it, and whose fault it names.
  *
  * @remarks
  * The stage is not repeated here. A finding always arrives inside the `Check` that names its
  * stage, so a second copy could only drift from the first. `line` is absent when the tool
  * reported no line, which happens for a whole-file diagnostic and for a runtime failure.
  *
+ * `origin` decides what the other two members mean. A `code` finding carries the tool's own
+ * message, unedited, against the path the tool reported. An `instrument` finding carries the
+ * stage's own message, in the stage's own voice, against the path the stage could not inspect, so
+ * a reader is never told a tool said something it never said.
+ *
  * @example
  * ```ts
  * const finding: Finding = {
+ * 	origin: 'code',
  * 	path: 'src/core/greeting.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
  * 	line: 1,
@@ -128,9 +151,11 @@ export interface Claim {
  * ```
  */
 export interface Finding {
-	/** Workspace-relative path the tool reported against. */
+	/** Whether this message names a fault in the candidate's code or in the stage that ran. */
+	readonly origin: FindingOrigin
+	/** Workspace-relative path this message is reported against. */
 	readonly path: string
-	/** The tool's own message, unedited. */
+	/** The tool's own message for a `code` finding, or the stage's own for an `instrument` one. */
 	readonly message: string
 	/** One-based line the tool reported, or absent when it reported none. */
 	readonly line?: number
@@ -185,12 +210,18 @@ export interface Toolchain {
  * @remarks
  * A verdict exists only when all three stages ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
- * why no member here models a missing stage. `receipt` is present only when the case is clean and
- * the control failed at its declared stage.
+ * why no member here models a missing stage. `receipt` is present only when every stage ran clean
+ * on the case and the control reported at least one `origin: 'code'` finding at the stage it
+ * declared.
  *
  * @example
  * ```ts
- * const broke: Finding = { path: 'src/core/greeting.ts', message: 'not assignable', line: 1 }
+ * const broke: Finding = {
+ * 	origin: 'code',
+ * 	path: 'src/core/greeting.ts',
+ * 	message: 'not assignable',
+ * 	line: 1,
+ * }
  * const verdict: Verdict = {
  * 	id: '01J8Z0',
  * 	toolchain: { typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' },
@@ -220,7 +251,7 @@ export interface Verdict {
 	readonly control: readonly Check[]
 	/** Milliseconds the whole call took, including both the case and the control. */
 	readonly elapsed: number
-	/** The proof token, present only when the case is clean and the control failed where it said. */
+	/** The proof token, present only when the case ran clean and the control's own code broke where it said. */
 	readonly receipt?: string
 }
 

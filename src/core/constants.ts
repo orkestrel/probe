@@ -1,4 +1,4 @@
-import type { Stage } from './types.js'
+import type { FindingOrigin, Stage } from './types.js'
 
 /**
  * The three stages a claim passes through, in the order a verdict reports them.
@@ -13,6 +13,20 @@ import type { Stage } from './types.js'
  * ```
  */
 export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'runtime'])
+
+/**
+ * The two origins a finding carries, naming where the fault it reports lives.
+ *
+ * @remarks
+ * One list feeds the origin guard and the wire shape the stages produce, so an origin cannot be
+ * admitted by one and refused by another.
+ *
+ * @example
+ * ```ts
+ * FINDING_ORIGINS // ['code', 'instrument']
+ * ```
+ */
+export const FINDING_ORIGINS: readonly FindingOrigin[] = Object.freeze(['code', 'instrument'])
 
 /**
  * The leading token every receipt carries.

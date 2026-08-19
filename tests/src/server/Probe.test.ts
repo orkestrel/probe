@@ -75,12 +75,16 @@ describe.sequential('probe', () => {
 				expect(refused.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
 				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
-					expect.objectContaining({ message: 'Vitest ran no tests in the module' }),
+					expect.objectContaining({
+						origin: 'instrument',
+						message: 'Vitest ran no tests in the module',
+					}),
 				])
 				expect(admitted.receipt).toBeUndefined()
 				expect(admitted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
 					expect.objectContaining({
-						message: 'Vitest ran no tests because no configured project matches the test path',
+						origin: 'instrument',
+						message: 'The runtime stage found no configured Vitest project matching the test path',
 					}),
 				])
 			} finally {

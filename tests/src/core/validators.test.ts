@@ -8,6 +8,7 @@ import {
 	isClaim,
 	isControl,
 	isFinding,
+	isOrigin,
 	isSource,
 	isStage,
 	isToolchain,
@@ -26,7 +27,7 @@ describe('core guards', () => {
 			reason: 'must not compile',
 		}
 		const claim: Claim = { project: 'configs/src/tsconfig.core.json', case: subject, control }
-		const finding: Finding = { path: '', message: '' }
+		const finding: Finding = { origin: 'code', path: '', message: '' }
 		const check: Check = { stage: 'lint', elapsed: 17, findings: [finding] }
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
@@ -59,6 +60,34 @@ describe('core guards', () => {
 		expect(isToolchain({ ...toolchain, vitest: 4 })).toBe(false)
 		expect(isVerdict(verdict)).toBe(true)
 		expect(isVerdict({ ...verdict, receipt: 1 })).toBe(false)
+	})
+
+	it('admits a finding that names its origin and refuses one that does not', () => {
+		const finding: Finding = {
+			origin: 'code',
+			path: 'src/core/greeting.ts',
+			message: 'not assignable',
+		}
+		const { origin: _, ...anonymous } = finding
+		const check: Check = { stage: 'runtime', elapsed: 1, findings: [finding] }
+		const verdict: Verdict = {
+			id: '01J8Z0',
+			toolchain: { typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' },
+			checks: [check],
+			control: [check],
+			elapsed: 17,
+		}
+
+		expect(isOrigin('code')).toBe(true)
+		expect(isOrigin('instrument')).toBe(true)
+		expect(isOrigin('stage')).toBe(false)
+		expect(isFinding(finding)).toBe(true)
+		expect(isFinding({ ...finding, origin: 'stage' })).toBe(false)
+		expect(isFinding(anonymous)).toBe(false)
+		// The server applies `isVerdict` to every verdict the prove tool returns, so a guard that
+		// refused the origin the stages now produce would throw on every call rather than fail
+		// only here.
+		expect(isVerdict(verdict)).toBe(true)
 	})
 
 	it('agrees with the compiled claim shape for a named hostile population', () => {

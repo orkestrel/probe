@@ -78,14 +78,18 @@ export function formatVerdict(verdict: Verdict): string {
  *
  * @remarks
  * A receipt is issued on two conditions together: every stage ran clean on the case, and the
- * control reported at least one finding at the stage it declared. A control that fails somewhere
- * else has falsified the instrument rather than the claim, so no receipt is issued for it. The
- * token names the toolchain that produced it, so a receipt read away from its verdict still says
- * which compiler, linter, and runner stood behind it.
+ * control produced at least one `origin: 'code'` finding at the stage it declared. A control that
+ * fails somewhere else has falsified the instrument rather than the claim, so no receipt is issued
+ * for it. The token names the toolchain that produced it, so a receipt read away from its verdict
+ * still says which compiler, linter, and runner stood behind it.
  *
- * The case's condition counts every finding a stage reported, including one a stage raised about
- * its own instrument rather than about the candidate's code. A case the instrument could not
- * inspect end to end is not a clean case, so it earns no receipt.
+ * The two conditions count findings differently. The control's condition counts `origin: 'code'`
+ * findings alone, because a control whose test never ran and a control whose specification could
+ * not be deleted have each disproved nothing, and a receipt issued for either certifies an
+ * inspection that did not happen. The case's condition counts every finding, `origin: 'instrument'`
+ * included, because a case the stage could not inspect end to end is not a clean case. The case
+ * therefore fails on a fault of either origin, and the control passes only on a fault in the
+ * candidate's own code.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
@@ -101,8 +105,9 @@ export function formatVerdict(verdict: Verdict): string {
 export function computeReceipt(verdict: Verdict, stage: Stage): string | undefined {
 	const ran = PROBE_STAGES.every((name) => verdict.checks.some((check) => check.stage === name))
 	const clean = verdict.checks.every((check) => check.findings.length === 0)
-	const broke = verdict.control.find((check) => check.stage === stage)
-	if (!ran || !clean || broke === undefined || broke.findings.length === 0) return undefined
+	const declared = verdict.control.find((check) => check.stage === stage)
+	const broke = declared?.findings.some((finding) => finding.origin === 'code') ?? false
+	if (!ran || !clean || !broke) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain
 	return [
 		RECEIPT_PREFIX,
