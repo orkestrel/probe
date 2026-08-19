@@ -52,7 +52,6 @@ export class RuntimeStage implements StageInterface {
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
 	#specifications = 0
-	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -76,12 +75,57 @@ export class RuntimeStage implements StageInterface {
 
 	async inspect(subject: Case): Promise<Check> {
 		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
-		const inspection = this.#tail.then(() => this.#inspect(subject))
-		this.#tail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
+		const started = performance.now()
+		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
+		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
+		// rather than assigning zero over a code the host set for itself.
+		const exitCode = process.exitCode
+		const vitest = await this.#runner()
+		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		const project = this.#project(vitest, subject.test.path)
+		if ('message' in project) {
+			return {
+				stage: this.stage,
+				elapsed: Math.round(performance.now() - started),
+				findings: [project],
+			}
+		}
+		this.#revalidate(vitest)
+		const file = createRevisionFile(this.#workspace, subject.test.path, randomUUID())
+		if (!existsSync(dirname(file))) {
+			throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
+		}
+		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
+		this.#specifications += 1
+		this.#revisions.add(file)
+		let findings: readonly Finding[] = []
+		let cleanup: readonly Finding[] = []
+		try {
+			const specification = project.createSpecification(file, undefined, 'threads')
+			const result = await vitest.runTestSpecifications([specification], false)
+			findings = this.#findings(result, file, subject.test.path)
+		} finally {
+			process.exitCode = exitCode
+			this.#revisions.delete(file)
+			cleanup = await this.#evict(vitest, file)
+			try {
+				if (existsSync(file)) unlinkSync(file)
+			} catch (error) {
+				cleanup = [
+					...cleanup,
+					{
+						origin: 'instrument',
+						path: relativeWorkspaceFile(this.#workspace, file),
+						message: `The runtime stage could not delete the generated specification (${messageFromUnknown(error)})`,
+					},
+				]
+			}
+		}
+		return {
+			stage: this.stage,
+			elapsed: Math.round(performance.now() - started),
+			findings: [...findings, ...cleanup],
+		}
 	}
 
 	destroy(): Promise<void> {
@@ -138,60 +182,6 @@ export class RuntimeStage implements StageInterface {
 			undefined,
 			{ stdout: output, stderr: process.stderr },
 		)
-	}
-
-	async #inspect(subject: Case): Promise<Check> {
-		const started = performance.now()
-		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
-		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
-		// rather than assigning zero over a code the host set for itself.
-		const exitCode = process.exitCode
-		const vitest = await this.#runner()
-		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
-		const project = this.#project(vitest, subject.test.path)
-		if ('message' in project) {
-			return {
-				stage: this.stage,
-				elapsed: Math.round(performance.now() - started),
-				findings: [project],
-			}
-		}
-		this.#revalidate(vitest)
-		const file = createRevisionFile(this.#workspace, subject.test.path, randomUUID())
-		if (!existsSync(dirname(file))) {
-			throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
-		}
-		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
-		this.#specifications += 1
-		this.#revisions.add(file)
-		let findings: readonly Finding[] = []
-		let cleanup: readonly Finding[] = []
-		try {
-			const specification = project.createSpecification(file, undefined, 'threads')
-			const result = await vitest.runTestSpecifications([specification], false)
-			findings = this.#findings(result, file, subject.test.path)
-		} finally {
-			process.exitCode = exitCode
-			this.#revisions.delete(file)
-			cleanup = await this.#evict(vitest, file)
-			try {
-				if (existsSync(file)) unlinkSync(file)
-			} catch (error) {
-				cleanup = [
-					...cleanup,
-					{
-						origin: 'instrument',
-						path: relativeWorkspaceFile(this.#workspace, file),
-						message: `The runtime stage could not delete the generated specification (${messageFromUnknown(error)})`,
-					},
-				]
-			}
-		}
-		return {
-			stage: this.stage,
-			elapsed: Math.round(performance.now() - started),
-			findings: [...findings, ...cleanup],
-		}
 	}
 
 	// Returns the project or the finding that replaces it, never both and never neither. A pair of

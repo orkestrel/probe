@@ -40,7 +40,6 @@ export class LintStage implements StageInterface {
 	#child: ChildProcessWithoutNullStreams | undefined
 	#buffer = Buffer.alloc(0)
 	#sequence = 0
-	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -64,12 +63,18 @@ export class LintStage implements StageInterface {
 
 	async inspect(subject: Case): Promise<Check> {
 		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
-		const inspection = this.#tail.then(() => this.#inspect(subject))
-		this.#tail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
+		const started = performance.now()
+		await this.#warmth
+		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
+		const findings: Finding[] = []
+		for (const source of [...subject.files, subject.test]) {
+			findings.push(...(await this.#document(source)))
+		}
+		return {
+			stage: this.stage,
+			elapsed: Math.round(performance.now() - started),
+			findings,
+		}
 	}
 
 	destroy(): Promise<void> {
@@ -83,8 +88,8 @@ export class LintStage implements StageInterface {
 		// A server that failed to warm still leaves a child to release, so read the spawned child
 		// rather than the warming result.
 		const child = await this.#warmth.catch(() => this.#child)
-		// Abandon every document in flight rather than waiting behind `#tail`: a server that never
-		// publishes its diagnostics would otherwise hold teardown open for the life of the process.
+		// Abandon every document in flight rather than waiting for it: a server that never publishes
+		// its diagnostics would otherwise hold teardown open for the life of the process.
 		this.#fail(new Error('The lint stage has been destroyed'))
 		if (child === undefined || child.exitCode !== null) return
 		await this.#request('shutdown', undefined)
@@ -120,21 +125,6 @@ export class LintStage implements StageInterface {
 		})
 		this.#notify('initialized', {})
 		return child
-	}
-
-	async #inspect(subject: Case): Promise<Check> {
-		const started = performance.now()
-		await this.#warmth
-		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
-		const findings: Finding[] = []
-		for (const source of [...subject.files, subject.test]) {
-			findings.push(...(await this.#document(source)))
-		}
-		return {
-			stage: this.stage,
-			elapsed: Math.round(performance.now() - started),
-			findings,
-		}
 	}
 
 	#document(source: Source): Promise<readonly Finding[]> {

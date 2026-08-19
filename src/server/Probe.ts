@@ -9,11 +9,13 @@ import type {
 	Verdict,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { QueueInterface } from '@orkestrel/queue'
 import type { TimeoutInterface } from '@orkestrel/timeout'
-import type { StageInterface } from './types.js'
+import type { Inspection, StageInterface } from './types.js'
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { Emitter } from '@orkestrel/emitter'
+import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import { computeReceipt, formatCheck } from '@src/core'
 import { readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
@@ -27,8 +29,10 @@ import { TypeStage } from './stages/TypeStage.js'
  * @remarks
  * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
- * report their respective changes. Each active stage inspection has a coordinator-owned deadline.
- * A runtime expiry abandons and replaces its worker before the next queued inspection begins.
+ * report their respective changes. One queue per stage admits inspections in arrival order, one at
+ * a time, so a stage never serves two claims at once and the deadline covers active work rather
+ * than queue wait. Each active stage inspection has a coordinator-owned deadline. A runtime expiry
+ * abandons and replaces its worker before the next queued inspection begins.
  *
  * @example
  * ```ts
@@ -45,9 +49,9 @@ export class Probe implements ProbeInterface {
 	readonly #type: TypeStage
 	readonly #lint: LintStage
 	#runtime: RuntimeStage
-	#typeTail: Promise<void> = Promise.resolve()
-	#lintTail: Promise<void> = Promise.resolve()
-	#runtimeTail: Promise<void> = Promise.resolve()
+	readonly #typeQueue: QueueInterface<Inspection, Check>
+	readonly #lintQueue: QueueInterface<Inspection, Check>
+	readonly #runtimeQueue: QueueInterface<Inspection, Check>
 	readonly #arming: Promise<void>
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -72,6 +76,30 @@ export class Probe implements ProbeInterface {
 		this.#type = new TypeStage(this.#workspace)
 		this.#lint = new LintStage(this.#workspace)
 		this.#runtime = new RuntimeStage(this.#workspace)
+		// One queue per stage, strictly ordered and one deep, is the only place this coordinator
+		// serializes: a stage admits nothing itself. `retries: 0` keeps the queue from re-running an
+		// inspection, because a stage that exceeded its deadline is recycled rather than retried, and
+		// that recovery runs inside the handler so it finishes before the next claim is admitted.
+		this.#typeQueue = createQueue<Inspection, Check>({
+			concurrency: 1,
+			retries: 0,
+			handler: (inspection) =>
+				this.#inspectStage(
+					this.#type,
+					this.#type.inspect(inspection.subject, inspection.claim.project),
+				),
+		})
+		this.#lintQueue = createQueue<Inspection, Check>({
+			concurrency: 1,
+			retries: 0,
+			handler: (inspection) =>
+				this.#inspectStage(this.#lint, this.#lint.inspect(inspection.subject)),
+		})
+		this.#runtimeQueue = createQueue<Inspection, Check>({
+			concurrency: 1,
+			retries: 0,
+			handler: (inspection) => this.#runRuntime(inspection.subject, inspection.claim),
+		})
 		this.#arming = this.#arm()
 		// Observe the stored promise here. Nothing else reads it until `prove` or `destroy`, and a
 		// host that calls neither takes an unhandled rejection that ends the process. The stored
@@ -211,42 +239,16 @@ export class Probe implements ProbeInterface {
 	}
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
-		return Promise.all([
-			this.#inspectType(subject, claim),
-			this.#inspectLint(subject),
-			this.#inspectRuntime(subject, claim),
-		])
-	}
-
-	#inspectType(subject: Case, claim: Claim): Promise<Check> {
-		const inspection = this.#typeTail.then(() =>
-			this.#inspectStage(this.#type, this.#type.inspect(subject, claim.project)),
-		)
-		this.#typeTail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
-	}
-
-	#inspectLint(subject: Case): Promise<Check> {
-		const inspection = this.#lintTail.then(() =>
-			this.#inspectStage(this.#lint, this.#lint.inspect(subject)),
-		)
-		this.#lintTail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
-	}
-
-	#inspectRuntime(subject: Case, claim: Claim): Promise<Check> {
-		const inspection = this.#runtimeTail.then(() => this.#runRuntime(subject, claim))
-		this.#runtimeTail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
+		const inspection: Inspection = { subject, claim }
+		const admitted = [
+			this.#typeQueue.enqueue(inspection),
+			this.#lintQueue.enqueue(inspection),
+			this.#runtimeQueue.enqueue(inspection),
+		]
+		// `Promise.all` reports the first rejection and stops observing the rest, and an unobserved
+		// rejection ends the host process. Observe each one here; the caller still reads the first.
+		for (const pending of admitted) void pending.catch(() => {})
+		return Promise.all(admitted)
 	}
 
 	async #inspectStage(stage: StageInterface, operation: Promise<Check>): Promise<Check> {
@@ -318,6 +320,10 @@ export class Probe implements ProbeInterface {
 		try {
 			await this.#arming
 		} catch {}
+		// Tear the stages down and leave the queues running. A queue holds no host resource — no
+		// timer, no listener, no store — and stage teardown settles every entry still admitted, so
+		// each caller reads the stage's own refusal. Destroying a queue instead abandons those
+		// entries, and a stage rejecting after its queue stopped observing ends the host process.
 		await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])
 	}
 

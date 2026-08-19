@@ -1,4 +1,4 @@
-import type { Claim } from '@src/core'
+import type { Claim, ProbeEventMap, Toolchain, Verdict } from '@src/core'
 import { mkdirSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +8,49 @@ import { Probe, readWorkspaceManifest } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+
+// A protocol-faithful Oxlint language server that records every document session it is given. It
+// appends one line per `didOpen` carrying the number of documents open at that moment, waits, then
+// publishes an empty diagnostic set. A coordinator that admits two inspections at once shows a
+// count above one; a coordinator that admits them out of order shows the sessions transposed.
+const ORDERED = [
+	"import { appendFileSync } from 'node:fs'",
+	'let buffer = Buffer.alloc(0)',
+	'let open = 0',
+	'setTimeout(() => process.exit(0), 300_000)',
+	'function send(message) {',
+	'\tconst content = JSON.stringify(message)',
+	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
+	'}',
+	"process.stdin.on('data', (chunk) => {",
+	'\tbuffer = Buffer.concat([buffer, chunk])',
+	'\twhile (true) {',
+	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
+	'\t\tif (boundary < 0) return',
+	"\t\tconst header = buffer.subarray(0, boundary).toString('ascii')",
+	'\t\tconst match = /Content-Length: (\\d+)/i.exec(header)',
+	'\t\tif (match === null) return',
+	'\t\tconst length = Number(match[1])',
+	'\t\tconst start = boundary + 4',
+	'\t\tif (buffer.length < start + length) return',
+	"\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))",
+	'\t\tbuffer = buffer.subarray(start + length)',
+	"\t\tif (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })",
+	"\t\tif (message.method === 'textDocument/didOpen') {",
+	'\t\t\tconst uri = message.params.textDocument.uri',
+	'\t\t\topen += 1',
+	"\t\t\tappendFileSync('probe-lint.log', 'open ' + open + ' ' + uri + '\\n')",
+	"\t\t\tsetTimeout(() => send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } }), 100)",
+	'\t\t}',
+	"\t\tif (message.method === 'textDocument/didClose') {",
+	'\t\t\topen -= 1',
+	"\t\t\tappendFileSync('probe-lint.log', 'close ' + message.params.textDocument.uri + '\\n')",
+	'\t\t}',
+	"\t\tif (message.method === 'shutdown') send({ jsonrpc: '2.0', id: message.id, result: null })",
+	"\t\tif (message.method === 'exit') process.exit(0)",
+	'\t}',
+	'})',
+].join('\n')
 
 describe.sequential('probe', () => {
 	it(
@@ -435,6 +478,120 @@ describe.sequential('probe', () => {
 			expect(
 				readdirSync(directory).filter((name) => name.startsWith('after-destroy.test.probe-')),
 			).toStrictEqual([])
+		},
+	)
+	it('publishes exactly the four events its map declares', () => {
+		// `Record<keyof ProbeEventMap, …>` admits no other key and requires every declared one, so a
+		// queue lifecycle event added to the published map fails this file's typecheck before it can
+		// reach a listener.
+		const declared: Record<keyof ProbeEventMap, true> = {
+			arm: true,
+			prove: true,
+			expire: true,
+			error: true,
+		}
+		expect(Object.keys(declared).sort()).toStrictEqual(['arm', 'error', 'expire', 'prove'])
+	})
+
+	it(
+		'admits one inspection per stage at a time, in arrival order',
+		{ timeout: 180_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+			scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
+			scratch.write(
+				'node_modules/oxlint/package.json',
+				'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
+			)
+			scratch.write('node_modules/oxlint/fixture.js', ORDERED)
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			scratch.write('probe-lint.log', '')
+			const armings = createRecorder<[Toolchain]>()
+			const verdicts = createRecorder<[Verdict]>()
+			const expirations = createRecorder<[Claim]>()
+			const failures = createRecorder<[unknown]>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 60_000,
+				on: {
+					arm: armings.handler,
+					prove: verdicts.handler,
+					expire: expirations.handler,
+					error: failures.handler,
+				},
+			})
+			const passing = {
+				path: 'tmp/probe/order.test.ts',
+				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+			}
+			const first: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [{ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' }],
+					test: passing,
+				},
+				control: {
+					files: [{ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' }],
+					test: passing,
+					stage: 'type',
+					reason: 'this control is deliberately clean',
+				},
+			}
+			const second: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [{ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }],
+					test: passing,
+				},
+				control: {
+					files: [{ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }],
+					test: passing,
+					stage: 'type',
+					reason: 'this control is deliberately clean',
+				},
+			}
+			try {
+				// Boot runs its own controls through the same server, so the record starts once the
+				// instrument serves and holds the two claims alone.
+				await new Promise<void>((armed, failed) => {
+					probe.emitter.on('arm', () => armed())
+					probe.emitter.on('error', (error) => failed(error))
+				})
+				scratch.write('probe-lint.log', '')
+				const verdict = await Promise.all([probe.prove(first), probe.prove(second)])
+				const lines = (scratch.read('probe-lint.log') ?? '')
+					.split('\n')
+					.filter((line) => line.startsWith('open '))
+				// Four inspections, each opening its candidate source and then its test.
+				expect(lines).toHaveLength(8)
+				expect(lines.map((line) => line.split(' ')[1])).toStrictEqual(Array(8).fill('1'))
+				expect(
+					lines
+						.filter((line) => line.includes('/src/'))
+						.map((line) => (line.includes('/src/core/') ? 'first' : 'second')),
+				).toStrictEqual(['first', 'second', 'first', 'second'])
+				expect(verdict.map((answer) => answer.checks.map((check) => check.stage).sort())).toEqual([
+					['lint', 'runtime', 'type'],
+					['lint', 'runtime', 'type'],
+				])
+				expect(armings.count).toBe(1)
+				expect(verdicts.count).toBe(2)
+				expect(expirations.count).toBe(0)
+				expect(failures.count).toBe(0)
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
 		},
 	)
 })

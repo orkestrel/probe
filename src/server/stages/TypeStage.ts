@@ -41,7 +41,6 @@ export class TypeStage implements StageInterface {
 	readonly #versions = new Map<string, number>()
 	#recycled: string | undefined
 	#revision = 0
-	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -79,12 +78,32 @@ export class TypeStage implements StageInterface {
 	 */
 	async inspect(subject: Case, project?: string): Promise<Check> {
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
-		const inspection = this.#tail.then(() => this.#inspect(subject, project))
-		this.#tail = inspection.then(
-			() => undefined,
-			() => undefined,
-		)
-		return inspection
+		const started = performance.now()
+		const typescript = await this.#typescript
+		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		this.#revision += 1
+		this.#overlay(subject.test)
+		for (const source of subject.files) this.#overlay(source)
+		try {
+			const findings: Finding[] = []
+			const root = this.#service(typescript, 'tsconfig.json')
+			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
+			for (const source of subject.files) {
+				const selected = project ?? inferTypeProject(source.path)
+				const service = this.#service(typescript, selected)
+				findings.push(...this.#findings(typescript, service, source, selected))
+			}
+			return {
+				stage: this.stage,
+				elapsed: Math.round(performance.now() - started),
+				findings,
+			}
+		} finally {
+			this.#overlays.delete(resolveWorkspaceFile(this.#workspace, subject.test.path))
+			for (const source of subject.files) {
+				this.#overlays.delete(resolveWorkspaceFile(this.#workspace, source.path))
+			}
+		}
 	}
 
 	destroy(): Promise<void> {
@@ -95,9 +114,9 @@ export class TypeStage implements StageInterface {
 	}
 
 	async #destroy(): Promise<void> {
-		// Abandon what `#tail` holds rather than waiting behind it: the coordinator tears a stage
-		// down exactly when it cannot wait for an inspection. Warming is awaited because the
-		// services it creates are the resources this releases.
+		// Abandon every inspection in flight rather than waiting for one: the coordinator tears a
+		// stage down exactly when it cannot wait. Warming is awaited because the services it
+		// creates are the resources this releases.
 		await this.#typescript.catch(() => undefined)
 		for (const service of this.#services.values()) service.dispose()
 		this.#services.clear()
@@ -138,35 +157,6 @@ export class TypeStage implements StageInterface {
 			}
 		}
 		return projects
-	}
-
-	async #inspect(subject: Case, project?: string): Promise<Check> {
-		const started = performance.now()
-		const typescript = await this.#typescript
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
-		this.#revision += 1
-		this.#overlay(subject.test)
-		for (const source of subject.files) this.#overlay(source)
-		try {
-			const findings: Finding[] = []
-			const root = this.#service(typescript, 'tsconfig.json')
-			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
-			for (const source of subject.files) {
-				const selected = project ?? inferTypeProject(source.path)
-				const service = this.#service(typescript, selected)
-				findings.push(...this.#findings(typescript, service, source, selected))
-			}
-			return {
-				stage: this.stage,
-				elapsed: Math.round(performance.now() - started),
-				findings,
-			}
-		} finally {
-			this.#overlays.delete(resolveWorkspaceFile(this.#workspace, subject.test.path))
-			for (const source of subject.files) {
-				this.#overlays.delete(resolveWorkspaceFile(this.#workspace, source.path))
-			}
-		}
 	}
 
 	#overlay(source: Source): void {

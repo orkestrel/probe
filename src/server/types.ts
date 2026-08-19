@@ -1,12 +1,36 @@
-import type { Case, Check, Stage } from '@src/core'
+import type { Case, Check, Claim, Stage } from '@src/core'
+
+/**
+ * Carries one queued inspection: the case a stage reads and the claim it belongs to.
+ *
+ * @remarks
+ * The coordinator admits one of these per stage at a time. Every stage reads `subject`; the type
+ * stage also reads `claim.project`, and the runtime stage reports `claim` when its deadline fires.
+ *
+ * @example
+ * ```ts
+ * const inspection: Inspection = { subject: claim.case, claim }
+ * ```
+ */
+export interface Inspection {
+	/** The candidate sources and test one stage inspects. */
+	readonly subject: Case
+	/** The claim the subject belongs to. */
+	readonly claim: Claim
+}
 
 /**
  * Inspects one case with a resident workspace tool.
  *
  * @remarks
  * Warming begins at construction. The `inspect` method awaits that one warm operation and reuses
- * the resulting tool across calls. The `destroy` method permanently tears the stage down and
- * releases every resource it owns.
+ * the resulting tool across calls. A stage serves one inspection at a time and admits none itself.
+ * Await an inspection before issuing the next one, or admit through one queue per stage the way
+ * `Probe` does: a second concurrent call reaches the same resident tool and the same overlay,
+ * document, and specification state the first is still using. A stage never holds a later
+ * inspection behind an earlier one, so a caller that abandons an inspection at its own deadline
+ * can still use the stage. The `destroy` method permanently tears the stage down and releases
+ * every resource it owns.
  *
  * @example
  * ```ts
