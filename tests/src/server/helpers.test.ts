@@ -67,9 +67,7 @@ describe('server path helpers', () => {
 
 	it('accepts a contained file whose name begins with two dots', () => {
 		expect(resolveWorkspaceFile(ROOT, '..hidden.ts')).toBe(resolve(ROOT, '..hidden.ts'))
-		expect(resolveWorkspaceFile(ROOT, '..config/value.ts')).toBe(
-			resolve(ROOT, '..config/value.ts'),
-		)
+		expect(resolveWorkspaceFile(ROOT, '..config/value.ts')).toBe(resolve(ROOT, '..config/value.ts'))
 		expect(resolveWorkspaceFile(ROOT, '...weird.ts')).toBe(resolve(ROOT, '...weird.ts'))
 	})
 
