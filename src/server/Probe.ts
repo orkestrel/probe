@@ -9,6 +9,7 @@ import type {
 	Verdict,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { TimeoutInterface } from '@orkestrel/timeout'
 import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { Emitter } from '@orkestrel/emitter'
@@ -43,7 +44,7 @@ export class Probe implements ProbeInterface {
 	readonly #type: TypeStage
 	readonly #lint: LintStage
 	#runtime: RuntimeStage
-	readonly #warmth: Promise<void>
+	readonly #arming: Promise<void>
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -67,7 +68,11 @@ export class Probe implements ProbeInterface {
 		this.#type = new TypeStage(this.#workspace)
 		this.#lint = new LintStage(this.#workspace)
 		this.#runtime = new RuntimeStage(this.#workspace)
-		this.#warmth = this.#warm()
+		this.#arming = this.#arm()
+		// Observe the stored promise here. Nothing else reads it until `prove` or `destroy`, and a
+		// host that calls neither takes an unhandled rejection that ends the process. The stored
+		// promise keeps rejecting, so `prove` still reports the arming failure to its caller.
+		void this.#arming.catch(() => {})
 	}
 
 	get emitter(): EmitterInterface<ProbeEventMap> {
@@ -79,11 +84,11 @@ export class Probe implements ProbeInterface {
 	}
 
 	async prove(claim: Claim): Promise<Verdict> {
-		await this.#warmth
-		if (this.#destroyed) throw new Error('The probe has been destroyed')
-		const started = performance.now()
-		const id = randomUUID()
 		try {
+			await this.#arming
+			if (this.#destroyed) throw new Error('The probe has been destroyed')
+			const started = performance.now()
+			const id = randomUUID()
 			const checks = Object.freeze(await this.#inspect(claim.case, claim))
 			const control = Object.freeze(await this.#inspect(claim.control, claim))
 			const basis: Verdict = {
@@ -91,7 +96,7 @@ export class Probe implements ProbeInterface {
 				toolchain: this.#toolchain,
 				checks,
 				control,
-				elapsed: performance.now() - started,
+				elapsed: Math.round(performance.now() - started),
 			}
 			const receipt = computeReceipt(basis, claim.control.stage)
 			const verdict: Verdict = receipt === undefined ? basis : { ...basis, receipt }
@@ -108,16 +113,6 @@ export class Probe implements ProbeInterface {
 		this.#destroyed = true
 		this.#closing = this.#destroy()
 		return this.#closing
-	}
-
-	async #warm(): Promise<void> {
-		try {
-			await this.#arm()
-			this.#emitter.emit('arm', this.#toolchain)
-		} catch (error) {
-			this.#emitter.emit('error', error)
-			throw error
-		}
 	}
 
 	async #arm(): Promise<void> {
@@ -140,9 +135,12 @@ export class Probe implements ProbeInterface {
 				reason: 'the imported dependency changed after the resident runtime cached it',
 			},
 		}
-		mkdirSync(directory, { recursive: true })
-		writeFileSync(dependency, "export const SIGNAL = 'before'\n", { encoding: 'utf8', flag: 'wx' })
 		try {
+			mkdirSync(directory, { recursive: true })
+			writeFileSync(dependency, "export const SIGNAL = 'before'\n", {
+				encoding: 'utf8',
+				flag: 'wx',
+			})
 			const before = await this.#inspect(claim.case, claim)
 			if (before.some((check) => check.findings.length > 0)) {
 				throw new Error('The probe boot control did not begin clean')
@@ -153,6 +151,9 @@ export class Probe implements ProbeInterface {
 			if (runtime === undefined || runtime.findings.length === 0) {
 				throw new Error('The probe boot control did not detect a mutated dependency')
 			}
+		} catch (error) {
+			this.#emitter.emit('error', error)
+			throw error
 		} finally {
 			rmSync(dependency, { force: true })
 			if (created) {
@@ -161,6 +162,9 @@ export class Probe implements ProbeInterface {
 				} catch {}
 			}
 		}
+		// The `finally` above runs before this line, so the control's own files are gone by the
+		// time a listener is told the instrument serves.
+		this.#emitter.emit('arm', this.#toolchain)
 	}
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
@@ -178,13 +182,7 @@ export class Probe implements ProbeInterface {
 		try {
 			return await Promise.race([
 				stage.inspect(subject),
-				new Promise<Check>((_resolve, reject) => {
-					timeout.signal.addEventListener(
-						'abort',
-						() => reject(new Error(`The runtime stage exceeded ${this.#deadline} ms`)),
-						{ once: true },
-					)
-				}),
+				this.#expiry(timeout, `The runtime stage exceeded ${this.#deadline} ms`),
 			])
 		} catch (error) {
 			if (!timeout.expired) throw error
@@ -197,14 +195,37 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #recycle(stage: RuntimeStage): Promise<void> {
-		await stage.destroy()
+		const timeout = createTimeout({ ms: this.#deadline })
+		timeout.start()
+		try {
+			// Teardown of a hung stage can reject or outlive its own deadline, and the replacement
+			// must be installed either way: `#runtime` otherwise stays destroyed for the life of
+			// the process and every later claim reports that instead of its own evidence.
+			await Promise.race([
+				stage.destroy(),
+				this.#expiry(timeout, `The runtime stage recovery exceeded ${this.#deadline} ms`),
+			])
+		} catch {
+			// The failure belongs to the stage being replaced, and the replacement below is the
+			// recovery the caller is owed.
+		} finally {
+			timeout.clear()
+		}
 		if (this.#destroyed || this.#runtime !== stage) return
 		this.#runtime = new RuntimeStage(this.#workspace)
 	}
 
+	// Rejects when the deadline fires, so a race against it settles even when the operation it
+	// races never returns.
+	#expiry(timeout: TimeoutInterface, message: string): Promise<never> {
+		return new Promise<never>((_resolve, reject) => {
+			timeout.signal.addEventListener('abort', () => reject(new Error(message)), { once: true })
+		})
+	}
+
 	async #destroy(): Promise<void> {
 		try {
-			await this.#warmth
+			await this.#arming
 		} catch {}
 		try {
 			await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])

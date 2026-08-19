@@ -52,6 +52,10 @@ export class LintStage implements StageInterface {
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
 		this.#warmth = this.#warm()
+		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
+		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
+		// rejecting, so an inspection still reports the warming failure.
+		void this.#warmth.catch(() => {})
 	}
 
 	get stage(): Stage {
@@ -71,18 +75,25 @@ export class LintStage implements StageInterface {
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#destroyed = true
-		this.#closing = this.#tail.then(async () => {
-			const child = await this.#warmth
-			if (child.exitCode !== null) return
-			await this.#request('shutdown', undefined)
-			const ending = new Promise<void>((resolve, reject) => {
-				child.once('exit', () => resolve())
-				child.once('error', (error) => reject(error))
-			})
-			this.#notify('exit', undefined)
-			await ending
-		})
+		this.#closing = this.#destroy()
 		return this.#closing
+	}
+
+	async #destroy(): Promise<void> {
+		// A server that failed to warm still leaves a child to release, so read the spawned child
+		// rather than the warming result.
+		const child = await this.#warmth.catch(() => this.#child)
+		// Abandon every document in flight rather than waiting behind `#tail`: a server that never
+		// publishes its diagnostics would otherwise hold teardown open for the life of the process.
+		this.#fail(new Error('The lint stage has been destroyed'))
+		if (child === undefined || child.exitCode !== null) return
+		await this.#request('shutdown', undefined)
+		const ending = new Promise<void>((resolve, reject) => {
+			child.once('exit', () => resolve())
+			child.once('error', (error) => reject(error))
+		})
+		this.#notify('exit', undefined)
+		await ending
 	}
 
 	async #warm(): Promise<ChildProcessWithoutNullStreams> {
@@ -114,13 +125,14 @@ export class LintStage implements StageInterface {
 	async #inspect(subject: Case): Promise<Check> {
 		const started = performance.now()
 		await this.#warmth
+		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
 		const findings: Finding[] = []
 		for (const source of [...subject.files, subject.test]) {
 			findings.push(...(await this.#document(source)))
 		}
 		return {
 			stage: this.stage,
-			elapsed: performance.now() - started,
+			elapsed: Math.round(performance.now() - started),
 			findings,
 		}
 	}

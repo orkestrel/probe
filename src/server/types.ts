@@ -30,8 +30,10 @@ export interface StageInterface {
 	 * Tears down the resident tool and releases its resources.
 	 *
 	 * @remarks
-	 * A stage may abandon an in-flight inspection rather than waiting behind it. The inspection may
-	 * reject as the owned tool closes.
+	 * A stage abandons every inspection it holds rather than waiting behind one, so teardown never
+	 * waits for an inspection to return. An abandoned inspection rejects, either at the stage's own
+	 * guard or as the owned tool closes. The coordinator depends on that guarantee to replace a
+	 * stage whose worker no longer returns.
 	 *
 	 * @returns A promise that settles after the resident tool releases its resources
 	 */

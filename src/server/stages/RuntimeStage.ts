@@ -34,6 +34,7 @@ export class RuntimeStage implements StageInterface {
 	readonly #workspace: string
 	readonly #vitest: Promise<Vitest>
 	readonly #modules = new Map<string, string>()
+	readonly #revisions = new Set<string>()
 	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -46,6 +47,10 @@ export class RuntimeStage implements StageInterface {
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
 		this.#vitest = this.#warm()
+		// Observe the stored promise here. A stage the coordinator builds to replace a hung one may
+		// never be inspected or destroyed, and an unobserved rejection ends the host process. The
+		// stored promise keeps rejecting, so an inspection still reports the warming failure.
+		void this.#vitest.catch(() => {})
 	}
 
 	get stage(): Stage {
@@ -65,12 +70,26 @@ export class RuntimeStage implements StageInterface {
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#destroyed = true
-		this.#closing = this.#vitest.then(async (vitest) => {
+		this.#closing = this.#destroy()
+		return this.#closing
+	}
+
+	async #destroy(): Promise<void> {
+		// Remove the abandoned specifications first. An inspection the coordinator gave up on keeps
+		// its file until the run it started finally settles, and that file matches the workbench
+		// project's glob, so a developer running the workbench meets a stranger's hung test.
+		for (const file of this.#revisions) {
+			if (existsSync(file)) unlinkSync(file)
+		}
+		this.#revisions.clear()
+		// A stage whose warming failed holds nothing to release, so teardown settles rather than
+		// re-reporting a failure its constructor already surfaced.
+		const vitest = await this.#vitest.catch(() => undefined)
+		if (vitest !== undefined) {
 			void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
 			await vitest.close()
-			this.#modules.clear()
-		})
-		return this.#closing
+		}
+		this.#modules.clear()
 	}
 
 	async #warm(): Promise<Vitest> {
@@ -97,7 +116,12 @@ export class RuntimeStage implements StageInterface {
 
 	async #inspect(subject: Case): Promise<Check> {
 		const started = performance.now()
+		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
+		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
+		// rather than assigning zero over a code the host set for itself.
+		const exitCode = process.exitCode
 		const vitest = await this.#vitest
+		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
 		this.#revalidate(vitest)
 		const file = createRevisionFile(this.#workspace, subject.test.path, randomUUID())
 		if (!existsSync(dirname(file))) {
@@ -105,20 +129,23 @@ export class RuntimeStage implements StageInterface {
 		}
 		const project = this.#project(vitest, subject.test.path)
 		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
+		this.#revisions.add(file)
 		try {
 			const specification = project.createSpecification(file, undefined, 'threads')
 			const result = await vitest.runTestSpecifications([specification], false)
 			const findings = this.#findings(result, file, subject.test.path)
 			return {
 				stage: this.stage,
-				elapsed: performance.now() - started,
+				elapsed: Math.round(performance.now() - started),
 				findings,
 			}
 		} finally {
+			process.exitCode = exitCode
 			vitest.state.clearFiles(project, [file])
 			vitest.clearSpecificationsCache(file)
 			vitest.invalidateFile(file)
 			if (existsSync(file)) unlinkSync(file)
+			this.#revisions.delete(file)
 		}
 	}
 

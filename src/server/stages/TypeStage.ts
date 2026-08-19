@@ -49,6 +49,10 @@ export class TypeStage implements StageInterface {
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
 		this.#typescript = this.#warm()
+		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
+		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
+		// rejecting, so an inspection still reports the warming failure.
+		void this.#typescript.catch(() => {})
 	}
 
 	get stage(): Stage {
@@ -68,16 +72,21 @@ export class TypeStage implements StageInterface {
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#destroyed = true
-		this.#closing = this.#tail.then(async () => {
-			await this.#typescript
-			for (const service of this.#services.values()) service.dispose()
-			this.#services.clear()
-			this.#options.clear()
-			this.#files.clear()
-			this.#overlays.clear()
-			this.#versions.clear()
-		})
+		this.#closing = this.#destroy()
 		return this.#closing
+	}
+
+	async #destroy(): Promise<void> {
+		// Abandon what `#tail` holds rather than waiting behind it: the coordinator tears a stage
+		// down exactly when it cannot wait for an inspection. Warming is awaited because the
+		// services it creates are the resources this releases.
+		await this.#typescript.catch(() => undefined)
+		for (const service of this.#services.values()) service.dispose()
+		this.#services.clear()
+		this.#options.clear()
+		this.#files.clear()
+		this.#overlays.clear()
+		this.#versions.clear()
 	}
 
 	async #warm(): Promise<typeof TypeScript> {
@@ -111,6 +120,7 @@ export class TypeStage implements StageInterface {
 	async #inspect(subject: Case): Promise<Check> {
 		const started = performance.now()
 		const typescript = await this.#typescript
+		if (this.#destroyed) throw new Error('The type stage has been destroyed')
 		this.#revision += 1
 		this.#overlay(subject.test)
 		for (const source of subject.files) this.#overlay(source)
@@ -125,7 +135,7 @@ export class TypeStage implements StageInterface {
 			}
 			return {
 				stage: this.stage,
-				elapsed: performance.now() - started,
+				elapsed: Math.round(performance.now() - started),
 				findings,
 			}
 		} finally {
