@@ -10,12 +10,12 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { TimeoutInterface } from '@orkestrel/timeout'
-import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { Emitter } from '@orkestrel/emitter'
 import { createTimeout } from '@orkestrel/timeout'
 import { computeReceipt } from '@src/core'
-import { resolveWorkspaceFile, resolveWorkspaceModule } from './helpers.js'
+import { readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
 import { LintStage } from './stages/LintStage.js'
 import { RuntimeStage } from './stages/RuntimeStage.js'
 import { TypeStage } from './stages/TypeStage.js'
@@ -25,9 +25,9 @@ import { TypeStage } from './stages/TypeStage.js'
  *
  * @remarks
  * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
- * control mutates an imported dependency and refuses service unless the runtime reports that
- * change. Each runtime inspection has a coordinator-owned deadline that abandons and replaces a
- * hung runtime stage.
+ * controls mutate imported dependencies and refuse service unless the type and runtime stages
+ * report their respective changes. Each runtime inspection has a coordinator-owned deadline that
+ * abandons and replaces a hung runtime stage.
  *
  * @example
  * ```ts
@@ -118,44 +118,77 @@ export class Probe implements ProbeInterface {
 	async #arm(): Promise<void> {
 		const id = randomUUID()
 		const directory = resolveWorkspaceFile(this.#workspace, 'tmp/probe')
-		const dependency = resolveWorkspaceFile(this.#workspace, `tmp/probe/arm-${id}.ts`)
+		const typeDependency = resolveWorkspaceFile(this.#workspace, `tmp/probe/arm-type-${id}.ts`)
+		const runtimeDependency = resolveWorkspaceFile(
+			this.#workspace,
+			`tmp/probe/arm-runtime-${id}.ts`,
+		)
 		const created = !existsSync(directory)
-		const path = `tmp/probe/arm-${id}.test.ts`
-		const test = {
-			path,
-			text: `import { SIGNAL } from './arm-${id}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated dependency', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
+		const typeTest = {
+			path: `tmp/probe/arm-type-${id}.test.ts`,
+			text: `import type { Signal } from './arm-type-${id}.js'\nimport { expect, test } from 'vitest'\nconst SIGNAL: Signal = 'before'\ntest('revalidates a mutated type', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
 		}
-		const claim: Claim = {
+		const runtimeTest = {
+			path: `tmp/probe/arm-runtime-${id}.test.ts`,
+			text: `import { SIGNAL } from './arm-runtime-${id}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated value', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
+		}
+		const typeClaim: Claim = {
 			project: 'tsconfig.json',
-			case: { files: [], test },
+			case: { files: [], test: typeTest },
 			control: {
 				files: [],
-				test,
+				test: typeTest,
+				stage: 'type',
+				reason: 'the imported type changed after the resident type host cached it',
+			},
+		}
+		const runtimeClaim: Claim = {
+			project: 'tsconfig.json',
+			case: { files: [], test: runtimeTest },
+			control: {
+				files: [],
+				test: runtimeTest,
 				stage: 'runtime',
 				reason: 'the imported dependency changed after the resident runtime cached it',
 			},
 		}
 		try {
 			mkdirSync(directory, { recursive: true })
-			writeFileSync(dependency, "export const SIGNAL = 'before'\n", {
+			writeFileSync(typeDependency, 'export type Signal = string\n', {
 				encoding: 'utf8',
 				flag: 'wx',
 			})
-			const before = await this.#inspect(claim.case, claim)
-			if (before.some((check) => check.findings.length > 0)) {
+			writeFileSync(runtimeDependency, "export const SIGNAL = 'before'\n", {
+				encoding: 'utf8',
+				flag: 'wx',
+			})
+			const beforeType = await this.#inspect(typeClaim.case, typeClaim)
+			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
+			if ([...beforeType, ...beforeRuntime].some((check) => check.findings.length > 0)) {
 				throw new Error('The probe boot control did not begin clean')
 			}
-			writeFileSync(dependency, "export const SIGNAL = 'after'\n", 'utf8')
-			const after = await this.#inspect(claim.control, claim)
-			const runtime = after.find((check) => check.stage === claim.control.stage)
+			writeFileSync(typeDependency, 'export type Signal = number\n', 'utf8')
+			const afterType = await this.#inspect(typeClaim.control, typeClaim)
+			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
+			const tolerant = afterType.find((check) => check.stage === 'runtime')
+			if (type === undefined || type.findings.length === 0) {
+				throw new Error('The probe boot type control did not detect a mutated dependency')
+			}
+			if (tolerant === undefined || tolerant.findings.length > 0) {
+				throw new Error('The probe boot type control did not remain runtime-clean')
+			}
+			writeFileSync(runtimeDependency, "export const SIGNAL = 'after'\n", 'utf8')
+			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
+			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
 			if (runtime === undefined || runtime.findings.length === 0) {
-				throw new Error('The probe boot control did not detect a mutated dependency')
+				throw new Error('The probe boot runtime control did not detect a mutated dependency')
 			}
 		} catch (error) {
 			this.#emitter.emit('error', error)
 			throw error
 		} finally {
-			rmSync(dependency, { force: true })
+			rmSync(typeDependency, { force: true })
+			rmSync(runtimeDependency, { force: true })
 			if (created) {
 				try {
 					rmdirSync(directory)
@@ -169,7 +202,7 @@ export class Probe implements ProbeInterface {
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
 		return Promise.all([
-			this.#type.inspect(subject),
+			this.#type.inspect(subject, claim.project),
 			this.#lint.inspect(subject),
 			this.#inspectRuntime(subject, claim),
 		])
@@ -235,16 +268,11 @@ export class Probe implements ProbeInterface {
 	}
 
 	#version(name: string): string {
-		const path = resolveWorkspaceModule(this.#workspace, `${name}/package.json`)
-		const manifest: unknown = JSON.parse(readFileSync(path, 'utf8'))
-		if (
-			typeof manifest !== 'object' ||
-			manifest === null ||
-			!('version' in manifest) ||
-			typeof manifest.version !== 'string'
-		) {
+		const manifest = readWorkspaceManifest(this.#workspace, name)
+		const version: unknown = Reflect.get(manifest.contents, 'version')
+		if (typeof version !== 'string') {
 			throw new Error(`${name} publishes no readable version`)
 		}
-		return manifest.version
+		return version
 	}
 }

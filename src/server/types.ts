@@ -22,10 +22,11 @@ export interface StageInterface {
 	 * Inspects one case.
 	 *
 	 * @param subject - The candidate sources and test to inspect
+	 * @param project - The TypeScript project for candidate sources; only the type stage reads it
 	 * @returns One outcome for this stage
 	 * @throws When the resident tool cannot start or has already been destroyed
 	 */
-	inspect(subject: Case): Promise<Check>
+	inspect(subject: Case, project?: string): Promise<Check>
 	/**
 	 * Tears down the resident tool and releases its resources.
 	 *
@@ -38,4 +39,47 @@ export interface StageInterface {
 	 * @returns A promise that settles after the resident tool releases its resources
 	 */
 	destroy(): Promise<void>
+}
+
+/**
+ * Carries one parsed package manifest and the path it came from.
+ *
+ * @example
+ * ```ts
+ * const manifest: WorkspaceManifest = {
+ * 	path: '/srv/checkout/node_modules/typescript/package.json',
+ * 	contents: { version: '6.0.3' },
+ * }
+ * ```
+ */
+export interface WorkspaceManifest {
+	/** Absolute path of the package manifest. */
+	readonly path: string
+	/** Parsed manifest object. */
+	readonly contents: object
+}
+
+/**
+ * Starts and stops the probe's Model Context Protocol stdio transport.
+ *
+ * @example
+ * ```ts
+ * const server = createProbeServer(probe)
+ * server.start()
+ * server.stop()
+ * ```
+ */
+export interface ProbeServerInterface {
+	/**
+	 * Starts reading newline-delimited JSON requests from standard input.
+	 *
+	 * @returns Nothing
+	 */
+	start(): void
+	/**
+	 * Stops the standard-input pump.
+	 *
+	 * @returns Nothing
+	 */
+	stop(): void
 }

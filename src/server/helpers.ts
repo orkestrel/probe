@@ -1,3 +1,4 @@
+import type { WorkspaceManifest } from './types.js'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
@@ -45,6 +46,29 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
 }
 
 /**
+ * Reads one installed package manifest from the target workspace.
+ *
+ * @param workspace - The target workspace root
+ * @param name - The installed package name
+ * @returns The manifest's absolute path and parsed object
+ * @throws When the package cannot be resolved, read, parsed, or does not publish an object manifest
+ *
+ * @example
+ * ```ts
+ * const manifest = readWorkspaceManifest(process.cwd(), 'typescript')
+ * console.log(Reflect.get(manifest.contents, 'version'))
+ * ```
+ */
+export function readWorkspaceManifest(workspace: string, name: string): WorkspaceManifest {
+	const path = resolveWorkspaceModule(workspace, `${name}/package.json`)
+	const contents: unknown = JSON.parse(readFileSync(path, 'utf8'))
+	if (typeof contents !== 'object' || contents === null || Array.isArray(contents)) {
+		throw new Error(`${name} does not publish a readable manifest`)
+	}
+	return { path, contents }
+}
+
+/**
  * Resolves a package's portable JavaScript binary from the target workspace.
  *
  * @param workspace - The target workspace root
@@ -53,13 +77,12 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
  * @throws When the package does not publish a binary under the requested name
  */
 export function resolveWorkspaceBinary(workspace: string, name: string): string {
-	const manifestPath = resolveWorkspaceModule(workspace, `${name}/package.json`)
-	const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
-	if (typeof manifest !== 'object' || manifest === null || !('bin' in manifest)) {
+	const manifest = readWorkspaceManifest(workspace, name)
+	const bin: unknown = Reflect.get(manifest.contents, 'bin')
+	if (bin === undefined) {
 		throw new Error(`${name} does not publish a bin field`)
 	}
-	const bin = manifest.bin
-	if (typeof bin === 'string') return resolve(manifestPath, '..', bin)
+	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
 	if (typeof bin !== 'object' || bin === null || !(name in bin)) {
 		throw new Error(`${name} does not publish the ${name} binary`)
 	}
@@ -67,7 +90,7 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 	if (typeof entry !== 'string') {
 		throw new Error(`${name} publishes an invalid ${name} binary`)
 	}
-	return resolve(manifestPath, '..', entry)
+	return resolve(manifest.path, '..', entry)
 }
 
 /**

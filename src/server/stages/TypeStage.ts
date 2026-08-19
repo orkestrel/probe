@@ -59,9 +59,9 @@ export class TypeStage implements StageInterface {
 		return 'type'
 	}
 
-	async inspect(subject: Case): Promise<Check> {
+	async inspect(subject: Case, project?: string): Promise<Check> {
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
-		const inspection = this.#tail.then(() => this.#inspect(subject))
+		const inspection = this.#tail.then(() => this.#inspect(subject, project))
 		this.#tail = inspection.then(
 			() => undefined,
 			() => undefined,
@@ -117,7 +117,7 @@ export class TypeStage implements StageInterface {
 		return projects
 	}
 
-	async #inspect(subject: Case): Promise<Check> {
+	async #inspect(subject: Case, project?: string): Promise<Check> {
 		const started = performance.now()
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
@@ -129,9 +129,9 @@ export class TypeStage implements StageInterface {
 			const root = this.#service(typescript, 'tsconfig.json')
 			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
 			for (const source of subject.files) {
-				const project = inferTypeProject(source.path)
-				const service = this.#service(typescript, project)
-				findings.push(...this.#findings(typescript, service, source, project))
+				const selected = project ?? inferTypeProject(source.path)
+				const service = this.#service(typescript, selected)
+				findings.push(...this.#findings(typescript, service, source, selected))
 			}
 			return {
 				stage: this.stage,

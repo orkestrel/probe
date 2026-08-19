@@ -38,8 +38,9 @@ export interface Source {
  *
  * @remarks
  * `files` and `test` belong to different TypeScript projects. Each file in `files` is checked
- * against the scoped project its environment names, and `test` is checked against the root
- * project, because a test needs the Vitest and Node globals the scoped projects remove.
+ * against the project its claim names, and `test` is checked against the root project, because a
+ * test needs the Vitest and Node globals the scoped projects remove. A direct type-stage call that
+ * supplies no project infers one from each candidate path.
  *
  * @example
  * ```ts
@@ -85,9 +86,9 @@ export interface Control extends Case {
  * Carries everything the service needs to produce one verdict.
  *
  * @remarks
- * `project` names the TypeScript project the candidate sources are checked against, because the
- * root project admits host globals the scoped projects remove and would report green where the
- * gate reports red.
+ * `project` names the TypeScript project the candidate sources in both cases are checked against,
+ * because the root project admits host globals the scoped projects remove and would report green
+ * where the gate reports red. The test files remain on the root project for Vitest and Node globals.
  *
  * @example
  * ```ts
