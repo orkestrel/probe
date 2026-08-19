@@ -1,16 +1,12 @@
 import type { Case, Check, Finding, Source, Stage } from '@src/core'
 import type { StageInterface } from '../types.js'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { basename, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
 	inferDocumentLanguage,
-	inferTestProject,
 	messageFromUnknown,
 	parseContentLength,
-	relativeWorkspaceFile,
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
 } from '../helpers.js'
@@ -22,6 +18,14 @@ import {
  * Construction starts the target workspace's Oxlint binary with its Language Server Protocol
  * mode. Each inspection opens the supplied text by URI, waits for published diagnostics, and
  * closes the document without writing it to disk.
+ *
+ * The URI is the path the candidate declared, so the candidate receives exactly the rule set the
+ * workspace's own lint gate applies to that path, including an override anchored to one directory,
+ * one file name, or one exact file. A path the workspace's version-control ignore files exclude is
+ * a path that gate never lints, and this stage reports the same nothing for it. Reuse of one
+ * declared path across inspections is what the caller's own serialization protects: the stage
+ * refuses a second inspection of a path it already has open rather than answering either one with
+ * the other's diagnostics.
  *
  * @example
  * ```ts
@@ -144,9 +148,16 @@ export class LintStage implements StageInterface {
 		return child
 	}
 
+	// Opens one candidate at the path it was declared. Oxlint keys its overrides on globs, so any
+	// identity distinct from that path selects a different rule set from the one the workspace's own
+	// gate applies, and an override naming one exact file is reachable by nothing else. One URI
+	// carries one open document and one publication, so a caller driving two inspections of one path
+	// at once is refused rather than served an answer belonging to the other.
 	#document(source: Source): Promise<readonly Finding[]> {
-		const path = this.#file(source)
-		const uri = pathToFileURL(path).href
+		const uri = pathToFileURL(resolveWorkspaceFile(this.#workspace, source.path)).href
+		if (this.#publishes.has(uri)) {
+			return Promise.reject(new Error(`The lint stage is already inspecting ${source.path}`))
+		}
 		const diagnostics = new Promise<readonly Finding[]>((resolve, reject) => {
 			this.#documents.set(uri, source.path.replaceAll('\\', '/'))
 			this.#publishes.set(uri, resolve)
@@ -201,25 +212,6 @@ export class LintStage implements StageInterface {
 		this.#refusals.delete(uri)
 		if (this.#destroyed || !this.#reachable) return
 		this.#notify('textDocument/didClose', { textDocument: { uri } })
-	}
-
-	#file(source: Source): string {
-		const declared = relativeWorkspaceFile(
-			this.#workspace,
-			resolveWorkspaceFile(this.#workspace, source.path),
-		)
-		// Lint the candidate where it was declared, under its own name. Oxlint keys its overrides on
-		// globs, so a synthesized path that moved the candidate out of its declared directory, or
-		// that dropped its declared file name, selects a different rule set from the one the
-		// workspace's own gate applies, and the stage reports a finding that gate exempts. The
-		// exception is a candidate the probe stages in its own scratch directory, which the
-		// workspace's ignore files keep out of linting entirely: that one is a test, so lint it
-		// where the workspace's test rules reach it.
-		const directory = inferTestProject(declared) === 'probe' ? 'tests' : dirname(declared)
-		return resolveWorkspaceFile(
-			this.#workspace,
-			`${directory}/probe-${randomUUID()}.${basename(declared)}`,
-		)
 	}
 
 	#request(method: string, params: unknown): Promise<unknown> {

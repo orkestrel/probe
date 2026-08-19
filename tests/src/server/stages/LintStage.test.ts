@@ -2,8 +2,6 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
-import { Session } from 'node:inspector/promises'
-import { isRecord } from '@orkestrel/contract'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
@@ -13,13 +11,12 @@ const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately. Three marker files select how it ends: `frail` exits
-// with a code on the first document, `unanswered-shutdown` exits without replying to `shutdown`,
-// and `unanswered-initialize` exits without replying to `initialize`. Two markers in a document's
-// own text select how it answers that document: `PROBE_SILENT` publishes nothing, and
-// `PROBE_CLOSES_INPUT` closes the server's own standard input when that document is closed. The
-// text carries those markers rather than the document URI, so no test's routing depends on the
-// path the stage synthesizes.
+// the real child the stage owns privately and can read whether that child is still alive. Three
+// marker files select how it ends: `frail` exits with a code on the first document,
+// `unanswered-shutdown` exits without replying to `shutdown`, and `unanswered-initialize` exits
+// without replying to `initialize`. Two markers in a document's own text select how it answers that
+// document: `PROBE_SILENT` publishes nothing, and `PROBE_CLOSES_INPUT` closes the server's own
+// standard input when that document is closed.
 const SERVER = [
 	"import { closeSync, existsSync, writeFileSync } from 'node:fs'",
 	'let buffer = Buffer.alloc(0)',
@@ -80,19 +77,6 @@ const FIXTURE = {
 
 const PASSING = "import { test } from 'vitest'\ntest('passes', () => {})\n"
 
-// The global the inspector session reads a stage back through. `Runtime.evaluate` runs in the
-// worker's own context, so the census reaches a local only by way of a global it removes again.
-const CENSUS = 'probeLintStageCensus'
-
-// The five maps the stage registers work in. A settled teardown leaves every one of them empty.
-const RELEASED = {
-	'#responses': 0,
-	'#failures': 0,
-	'#documents': 0,
-	'#publishes': 0,
-	'#refusals': 0,
-}
-
 // A resident host that drives the real stage outside Vitest, so an unhandled rejection ends a
 // process whose exit code a test can read. Node stops at the `.js` specifiers the source compiles
 // against, so the host registers the one resolution rule that maps them onto the TypeScript files
@@ -113,35 +97,64 @@ const HOST = [
 	'const { LintStage } = await import(pathToFileURL(stage).href)',
 	"const text = \"import { test } from 'vitest'\\ntest('passes', () => {})\\n\"",
 	'const dead = new LintStage(workspace)',
-	"await dead.inspect({ files: [], test: { path: 'tmp/probe/host-warm.test.ts', text } })",
+	"await dead.inspect({ files: [], test: { path: 'tests/src/server/host-warm.test.ts', text } })",
 	"const announced = readFileSync(workspace + '/server.pid', 'utf8')",
 	"process.kill(Number.parseInt(announced, 10), 'SIGKILL')",
 	'await new Promise((settle) => setTimeout(settle, 250))',
 	'const refused = await dead',
-	"\t.inspect({ files: [], test: { path: 'tmp/probe/host-dead.test.ts', text } })",
+	"\t.inspect({ files: [], test: { path: 'tests/src/server/host-dead.test.ts', text } })",
 	'\t.then(() => undefined, (error) => error.message)',
 	"if (refused === undefined) throw new Error('the inspection resolved against a dead server')",
 	'await dead.destroy()',
 	'const live = new LintStage(workspace)',
-	"const check = await live.inspect({ files: [], test: { path: 'tmp/probe/host-live.test.ts', text } })",
+	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } })",
 	'await live.destroy()',
 	'await new Promise((settle) => setTimeout(settle, 300))',
 	"console.log('refused ' + refused)",
 	"console.log('settled ' + check.stage + ' ' + check.findings.length)",
 ].join('\n')
 
-// Kills the language server the stage spawned, by the process id the fixture announced. The stage
-// owns its child privately, so this is the door a real failure comes through rather than an
-// accessor added to serve a test.
-function killFixtureServer(scratch: ScratchInterface): void {
+// Reads the process id the fixture server announced. The stage owns its child privately, so this
+// is the door a real failure comes through rather than an accessor added to serve a test.
+function readFixtureServer(scratch: ScratchInterface): number {
 	const announced = scratch.read('server.pid')
 	if (announced === undefined) throw new Error('The fixture server never announced its process id')
-	process.kill(Number.parseInt(announced, 10), 'SIGKILL')
+	return Number.parseInt(announced, 10)
+}
+
+// Kills the language server the stage spawned, by the process id the fixture announced.
+function killFixtureServer(scratch: ScratchInterface): void {
+	process.kill(readFixtureServer(scratch), 'SIGKILL')
+}
+
+// Whether one process still exists. Signal 0 delivers nothing and reports only reachability, which
+// is how a caller reads the liveness of a child it does not own.
+function isProcessLive(id: number): boolean {
+	try {
+		process.kill(id, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+// Everything a settled teardown owes a consumer, read through the public surface alone: teardown
+// resolves again without doing more work, and every later inspection is refused rather than left
+// waiting on a server that is gone.
+async function expectReleased(stage: LintStage): Promise<void> {
+	await expect(stage.destroy()).resolves.toBeUndefined()
+	await expect(
+		stage.inspect({
+			files: [],
+			test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+		}),
+	).rejects.toThrow('The lint stage has been destroyed')
 }
 
 // Allocates a workspace that runs the target's own Oxlint binary against a configuration this file
-// owns, so the override under test is one the workspace's gate really applies. `configs/**` anchors
-// the exemption to a directory, which is the selection a synthesized path has to preserve.
+// owns, so every override under test is one the workspace's gate really applies. The three
+// overrides are the three selection shapes a candidate's declared path has to preserve: a whole
+// directory, a file name inside a directory, and one exact path.
 function createLintWorkspace(): ScratchInterface {
 	return createScratch({
 		files: {
@@ -153,73 +166,116 @@ function createLintWorkspace(): ScratchInterface {
 			})}\n`,
 			'.oxlintrc.json': `${JSON.stringify({
 				rules: { 'no-debugger': 'error' },
-				overrides: [{ files: ['configs/**'], rules: { 'no-debugger': 'off' } }],
+				overrides: [
+					{ files: ['configs/**'], rules: { 'no-debugger': 'off' } },
+					{ files: ['guides/candidate*.ts'], rules: { 'no-debugger': 'off' } },
+					{ files: ['lib/exempt.ts'], rules: { 'no-debugger': 'off' } },
+				],
 			})}\n`,
 		},
 	})
 }
 
-// Reads the `Map(n)` sizes out of the private properties V8 reported. `@types/node` declares no
-// `privateProperties` field, so every value here is narrowed from `unknown` rather than trusted.
-function readMapSizes(properties: object): Readonly<Record<string, number>> {
-	const census: Record<string, number> = {}
-	if (!('privateProperties' in properties) || !Array.isArray(properties.privateProperties)) {
-		return census
-	}
-	const held: readonly unknown[] = properties.privateProperties
-	for (const property of held) {
-		if (!isRecord(property) || typeof property.name !== 'string') continue
-		if (!isRecord(property.value) || typeof property.value.description !== 'string') continue
-		const size = /^Map\((\d+)\)$/.exec(property.value.description)?.[1]
-		if (size !== undefined) census[property.name] = Number.parseInt(size, 10)
-	}
-	return census
-}
-
-// Counts the entries each private map of a stage still holds. The maps are unreachable from
-// outside the class, so this asks V8 for them the way a debugger does. It reads the real object
-// and replaces nothing on it.
-async function censusStage(subject: LintStage): Promise<Readonly<Record<string, number>>> {
-	const session = new Session()
-	session.connect()
-	Object.assign(globalThis, { [CENSUS]: subject })
-	try {
-		const evaluated = await session.post('Runtime.evaluate', {
-			expression: `globalThis.${CENSUS}`,
-		})
-		const objectId = evaluated.result.objectId
-		if (objectId === undefined) throw new Error('The inspector session could not reach the stage')
-		const properties = await session.post('Runtime.getProperties', {
-			objectId,
-			ownProperties: true,
-		})
-		return readMapSizes(properties)
-	} finally {
-		session.disconnect()
-		Reflect.deleteProperty(globalThis, CENSUS)
-	}
-}
-
 describe('lint stage', () => {
+	it('reports a workspace lint finding at the declared path', { timeout: 60_000 }, async () => {
+		const stage = new LintStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: { path: 'tests/src/server/lint-candidate.test.ts', text: 'debugger\n' },
+			})
+			expect(check.findings.length).toBeGreaterThan(0)
+			expect(check.findings).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						origin: 'code',
+						path: 'tests/src/server/lint-candidate.test.ts',
+						message: expect.stringContaining('debugger'),
+					}),
+				]),
+			)
+			// Oxlint publishes diagnostics about the supplied text and nothing else, so every
+			// finding this stage returns carries the origin that can disprove a claim.
+			expect(check.findings.every((finding) => finding.origin === 'code')).toBe(true)
+		} finally {
+			await stage.destroy()
+		}
+	})
+
 	it(
-		'reports a workspace lint finding for a gitignored test path',
+		'serves sequential inspections of one declared path from one resident server',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new LintStage(ROOT)
+			const path = 'tests/src/server/lint-sequence.ts'
+			try {
+				// Nothing distinguishes these three documents but their text and the order they arrive
+				// in, so a server that answered from a cached document rather than the supplied one
+				// would repeat the first answer for all three.
+				const first = await stage.inspect({ files: [], test: { path, text: 'debugger\n' } })
+				const second = await stage.inspect({
+					files: [],
+					test: { path, text: 'export const VALUE = 1\n' },
+				})
+				const third = await stage.inspect({
+					files: [],
+					test: { path, text: 'debugger\ndebugger\n' },
+				})
+				expect(first.findings.length).toBe(1)
+				expect(second.findings).toStrictEqual([])
+				expect(third.findings.length).toBe(2)
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
+
+	it('refuses a second inspection of a path already open', { timeout: 20_000 }, async () => {
+		const scratch = createScratch({ files: FIXTURE })
+		const stage = new LintStage(scratch.path)
+		const source = {
+			path: 'tests/src/server/lint-collision.test.ts',
+			text: `${PASSING}// PROBE_SILENT\n`,
+		}
+		// The first document never receives its diagnostics, so it is still open when the second
+		// arrives. Both name one path, and one URI carries one publication: without a refusal the
+		// second registration replaces the first and the first inspection waits for the life of
+		// the stage.
+		const held = stage.inspect({ files: [], test: source })
+		void held.catch(() => {})
+		try {
+			await waitForDelay(250)
+			await expect(stage.inspect({ files: [], test: source })).rejects.toThrow(
+				'The lint stage is already inspecting tests/src/server/lint-collision.test.ts',
+			)
+			await stage.destroy()
+			await expect(held).rejects.toThrow('The lint stage has been destroyed')
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it(
+		'reports nothing for a path the target workspace excludes from linting',
 		{ timeout: 60_000 },
 		async () => {
 			const stage = new LintStage(ROOT)
 			try {
-				const check = await stage.inspect({
+				// `.gitignore` holds `tmp`, and Oxlint honours version-control ignore files, so this
+				// workspace's own gate never lints this path. The stage reports what that gate reports.
+				const excluded = await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-stage.test.ts', text: 'debugger\n' },
+					test: { path: 'tmp/probe/lint-excluded.test.ts', text: 'debugger\n' },
 				})
-				expect(check.findings.length).toBeGreaterThan(0)
-				expect(check.findings).toEqual(
-					expect.arrayContaining([
-						expect.objectContaining({ origin: 'code', path: 'tmp/probe/lint-stage.test.ts' }),
-					]),
-				)
-				// Oxlint publishes diagnostics about the supplied text and nothing else, so every
-				// finding this stage returns carries the origin that can disprove a claim.
-				expect(check.findings.every((finding) => finding.origin === 'code')).toBe(true)
+				expect(excluded.findings).toStrictEqual([])
+				// The control is the same text under a path the gate does lint. Without it a stage that
+				// reported nothing at all would pass the assertion above.
+				const reported = await stage.inspect({
+					files: [],
+					test: { path: 'tests/src/server/lint-excluded.test.ts', text: 'debugger\n' },
+				})
+				expect(reported.findings.length).toBe(1)
 			} finally {
 				await stage.destroy()
 			}
@@ -237,20 +293,20 @@ describe('lint stage', () => {
 				// reported this candidate would refuse code the workspace's own gate accepts.
 				const exempt = await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-override.config.ts', text },
+					test: { path: 'tests/src/server/lint-override.config.ts', text },
 				})
 				expect(exempt.findings).toStrictEqual([])
 				// The control is the same text under a path the exemption does not reach. Without it a
 				// stage that reported nothing at all would pass the assertion above.
 				const reported = await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-override.ts', text },
+					test: { path: 'tests/src/server/lint-override.ts', text },
 				})
 				expect(reported.findings).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({
 							origin: 'code',
-							path: 'tmp/probe/lint-override.ts',
+							path: 'tests/src/server/lint-override.ts',
 							message: expect.stringContaining('named export'),
 						}),
 					]),
@@ -296,17 +352,137 @@ describe('lint stage', () => {
 		},
 	)
 
+	it(
+		'applies an override the workspace anchors to a file name inside a directory',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createLintWorkspace()
+			const stage = new LintStage(scratch.path)
+			try {
+				// `guides/candidate*.ts` reaches one directory and one name stem, so a stage that kept
+				// the directory and dropped the name selects the workspace's default rules instead.
+				const exempt = await stage.inspect({
+					files: [],
+					test: { path: 'guides/candidate.ts', text: 'debugger\n' },
+				})
+				expect(exempt.findings).toStrictEqual([])
+				// The control is a different name in the same directory, so the directory cannot be
+				// what separates these two answers.
+				const reported = await stage.inspect({
+					files: [],
+					test: { path: 'guides/other.ts', text: 'debugger\n' },
+				})
+				expect(reported.findings).toEqual([
+					expect.objectContaining({
+						origin: 'code',
+						path: 'guides/other.ts',
+						message: expect.stringContaining('debugger'),
+					}),
+				])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'applies an override the workspace anchors to one exact path',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createLintWorkspace()
+			const stage = new LintStage(scratch.path)
+			try {
+				// `lib/exempt.ts` names one file and nothing else, so only the declared path itself
+				// selects this override. No identity distinct from that path can reach it.
+				const exempt = await stage.inspect({
+					files: [],
+					test: { path: 'lib/exempt.ts', text: 'debugger\n' },
+				})
+				expect(exempt.findings).toStrictEqual([])
+				// The control is the same text in the same directory under a path the override does not
+				// name, so the directory cannot be what separates these two answers.
+				const reported = await stage.inspect({
+					files: [],
+					test: { path: 'lib/reported.ts', text: 'debugger\n' },
+				})
+				expect(reported.findings).toEqual([
+					expect.objectContaining({
+						origin: 'code',
+						path: 'lib/reported.ts',
+						message: expect.stringContaining('debugger'),
+					}),
+				])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'reports a finding for a boot control candidate the target workspace lints',
+		{ timeout: 60_000 },
+		async () => {
+			// The boot control stages its candidates under `tmp/probe`, and a target workspace that
+			// lints that directory selects its rules from there. This workspace turns `no-debugger` on
+			// for that directory alone, so a stage that reported the candidate under any other path
+			// answers with the workspace's default rules and finds nothing.
+			const scratch = createScratch({
+				files: {
+					'package.json': '{"type":"module"}\n',
+					'node_modules/oxlint/package.json': `${JSON.stringify({
+						name: 'oxlint',
+						version: '1.79.0',
+						bin: { oxlint: resolveWorkspaceBinary(ROOT, 'oxlint') },
+					})}\n`,
+					'.oxlintrc.json': `${JSON.stringify({
+						rules: { 'no-debugger': 'off' },
+						overrides: [{ files: ['tmp/probe/**'], rules: { 'no-debugger': 'error' } }],
+					})}\n`,
+				},
+			})
+			const stage = new LintStage(scratch.path)
+			const path = 'tmp/probe/arm-runtime-89ab.test.ts'
+			const violation = `debugger\n${PASSING}`
+			try {
+				const violating = await stage.inspect({ files: [], test: { path, text: violation } })
+				expect(violating.findings).toEqual([
+					expect.objectContaining({
+						origin: 'code',
+						path,
+						message: expect.stringContaining('debugger'),
+					}),
+				])
+				// The first control is the boot control's own clean text at the same path. Without it a
+				// stage that reported a finding for everything would pass the assertion above.
+				const clean = await stage.inspect({ files: [], test: { path, text: PASSING } })
+				expect(clean.findings).toStrictEqual([])
+				// The second control is the same violation under the same file name outside that
+				// directory, where the workspace leaves the rule off. It is what makes the finding
+				// above evidence that the declared directory selected the rule set.
+				const elsewhere = await stage.inspect({
+					files: [],
+					test: { path: 'lib/arm-runtime-89ab.test.ts', text: violation },
+				})
+				expect(elsewhere.findings).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('abandons an inspection and destroys idempotently', { timeout: 60_000 }, async () => {
 		const stage = new LintStage(ROOT)
 		const inspection = stage.inspect({
 			files: [],
-			test: { path: 'tmp/probe/lint-destroy.test.ts', text: 'debugger\n' },
+			test: { path: 'tests/src/server/lint-destroy.test.ts', text: 'debugger\n' },
 		})
 		void inspection.catch(() => {})
 		await Promise.all([stage.destroy(), stage.destroy()])
 		await expect(inspection).rejects.toThrow('The lint stage has been destroyed')
-		await expect(stage.destroy()).resolves.toBeUndefined()
-		expect(await censusStage(stage)).toStrictEqual(RELEASED)
+		await expectReleased(stage)
 	})
 
 	it(
@@ -317,13 +493,13 @@ describe('lint stage', () => {
 			const stage = new LintStage(scratch.path)
 			const held = stage.inspect({
 				files: [{ path: 'src/core/held.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' }],
-				test: { path: 'tmp/probe/held.test.ts', text: PASSING },
+				test: { path: 'tests/src/server/held.test.ts', text: PASSING },
 			})
 			void held.catch(() => {})
 			try {
 				const served = await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/served.test.ts', text: PASSING },
+					test: { path: 'tests/src/server/served.test.ts', text: PASSING },
 				})
 				expect(served.stage).toBe('lint')
 				expect(served.findings).toStrictEqual([])
@@ -340,25 +516,30 @@ describe('lint stage', () => {
 			const signalled = new LintStage(scratch.path)
 			await signalled.inspect({
 				files: [],
-				test: { path: 'tmp/probe/lint-signal-teardown.test.ts', text: PASSING },
+				test: { path: 'tests/src/server/lint-signal-teardown.test.ts', text: PASSING },
 			})
+			const owned = readFixtureServer(scratch)
 			killFixtureServer(scratch)
 			await waitForDelay(250)
 			const killed = performance.now()
 			await expect(signalled.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - killed).toBeLessThan(5_000)
-			expect(await censusStage(signalled)).toStrictEqual(RELEASED)
+			await expectReleased(signalled)
+			expect(isProcessLive(owned)).toBe(false)
 
 			// The control is the death the guard already handled. A teardown that settles only for a
 			// signalled server would report the same pass as one that settles for neither.
 			const closed = new LintStage(scratch.path)
 			await closed.inspect({
 				files: [],
-				test: { path: 'tmp/probe/lint-clean-teardown.test.ts', text: PASSING },
+				test: { path: 'tests/src/server/lint-clean-teardown.test.ts', text: PASSING },
 			})
+			const answering = readFixtureServer(scratch)
 			const exited = performance.now()
 			await expect(closed.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - exited).toBeLessThan(5_000)
+			await expectReleased(closed)
+			expect(isProcessLive(answering)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}
@@ -373,12 +554,14 @@ describe('lint stage', () => {
 				const unanswered = new LintStage(scratch.path)
 				await unanswered.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-unanswered-shutdown.test.ts', text: PASSING },
+					test: { path: 'tests/src/server/lint-unanswered-shutdown.test.ts', text: PASSING },
 				})
+				const owned = readFixtureServer(scratch)
 				const asked = performance.now()
 				await expect(unanswered.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				expect(await censusStage(unanswered)).toStrictEqual(RELEASED)
+				await expectReleased(unanswered)
+				expect(isProcessLive(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
 			}
@@ -390,12 +573,14 @@ describe('lint stage', () => {
 				const stage = new LintStage(answering.path)
 				await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-answered-shutdown.test.ts', text: PASSING },
+					test: { path: 'tests/src/server/lint-answered-shutdown.test.ts', text: PASSING },
 				})
+				const owned = readFixtureServer(answering)
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				expect(await censusStage(stage)).toStrictEqual(RELEASED)
+				await expectReleased(stage)
+				expect(isProcessLive(owned)).toBe(false)
 			} finally {
 				answering.destroy()
 			}
@@ -410,7 +595,7 @@ describe('lint stage', () => {
 			const stage = new LintStage(scratch.path)
 			const inspection = stage.inspect({
 				files: [],
-				test: { path: 'tmp/probe/lint-unanswered-initialize.test.ts', text: PASSING },
+				test: { path: 'tests/src/server/lint-unanswered-initialize.test.ts', text: PASSING },
 			})
 			void inspection.catch(() => {})
 			try {
@@ -421,7 +606,7 @@ describe('lint stage', () => {
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
 				await expect(inspection).rejects.toThrow('The Oxlint language server exited with code 0')
-				expect(await censusStage(stage)).toStrictEqual(RELEASED)
+				await expectReleased(stage)
 			} finally {
 				scratch.destroy()
 			}
@@ -439,7 +624,7 @@ describe('lint stage', () => {
 			await expect(
 				stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-unspawnable.test.ts', text: PASSING },
+					test: { path: 'tests/src/server/lint-unspawnable.test.ts', text: PASSING },
 				}),
 			).rejects.toThrow('ENOENT')
 			// The wait is load-bearing. `close` is what teardown would otherwise still be waiting
@@ -448,7 +633,7 @@ describe('lint stage', () => {
 			const asked = performance.now()
 			await expect(stage.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - asked).toBeLessThan(5_000)
-			expect(await censusStage(stage)).toStrictEqual(RELEASED)
+			await expectReleased(stage)
 		} finally {
 			scratch.destroy()
 		}
@@ -463,14 +648,14 @@ describe('lint stage', () => {
 			try {
 				await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/lint-before-signal.test.ts', text: PASSING },
+					test: { path: 'tests/src/server/lint-before-signal.test.ts', text: PASSING },
 				})
 				killFixtureServer(scratch)
 				await waitForDelay(250)
 				await expect(
 					stage.inspect({
 						files: [],
-						test: { path: 'tmp/probe/lint-after-signal.test.ts', text: PASSING },
+						test: { path: 'tests/src/server/lint-after-signal.test.ts', text: PASSING },
 					}),
 				).rejects.toThrow('signal SIGKILL')
 			} finally {
@@ -490,12 +675,18 @@ describe('lint stage', () => {
 				await expect(
 					stage.inspect({
 						files: [],
-						test: { path: 'tmp/probe/lint-frail.test.ts', text: PASSING },
+						test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
 					}),
 				).rejects.toThrow('The Oxlint language server exited with code 7')
-				// The ending is what releases the document the dead server can no longer answer, so
-				// nothing is left registered against it.
-				expect(await censusStage(stage)).toStrictEqual(RELEASED)
+				// The ending is what releases the document the dead server can no longer answer, so a
+				// later inspection of that same path is admitted and refused on its own terms rather
+				// than colliding with one still registered.
+				await expect(
+					stage.inspect({
+						files: [],
+						test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
+					}),
+				).rejects.toThrow('The Oxlint language server exited with code 7')
 			} finally {
 				await stage.destroy()
 				scratch.destroy()
@@ -504,15 +695,15 @@ describe('lint stage', () => {
 	)
 
 	it(
-		'rejects an inspection whose candidate text ends the real language server',
+		'reports the real language server ending when a candidate text ends it',
 		{ timeout: 60_000 },
 		async () => {
 			const stage = new LintStage(ROOT)
 			try {
 				// A lone surrogate survives the stage's own framing as the escaped sequence
 				// `JSON.stringify` writes, and oxlint 1.79.0 answers it by exiting 0. It is the only
-				// candidate in this file that drives a real language server into a code exit, which is
-				// the ending a stage under teardown has to settle rather than swallow.
+				// candidate in this file that drives a real language server into a code exit, so it is
+				// what establishes that a candidate's own text can reach that ending at all.
 				await expect(
 					stage.inspect({
 						files: [],
@@ -525,7 +716,7 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				expect(await censusStage(stage)).toStrictEqual(RELEASED)
+				await expectReleased(stage)
 			} finally {
 				await stage.destroy()
 			}
@@ -544,7 +735,7 @@ describe('lint stage', () => {
 				await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/lint-closes-input.test.ts',
+						path: 'tests/src/server/lint-closes-input.test.ts',
 						text: `${PASSING}// PROBE_CLOSES_INPUT\n`,
 					},
 				})
@@ -552,7 +743,7 @@ describe('lint stage', () => {
 				await expect(
 					stage.inspect({
 						files: [],
-						test: { path: 'tmp/probe/lint-refused.test.ts', text: PASSING },
+						test: { path: 'tests/src/server/lint-refused.test.ts', text: PASSING },
 					}),
 				).rejects.toThrow('EPIPE')
 				await expect(stage.destroy()).resolves.toBeUndefined()
