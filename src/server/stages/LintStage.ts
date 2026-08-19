@@ -1,0 +1,293 @@
+import type { Case, Check, Finding, Source, Stage } from '@src/core'
+import type { StageInterface } from '../types.js'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { extname } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import {
+	inferDocumentLanguage,
+	messageFromUnknown,
+	parseContentLength,
+	relativeWorkspaceFile,
+	resolveWorkspaceBinary,
+	resolveWorkspaceFile,
+} from '../helpers.js'
+
+/**
+ * Inspects virtual documents through one resident Oxlint language server.
+ *
+ * @remarks
+ * Construction starts the target workspace's Oxlint binary with its Language Server Protocol
+ * mode. Each inspection opens the supplied text by URI, waits for published diagnostics, and
+ * closes the document without writing it to disk.
+ *
+ * @example
+ * ```ts
+ * const stage = new LintStage('/srv/checkout')
+ * const check = await stage.inspect(subject)
+ * await stage.destroy()
+ * ```
+ */
+export class LintStage implements StageInterface {
+	readonly #workspace: string
+	readonly #warmth: Promise<ChildProcessWithoutNullStreams>
+	readonly #responses = new Map<number, (value: unknown) => void>()
+	readonly #failures = new Map<number, (error: Error) => void>()
+	readonly #documents = new Map<string, string>()
+	readonly #publishes = new Map<string, (findings: readonly Finding[]) => void>()
+	readonly #refusals = new Map<string, (error: Error) => void>()
+	#child: ChildProcessWithoutNullStreams | undefined
+	#buffer = Buffer.alloc(0)
+	#sequence = 0
+	#tail: Promise<void> = Promise.resolve()
+	#closing: Promise<void> | undefined
+	#destroyed = false
+
+	/**
+	 * Starts warming the target workspace's Oxlint language server.
+	 *
+	 * @param workspace - The target workspace root. Default: the current working directory
+	 */
+	constructor(workspace: string = process.cwd()) {
+		this.#workspace = workspace
+		this.#warmth = this.#warm()
+	}
+
+	get stage(): Stage {
+		return 'lint'
+	}
+
+	async inspect(subject: Case): Promise<Check> {
+		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
+		const inspection = this.#tail.then(() => this.#inspect(subject))
+		this.#tail = inspection.then(
+			() => undefined,
+			() => undefined,
+		)
+		return inspection
+	}
+
+	destroy(): Promise<void> {
+		if (this.#closing !== undefined) return this.#closing
+		this.#destroyed = true
+		this.#closing = this.#tail.then(async () => {
+			const child = await this.#warmth
+			if (child.exitCode !== null) return
+			await this.#request('shutdown', undefined)
+			const ending = new Promise<void>((resolve, reject) => {
+				child.once('exit', () => resolve())
+				child.once('error', (error) => reject(error))
+			})
+			this.#notify('exit', undefined)
+			await ending
+		})
+		return this.#closing
+	}
+
+	async #warm(): Promise<ChildProcessWithoutNullStreams> {
+		const binary = resolveWorkspaceBinary(this.#workspace, 'oxlint')
+		const child = spawn(process.execPath, [binary, '--lsp'], {
+			cwd: this.#workspace,
+			stdio: 'pipe',
+		})
+		this.#child = child
+		child.stderr.resume()
+		child.stdout.on('data', (chunk: Buffer) => this.#read(chunk))
+		child.on('error', (error) => this.#fail(error))
+		child.on('exit', (code, signal) => this.#exit(code, signal))
+		await this.#request('initialize', {
+			processId: process.pid,
+			rootUri: pathToFileURL(this.#workspace).href,
+			capabilities: {},
+			workspaceFolders: [
+				{
+					uri: pathToFileURL(this.#workspace).href,
+					name: 'workspace',
+				},
+			],
+		})
+		this.#notify('initialized', {})
+		return child
+	}
+
+	async #inspect(subject: Case): Promise<Check> {
+		const started = performance.now()
+		await this.#warmth
+		const findings: Finding[] = []
+		for (const source of [...subject.files, subject.test]) {
+			findings.push(...(await this.#document(source)))
+		}
+		return {
+			stage: this.stage,
+			elapsed: performance.now() - started,
+			findings,
+		}
+	}
+
+	#document(source: Source): Promise<readonly Finding[]> {
+		const path = this.#file(source)
+		const uri = pathToFileURL(path).href
+		const diagnostics = new Promise<readonly Finding[]>((resolve, reject) => {
+			this.#documents.set(uri, source.path.replaceAll('\\', '/'))
+			this.#publishes.set(uri, resolve)
+			this.#refusals.set(uri, reject)
+		})
+		this.#notify('textDocument/didOpen', {
+			textDocument: {
+				uri,
+				languageId: inferDocumentLanguage(source.path),
+				version: this.#sequence,
+				text: source.text,
+			},
+		})
+		return diagnostics.finally(() => {
+			this.#notify('textDocument/didClose', { textDocument: { uri } })
+			this.#documents.delete(uri)
+			this.#publishes.delete(uri)
+			this.#refusals.delete(uri)
+		})
+	}
+
+	#file(source: Source): string {
+		const declared = relativeWorkspaceFile(
+			this.#workspace,
+			resolveWorkspaceFile(this.#workspace, source.path),
+		)
+		const [axis, environment] = declared.split('/')
+		const directory =
+			(axis === 'src' || axis === 'app') && environment !== undefined && environment !== ''
+				? `${axis}/${environment}`
+				: 'tests'
+		return resolveWorkspaceFile(
+			this.#workspace,
+			`${directory}/probe-${randomUUID()}${extname(declared)}`,
+		)
+	}
+
+	#request(method: string, params: unknown): Promise<unknown> {
+		this.#sequence += 1
+		const id = this.#sequence
+		const response = new Promise<unknown>((resolve, reject) => {
+			this.#responses.set(id, resolve)
+			this.#failures.set(id, reject)
+		})
+		this.#send({ jsonrpc: '2.0', id, method, params })
+		return response
+	}
+
+	#notify(method: string, params: unknown): void {
+		this.#sequence += 1
+		this.#send({ jsonrpc: '2.0', method, params })
+	}
+
+	#send(message: unknown): void {
+		const child = this.#child
+		if (child === undefined || child.exitCode !== null) {
+			throw new Error('The Oxlint language server is not running')
+		}
+		const content = JSON.stringify(message)
+		const header = `Content-Length: ${Buffer.byteLength(content)}\r\n\r\n`
+		child.stdin.write(header + content)
+	}
+
+	#read(chunk: Buffer): void {
+		this.#buffer = Buffer.concat([this.#buffer, chunk])
+		while (this.#frame()) {}
+	}
+
+	#frame(): boolean {
+		const boundary = this.#buffer.indexOf('\r\n\r\n')
+		if (boundary < 0) return false
+		const header = this.#buffer.subarray(0, boundary).toString('ascii')
+		const length = parseContentLength(header)
+		if (length === undefined) {
+			this.#fail(new Error('Oxlint sent an invalid JSON-RPC frame header'))
+			return false
+		}
+		const start = boundary + 4
+		const end = start + length
+		if (this.#buffer.length < end) return false
+		const content = this.#buffer.subarray(start, end).toString('utf8')
+		this.#buffer = this.#buffer.subarray(end)
+		try {
+			const message: unknown = JSON.parse(content)
+			this.#receive(message)
+		} catch (error) {
+			this.#fail(new Error(`Oxlint sent invalid JSON: ${messageFromUnknown(error)}`))
+		}
+		return true
+	}
+
+	#receive(message: unknown): void {
+		if (typeof message !== 'object' || message === null) return
+		if ('id' in message && typeof message.id === 'number') {
+			const id = message.id
+			const resolve = this.#responses.get(id)
+			const reject = this.#failures.get(id)
+			this.#responses.delete(id)
+			this.#failures.delete(id)
+			if ('error' in message && message.error !== undefined) {
+				reject?.(new Error(messageFromUnknown(message.error)))
+			} else {
+				resolve?.('result' in message ? message.result : undefined)
+			}
+			return
+		}
+		if (!('method' in message) || message.method !== 'textDocument/publishDiagnostics') return
+		if (!('params' in message) || typeof message.params !== 'object' || message.params === null) {
+			return
+		}
+		const params = message.params
+		if (!('uri' in params) || typeof params.uri !== 'string') return
+		if (!('diagnostics' in params) || !Array.isArray(params.diagnostics)) return
+		const publish = this.#publishes.get(params.uri)
+		if (publish === undefined) return
+		publish(this.#findings(params.uri, params.diagnostics))
+	}
+
+	#findings(uri: string, diagnostics: readonly unknown[]): readonly Finding[] {
+		const path = this.#documents.get(uri)
+		if (path === undefined) return []
+		const findings: Finding[] = []
+		for (const diagnostic of diagnostics) {
+			if (typeof diagnostic !== 'object' || diagnostic === null) continue
+			if (!('message' in diagnostic) || typeof diagnostic.message !== 'string') continue
+			if (
+				!('range' in diagnostic) ||
+				typeof diagnostic.range !== 'object' ||
+				diagnostic.range === null
+			) {
+				findings.push({ path, message: diagnostic.message })
+				continue
+			}
+			const range = diagnostic.range
+			if (!('start' in range) || typeof range.start !== 'object' || range.start === null) {
+				findings.push({ path, message: diagnostic.message })
+				continue
+			}
+			const start = range.start
+			if (!('line' in start) || typeof start.line !== 'number') {
+				findings.push({ path, message: diagnostic.message })
+				continue
+			}
+			findings.push({ path, message: diagnostic.message, line: start.line + 1 })
+		}
+		return findings
+	}
+
+	#fail(error: Error): void {
+		for (const reject of this.#failures.values()) reject(error)
+		for (const reject of this.#refusals.values()) reject(error)
+		this.#responses.clear()
+		this.#failures.clear()
+		this.#publishes.clear()
+		this.#refusals.clear()
+	}
+
+	#exit(code: number | null, signal: NodeJS.Signals | null): void {
+		if (this.#destroyed && code === 0) return
+		const ending = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+		this.#fail(new Error(`The Oxlint language server exited with ${ending}`))
+	}
+}
