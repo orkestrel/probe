@@ -81,15 +81,15 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.12",
 		"@orkestrel/emitter": "^0.0.7",
-		"@orkestrel/mcp": "^0.0.17",
+		"@orkestrel/mcp": "^0.0.18",
 		"@orkestrel/timeout": "^0.0.7",
 		"@orkestrel/tool": "^0.0.11"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
 		"@orkestrel/guide": "^0.0.12",
-		"@orkestrel/scaffold": "^0.0.41",
-		"@orkestrel/test": "^0.0.6",
+		"@orkestrel/scaffold": "^0.0.42",
+		"@orkestrel/test": "^0.0.7",
 		"@types/node": "^26.2.0",
 		"oxfmt": "^0.62.0",
 		"oxlint": "^1.77.0",
