@@ -1,7 +1,9 @@
 import type { Claim } from '@src/core'
 import { mkdirSync, readdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRecorder } from '@orkestrel/test'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createScratch } from '@orkestrel/test/server'
 import { Probe, readWorkspaceManifest } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
@@ -165,14 +167,15 @@ describe.sequential('probe', () => {
 	)
 
 	it(
-		'expires a synchronous loop, cleans its revision, and serves the next claim',
+		'expires only the active inspection, cleans its revision, and serves a queued claim',
 		{ timeout: 60_000 },
 		async () => {
 			const expirations = createRecorder<[Claim]>()
+			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({
 				workspace: ROOT,
 				deadline: 6_000,
-				on: { expire: expirations.handler },
+				on: { expire: expirations.handler, error: failures.handler },
 			})
 			const hanging: Claim = {
 				project: 'configs/src/tsconfig.core.json',
@@ -216,62 +219,196 @@ describe.sequential('probe', () => {
 			}
 			mkdirSync(fileURLToPath(new URL('../../../tmp/probe/', import.meta.url)), { recursive: true })
 			try {
-				await expect(probe.prove(hanging)).rejects.toThrow('The runtime stage exceeded 6000 ms')
+				const expired = probe.prove(hanging)
+				await waitForDelay(100)
+				const served = probe.prove(ordinary)
+				const outcomes = await Promise.allSettled([expired, served])
+				expect(outcomes[0]).toMatchObject({
+					status: 'rejected',
+					reason: expect.objectContaining({ message: 'The runtime stage exceeded 6000 ms' }),
+				})
 				expect(expirations.calls).toStrictEqual([[hanging]])
+				expect(failures.count).toBe(1)
 				expect(
 					readdirSync(fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))).filter(
 						(name) => name.startsWith('expiry.test.probe-'),
 					),
 				).toStrictEqual([])
-				await expect(probe.prove(ordinary)).resolves.toMatchObject({ receipt: expect.any(String) })
+				expect(outcomes[1]).toMatchObject({
+					status: 'fulfilled',
+					value: expect.objectContaining({ receipt: expect.any(String) }),
+				})
 			} finally {
 				await probe.destroy()
 			}
 		},
 	)
 
-	it(
-		'keeps arming failures handled and rejects callers with the same failure',
-		{ timeout: 60_000 },
-		async () => {
-			const failures = createRecorder<[unknown]>()
-			const probe = new Probe({ workspace: ROOT, deadline: 1, on: { error: failures.handler } })
-			try {
-				await expect(
+	it('bounds a lint stage that does not publish diagnostics', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+		scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
+		scratch.write(
+			'node_modules/oxlint/package.json',
+			'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
+		)
+		scratch.write(
+			'node_modules/oxlint/fixture.js',
+			"let buffer = Buffer.alloc(0)\nsetTimeout(() => process.exit(0), 30_000)\nprocess.stdin.on('data', (chunk) => {\n\tbuffer = Buffer.concat([buffer, chunk])\n\twhile (true) {\n\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')\n\t\tif (boundary < 0) return\n\t\tconst header = buffer.subarray(0, boundary).toString('ascii')\n\t\tconst match = /Content-Length: (\\d+)/i.exec(header)\n\t\tif (match === null) return\n\t\tconst length = Number(match[1])\n\t\tconst start = boundary + 4\n\t\tif (buffer.length < start + length) return\n\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))\n\t\tbuffer = buffer.subarray(start + length)\n\t\tif (message.method === 'initialize') {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'textDocument/didOpen' && !message.params.textDocument.uri.includes('/src/core/')) {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri: message.params.textDocument.uri, diagnostics: [] } })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'shutdown') {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', id: message.id, result: null })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'exit') process.exit(0)\n\t}\n})\n",
+		)
+		scratch.write(
+			'tsconfig.json',
+			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+		)
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
+		try {
+			// Boot runs its own lint control, and a boot timeout carries the identical message a
+			// stage timeout carries. Waiting for `arm` is what stops this proof accepting a
+			// boot-origin rejection as evidence about the candidate.
+			await new Promise<void>((armed, failed) => {
+				probe.emitter.on('arm', () => armed())
+				probe.emitter.on('error', (error) => failed(error))
+			})
+			await expect(
+				Promise.race([
 					probe.prove({
-						project: 'configs/src/tsconfig.core.json',
+						project: 'tsconfig.json',
 						case: {
-							files: [],
+							files: [{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1\n' }],
 							test: {
-								path: 'tmp/probe/arming-failure.test.ts',
-								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+								path: 'tmp/probe/stalled-lint.test.ts',
+								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
 						},
 						control: {
-							files: [],
+							files: [{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1\n' }],
 							test: {
-								path: 'tmp/probe/arming-failure.test.ts',
-								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+								path: 'tmp/probe/stalled-lint.test.ts',
+								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
-							stage: 'runtime',
-							reason: 'the deadline expires before the runtime host can answer',
+							stage: 'lint',
+							reason: 'the language server does not publish diagnostics for ignored source',
 						},
 					}),
-				).rejects.toThrow(/runtime stage exceeded 1 ms/i)
-				expect(failures.count).toBeGreaterThan(0)
-			} finally {
-				await probe.destroy()
-			}
-		},
-	)
+					waitForDelay(7_000).then(() => {
+						throw new Error('The stalled lint proof did not settle within its budget')
+					}),
+				]),
+			).rejects.toThrow('The lint stage exceeded 6000 ms')
+		} finally {
+			await Promise.race([probe.destroy(), waitForDelay(5_000)])
+			scratch.destroy()
+		}
+	})
+
+	it('carries boot findings into one observed arming refusal', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'tsconfig.json',
+			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+		)
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const failures = createRecorder<[unknown]>()
+		const probe = new Probe({
+			workspace: scratch.path,
+			deadline: 60_000,
+			on: { error: failures.handler },
+		})
+		try {
+			await expect(
+				probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probe/refused.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probe/refused.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+						stage: 'type',
+						reason: 'the probe did not arm',
+					},
+				}),
+			).rejects.toThrow('The probe boot control did not begin clean')
+			expect(failures.count).toBe(1)
+			expect(failures.calls[0]?.[0]).toEqual(
+				expect.objectContaining({
+					message: expect.stringMatching(
+						/probe boot control did not begin clean[\s\S]*runtime:[\s\S]*no configured Vitest project named probe/i,
+					),
+				}),
+			)
+		} finally {
+			await probe.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('emits one error for an ordinary stage failure', { timeout: 60_000 }, async () => {
+		const failures = createRecorder<[unknown]>()
+		const probe = new Probe({
+			workspace: ROOT,
+			deadline: 60_000,
+			on: { error: failures.handler },
+		})
+		try {
+			await expect(
+				probe.prove({
+					project: 'configs/src/missing.json',
+					case: {
+						files: [{ path: 'src/core/stage-failure.ts', text: 'export const VALUE = 1\n' }],
+						test: {
+							path: 'tmp/probe/stage-failure.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probe/stage-failure.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+						stage: 'type',
+						reason: 'the project does not exist',
+					},
+				}),
+			).rejects.toThrow('configs/src/missing.json')
+			expect(failures.count).toBe(1)
+		} finally {
+			await probe.destroy()
+		}
+	})
 
 	it(
-		'destroys idempotently, refuses later proofs, and leaves no probe files',
+		'destroys idempotently and observes one error for a later proof',
 		{ timeout: 60_000 },
 		async () => {
 			const directory = fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))
 			mkdirSync(directory, { recursive: true })
-			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			const failures = createRecorder<[unknown]>()
+			const probe = new Probe({
+				workspace: ROOT,
+				deadline: 60_000,
+				on: { error: failures.handler },
+			})
 			await Promise.all([probe.destroy(), probe.destroy()])
 			await expect(
 				probe.prove({
@@ -294,10 +431,9 @@ describe.sequential('probe', () => {
 					},
 				}),
 			).rejects.toThrow('The probe has been destroyed')
+			expect(failures.count).toBe(1)
 			expect(
-				readdirSync(directory).filter(
-					(name) => name.startsWith('arm-') || name.includes('.probe-'),
-				),
+				readdirSync(directory).filter((name) => name.startsWith('after-destroy.test.probe-')),
 			).toStrictEqual([])
 		},
 	)

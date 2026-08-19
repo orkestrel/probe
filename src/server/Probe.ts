@@ -10,11 +10,12 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { TimeoutInterface } from '@orkestrel/timeout'
+import type { StageInterface } from './types.js'
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { Emitter } from '@orkestrel/emitter'
 import { createTimeout } from '@orkestrel/timeout'
-import { computeReceipt } from '@src/core'
+import { computeReceipt, formatCheck } from '@src/core'
 import { readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
 import { LintStage } from './stages/LintStage.js'
 import { RuntimeStage } from './stages/RuntimeStage.js'
@@ -26,8 +27,8 @@ import { TypeStage } from './stages/TypeStage.js'
  * @remarks
  * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
- * report their respective changes. Each runtime inspection has a coordinator-owned deadline that
- * abandons and replaces a hung runtime stage.
+ * report their respective changes. Each active stage inspection has a coordinator-owned deadline.
+ * A runtime expiry abandons and replaces its worker before the next queued inspection begins.
  *
  * @example
  * ```ts
@@ -44,6 +45,9 @@ export class Probe implements ProbeInterface {
 	readonly #type: TypeStage
 	readonly #lint: LintStage
 	#runtime: RuntimeStage
+	#typeTail: Promise<void> = Promise.resolve()
+	#lintTail: Promise<void> = Promise.resolve()
+	#runtimeTail: Promise<void> = Promise.resolve()
 	readonly #arming: Promise<void>
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -164,28 +168,34 @@ export class Probe implements ProbeInterface {
 			})
 			const beforeType = await this.#inspect(typeClaim.case, typeClaim)
 			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
-			if ([...beforeType, ...beforeRuntime].some((check) => check.findings.length > 0)) {
-				throw new Error('The probe boot control did not begin clean')
+			const before = [...beforeType, ...beforeRuntime]
+			if (before.some((check) => check.findings.length > 0)) {
+				throw new Error(
+					`The probe boot control did not begin clean\n${before.map(formatCheck).join('\n')}`,
+				)
 			}
 			writeFileSync(typeDependency, 'export type Signal = number\n', 'utf8')
 			const afterType = await this.#inspect(typeClaim.control, typeClaim)
 			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
 			const tolerant = afterType.find((check) => check.stage === 'runtime')
 			if (type === undefined || type.findings.length === 0) {
-				throw new Error('The probe boot type control did not detect a mutated dependency')
+				throw new Error(
+					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatCheck).join('\n')}`,
+				)
 			}
 			if (tolerant === undefined || tolerant.findings.length > 0) {
-				throw new Error('The probe boot type control did not remain runtime-clean')
+				throw new Error(
+					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatCheck).join('\n')}`,
+				)
 			}
 			writeFileSync(runtimeDependency, "export const SIGNAL = 'after'\n", 'utf8')
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
 			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
 			if (runtime === undefined || runtime.findings.length === 0) {
-				throw new Error('The probe boot runtime control did not detect a mutated dependency')
+				throw new Error(
+					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatCheck).join('\n')}`,
+				)
 			}
-		} catch (error) {
-			this.#emitter.emit('error', error)
-			throw error
 		} finally {
 			rmSync(typeDependency, { force: true })
 			rmSync(runtimeDependency, { force: true })
@@ -202,13 +212,60 @@ export class Probe implements ProbeInterface {
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
 		return Promise.all([
-			this.#type.inspect(subject, claim.project),
-			this.#lint.inspect(subject),
+			this.#inspectType(subject, claim),
+			this.#inspectLint(subject),
 			this.#inspectRuntime(subject, claim),
 		])
 	}
 
-	async #inspectRuntime(subject: Case, claim: Claim): Promise<Check> {
+	#inspectType(subject: Case, claim: Claim): Promise<Check> {
+		const inspection = this.#typeTail.then(() =>
+			this.#inspectStage(this.#type, this.#type.inspect(subject, claim.project)),
+		)
+		this.#typeTail = inspection.then(
+			() => undefined,
+			() => undefined,
+		)
+		return inspection
+	}
+
+	#inspectLint(subject: Case): Promise<Check> {
+		const inspection = this.#lintTail.then(() =>
+			this.#inspectStage(this.#lint, this.#lint.inspect(subject)),
+		)
+		this.#lintTail = inspection.then(
+			() => undefined,
+			() => undefined,
+		)
+		return inspection
+	}
+
+	#inspectRuntime(subject: Case, claim: Claim): Promise<Check> {
+		const inspection = this.#runtimeTail.then(() => this.#runRuntime(subject, claim))
+		this.#runtimeTail = inspection.then(
+			() => undefined,
+			() => undefined,
+		)
+		return inspection
+	}
+
+	async #inspectStage(stage: StageInterface, operation: Promise<Check>): Promise<Check> {
+		const timeout = createTimeout({ ms: this.#deadline })
+		timeout.start()
+		try {
+			return await Promise.race([
+				operation,
+				this.#expiry(timeout, `The ${stage.stage} stage exceeded ${this.#deadline} ms`),
+			])
+		} catch (error) {
+			if (timeout.expired) void stage.destroy().catch(() => {})
+			throw error
+		} finally {
+			timeout.clear()
+		}
+	}
+
+	async #runRuntime(subject: Case, claim: Claim): Promise<Check> {
 		const stage = this.#runtime
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
@@ -219,15 +276,15 @@ export class Probe implements ProbeInterface {
 			])
 		} catch (error) {
 			if (!timeout.expired) throw error
-			this.#emitter.emit('expire', claim)
-			await this.#recycle(stage)
+			const recycled = await this.#recycle(stage)
+			if (recycled) this.#emitter.emit('expire', claim)
 			throw error
 		} finally {
 			timeout.clear()
 		}
 	}
 
-	async #recycle(stage: RuntimeStage): Promise<void> {
+	async #recycle(stage: RuntimeStage): Promise<boolean> {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
@@ -244,8 +301,9 @@ export class Probe implements ProbeInterface {
 		} finally {
 			timeout.clear()
 		}
-		if (this.#destroyed || this.#runtime !== stage) return
+		if (this.#destroyed || this.#runtime !== stage) return false
 		this.#runtime = new RuntimeStage(this.#workspace)
+		return true
 	}
 
 	// Rejects when the deadline fires, so a race against it settles even when the operation it
@@ -260,11 +318,7 @@ export class Probe implements ProbeInterface {
 		try {
 			await this.#arming
 		} catch {}
-		try {
-			await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])
-		} finally {
-			this.#emitter.destroy()
-		}
+		await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])
 	}
 
 	#version(name: string): string {

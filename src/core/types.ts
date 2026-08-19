@@ -274,7 +274,7 @@ export type ProbeEventMap = {
 	readonly arm: readonly [toolchain: Toolchain]
 	/** A claim was answered. */
 	readonly prove: readonly [verdict: Verdict]
-	/** The coordinator's deadline fired and the runtime worker was recycled. */
+	/** The coordinator's runtime deadline fired and its worker was recycled before this event. */
 	readonly expire: readonly [claim: Claim]
 	/** A fault surfaced for observation. */
 	readonly error: readonly [error: unknown]
@@ -286,10 +286,12 @@ export type ProbeEventMap = {
  * @remarks
  * `workspace` is the target root whose installed `typescript`, `oxlint`, and `vitest` the stages
  * resolve, and whose modification times the revalidation sweep reads. Default: the current
- * working directory. `deadline` is the coordinator's own milliseconds budget for one runtime
- * stage; it lives outside the worker because a test timeout expressed in worker configuration
- * cannot fire while that worker spins. One runtime inspection in every 64 also pays the resident
- * runner's replacement, so budget `deadline` against that inspection rather than the common one.
+ * working directory. `deadline` is the coordinator's milliseconds budget for one active stage
+ * inspection. Queue wait is not charged to that inspection; the inspections and runtime recoveries
+ * ahead of it carry their own bounds. The runtime deadline lives outside the worker because a test
+ * timeout expressed in worker configuration cannot fire while that worker spins. One runtime
+ * inspection in every 64 also pays the resident runner's replacement, so budget `deadline` against
+ * that inspection rather than the common one.
  *
  * @example
  * ```ts
@@ -303,7 +305,7 @@ export interface ProbeOptions {
 	readonly error?: EmitterErrorHandler
 	/** Target workspace root. Default: the current working directory. */
 	readonly workspace?: string
-	/** Milliseconds one runtime stage may take before the coordinator recycles its worker. */
+	/** Milliseconds one active stage inspection may take; an expired runtime worker is recycled. */
 	readonly deadline?: number
 }
 
