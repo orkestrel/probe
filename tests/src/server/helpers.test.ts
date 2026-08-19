@@ -65,6 +65,29 @@ describe('server path helpers', () => {
 		)
 	})
 
+	it('accepts a contained file whose name begins with two dots', () => {
+		expect(resolveWorkspaceFile(ROOT, '..hidden.ts')).toBe(resolve(ROOT, '..hidden.ts'))
+		expect(resolveWorkspaceFile(ROOT, '..config/value.ts')).toBe(
+			resolve(ROOT, '..config/value.ts'),
+		)
+		expect(resolveWorkspaceFile(ROOT, '...weird.ts')).toBe(resolve(ROOT, '...weird.ts'))
+	})
+
+	it('refuses a parent-directory traversal and an absolute escape while accepting a dot-prefixed name', () => {
+		expect(() => resolveWorkspaceFile(ROOT, '..')).toThrow('Path escapes the workspace: ..')
+		expect(() => resolveWorkspaceFile(ROOT, '/etc/passwd')).toThrow(
+			'Path escapes the workspace: /etc/passwd',
+		)
+		expect(() => resolveWorkspaceFile(ROOT, './a/../../escape.ts')).toThrow(
+			'Path escapes the workspace: ./a/../../escape.ts',
+		)
+		expect(resolveWorkspaceFile(ROOT, '..hidden.ts')).toBe(resolve(ROOT, '..hidden.ts'))
+	})
+
+	it('refuses the empty target because the workspace root is not a file', () => {
+		expect(() => resolveWorkspaceFile(ROOT, '')).toThrow('Path escapes the workspace: ')
+	})
+
 	it('resolves installed modules and refuses absent ones', () => {
 		expect(resolveWorkspaceModule(ROOT, 'typescript')).toContain('node_modules/typescript/')
 		expect(() => resolveWorkspaceModule(ROOT, 'missing-probe-package')).toThrow(

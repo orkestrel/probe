@@ -1,7 +1,7 @@
 import type { WorkspaceManifest } from './types.js'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { extname, isAbsolute, relative, resolve } from 'node:path'
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isRecord } from '@orkestrel/contract'
 
 /**
@@ -16,7 +16,7 @@ export function resolveWorkspaceFile(workspace: string, target: string): string 
 	const root = resolve(workspace)
 	const file = resolve(root, target)
 	const path = relative(root, file)
-	if (path.startsWith('..') || isAbsolute(path)) {
+	if (path === '' || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
 		throw new Error(`Path escapes the workspace: ${target}`)
 	}
 	return file
