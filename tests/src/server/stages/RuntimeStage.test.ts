@@ -1,9 +1,13 @@
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { createScratch } from '@orkestrel/test/server'
+import { computeReceipt } from '@src/core'
 import { RuntimeStage } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import { createVitest } from 'vitest/node'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 
@@ -52,6 +56,70 @@ describe('runtime stage', () => {
 			])
 		} finally {
 			await stage.destroy()
+		}
+	})
+
+	it('reports a test that skips itself during execution', { timeout: 60_000 }, async () => {
+		const stage = new RuntimeStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: 'tmp/probe/runtime-context-skip.test.ts',
+					text: "import { test } from 'vitest'\ntest('skips', (context) => { context.skip(); throw new Error('never reached') })\n",
+				},
+			})
+			const control = await stage.inspect({
+				files: [],
+				test: {
+					path: 'tmp/probe/runtime-context-skip-control.test.ts',
+					text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(1).toBe(2))\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([
+				{
+					path: 'tmp/probe/runtime-context-skip.test.ts',
+					message: 'Vitest did not run the test (skips)',
+				},
+			])
+			expect(
+				computeReceipt(
+					{
+						id: 'context-skip',
+						toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
+						checks: [check],
+						control: [control],
+						elapsed: 0,
+					},
+					'runtime',
+				),
+			).toBeUndefined()
+		} finally {
+			await stage.destroy()
+		}
+	})
+
+	it('reports an empty module when its project permits no tests', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], passWithNoTests: true } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: { path: 'tmp/probe/empty.test.ts', text: '' },
+			})
+			expect(check.findings).toStrictEqual([
+				{ path: 'tmp/probe/empty.test.ts', message: 'Vitest ran no tests in the module' },
+			])
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
 		}
 	})
 
@@ -109,37 +177,179 @@ describe('runtime stage', () => {
 		},
 	)
 
+	it('distinguishes a missing configured project', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tests/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: 'tmp/probe/missing-project.test.ts',
+					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([
+				{
+					path: 'tmp/probe/missing-project.test.ts',
+					message: 'Vitest has no configured project named probe',
+				},
+			])
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('resets Vite resident maps when the runner is replaced', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const samples: Array<{ readonly unresolved: number; readonly files: number }> = []
+		try {
+			for (let generation = 1; generation <= 2; generation += 1) {
+				const output = new PassThrough()
+				output.resume()
+				const vitest = await createVitest(
+					'test',
+					{
+						root: scratch.path,
+						config: resolve(scratch.path, 'vite.config.ts'),
+						watch: false,
+						run: true,
+						pool: 'threads',
+						reporters: [
+							{
+								onInit() {},
+								onTestRunEnd() {},
+							},
+						],
+					},
+					undefined,
+					{ stdout: output, stderr: output },
+				)
+				const project = vitest.projects.find((candidate) => candidate.name === 'probe')
+				if (project === undefined) throw new Error('The probe project did not load')
+				const file = resolve(scratch.path, `tmp/probe/map-${generation}.test.ts`)
+				writeFileSync(
+					file,
+					"import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					'utf8',
+				)
+				try {
+					const specification = project.createSpecification(file, undefined, 'threads')
+					const result = await vitest.runTestSpecifications([specification], false)
+					expect(result.testModules[0]?.state()).toBe('passed')
+					let unresolved = 0
+					let files = 0
+					for (const candidate of vitest.projects) {
+						for (const environment of Object.values(candidate.vite.environments)) {
+							const graph = environment.moduleGraph
+							const retained: unknown = Reflect.get(graph, '_unresolvedUrlToModuleMap')
+							if (!(retained instanceof Map)) {
+								throw new Error('Vite exposes no unresolved-url map')
+							}
+							unresolved += retained.size
+							graph.onFileDelete(file)
+							graph.fileToModulesMap.delete(file)
+							files += graph.fileToModulesMap.size
+						}
+					}
+					samples.push({ unresolved, files })
+				} finally {
+					rmSync(file, { force: true })
+					await vitest.close()
+				}
+			}
+			expect(samples[1]?.unresolved).toBe(samples[0]?.unresolved)
+			expect(samples[1]?.files).toBe(samples[0]?.files)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it(
-		'evicts every generated specification from resident and disk caches',
+		'recycles the resident runner at its retention bound and evicts disk caches',
 		{ timeout: 60_000 },
 		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { appendFileSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
 			const id = randomUUID()
 			const path = `tmp/probe/runtime-retention-${id}.test.ts`
 			const marker = `runtime-retention-${id}`
-			const stage = new RuntimeStage(ROOT)
+			const stage = new RuntimeStage(scratch.path)
 			try {
-				for (let index = 1; index <= 15; index += 1) {
-					const text =
-						index === 15
-							? "import { describe, expect, test } from 'vitest'\ndescribe('first', () => { test('a', () => expect(1).toBe(1)); test('b', () => expect(2).toBe(2)) })\ndescribe('second', () => { test('c', () => expect(3).toBe(3)) })\n"
-							: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n"
+				for (let index = 1; index <= 65; index += 1) {
+					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`
 					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
 						findings: [],
 					})
 				}
-				const caches = readdirSync(resolve(ROOT, 'node_modules/.vite'), {
+				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual([
+					'warm',
+					'warm',
+				])
+				const caches = readdirSync(resolve(scratch.path, 'node_modules/.vite'), {
 					recursive: true,
 					encoding: 'utf8',
 				}).filter((file) => file.endsWith('results.json'))
 				const retained = caches.filter((file) =>
-					readFileSync(resolve(ROOT, 'node_modules/.vite', file), 'utf8').includes(marker),
+					readFileSync(resolve(scratch.path, 'node_modules/.vite', file), 'utf8').includes(marker),
 				)
 				expect(retained).toStrictEqual([])
 				expect(
-					readdirSync(resolve(ROOT, 'tmp/probe')).filter((file) => file.includes(marker)),
+					readdirSync(resolve(scratch.path, 'tmp/probe')).filter((file) => file.includes(marker)),
 				).toStrictEqual([])
 			} finally {
 				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'reports a cleanup failure without rejecting the inspection',
+		{ timeout: 60_000 },
+		async () => {
+			const id = randomUUID()
+			const marker = `runtime-cleanup-${id}`
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path: `tmp/probe/${marker}.test.ts`,
+						text: "import { mkdirSync, rmSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('blocks deletion', () => { const file = fileURLToPath(import.meta.url); rmSync(file); mkdirSync(file) })\n",
+					},
+				})
+				expect(check.findings).toHaveLength(1)
+				expect(check.findings[0]).toMatchObject({ path: `tmp/probe/${marker}.test.ts` })
+				expect(check.findings[0]?.message).toContain(
+					'Vitest could not delete the generated specification',
+				)
+			} finally {
+				await stage.destroy()
+				for (const file of readdirSync(resolve(ROOT, 'tmp/probe'))) {
+					if (file.includes(marker))
+						rmSync(resolve(ROOT, 'tmp/probe', file), { force: true, recursive: true })
+				}
 			}
 		},
 	)

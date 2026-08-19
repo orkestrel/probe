@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -43,14 +43,14 @@ describe('bin entry', () => {
 				case: {
 					files: [{ path: 'src/core/wire.ts', text: "export const VALUE = 'ok'\n" }],
 					test: {
-						path: 'tests/src/bin/wire-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				},
 				control: {
 					files: [{ path: 'src/core/wire.ts', text: "export const VALUE: number = 'bad'\n" }],
 					test: {
-						path: 'tests/src/bin/wire-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 					stage: 'type',
@@ -62,14 +62,14 @@ describe('bin entry', () => {
 				case: {
 					...passing.case,
 					test: {
-						path: 'tests/src/bin/wire-without-newline-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-without-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
 				control: {
 					...passing.control,
 					test: {
-						path: 'tests/src/bin/wire-without-newline-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-without-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
@@ -79,14 +79,14 @@ describe('bin entry', () => {
 				case: {
 					...passing.case,
 					test: {
-						path: 'tests/src/bin/wire-with-newline-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-with-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
 				control: {
 					...passing.control,
 					test: {
-						path: 'tests/src/bin/wire-with-newline-runtime.test.ts',
+						path: 'tmp/probe/bin/wire-with-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
@@ -127,6 +127,8 @@ describe('bin entry', () => {
 					params: { name: 'prove', arguments: withNewline, _meta: modern },
 				},
 			]
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
 			const child = spawn(
 				'/usr/bin/script',
 				['-qfec', 'stty -echo; exec "$PROBE_NODE" "$PROBE_ENTRY"', '/dev/null'],
@@ -189,11 +191,25 @@ describe('bin entry', () => {
 						}),
 						expect.objectContaining({
 							id: 5,
-							result: expect.objectContaining({ content: expect.any(Array) }),
+							result: expect.objectContaining({
+								content: [
+									expect.objectContaining({
+										type: 'text',
+										text: expect.stringMatching(/^probe .+receipt probe:/s),
+									}),
+								],
+							}),
 						}),
 						expect.objectContaining({
 							id: 6,
-							result: expect.objectContaining({ content: expect.any(Array) }),
+							result: expect.objectContaining({
+								content: [
+									expect.objectContaining({
+										type: 'text',
+										text: expect.stringMatching(/^probe .+receipt probe:/s),
+									}),
+								],
+							}),
 						}),
 					]),
 				)
@@ -209,9 +225,102 @@ describe('bin entry', () => {
 					child.kill('SIGTERM')
 					await exited
 				}
+				try {
+					rmdirSync(directory)
+				} catch {}
 			}
 		},
 	)
+
+	it('preserves worker diagnostics on stderr', { timeout: 60_000 }, async () => {
+		const modern = {
+			'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+			'io.modelcontextprotocol/clientCapabilities': {},
+			'io.modelcontextprotocol/clientInfo': { name: 'probe-test', version: '1.0.0' },
+		}
+		const request = {
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: {
+				name: 'prove',
+				arguments: {
+					project: 'configs/src/tsconfig.core.json',
+					case: {
+						files: [{ path: 'src/core/stderr.ts', text: "export const VALUE = 'ok'\n" }],
+						test: {
+							path: 'tmp/probe/bin/stderr-runtime.test.ts',
+							text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
+						},
+					},
+					control: {
+						files: [{ path: 'src/core/stderr.ts', text: "export const VALUE: number = 'bad'\n" }],
+						test: {
+							path: 'tmp/probe/bin/stderr-runtime.test.ts',
+							text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
+						},
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				},
+				_meta: modern,
+			},
+		}
+		const directory = resolve(ROOT, 'tmp/probe/bin')
+		mkdirSync(directory, { recursive: true })
+		const diagnostic = resolve(directory, 'worker-stderr.txt')
+		const child = spawn(
+			'/usr/bin/script',
+			['-qfec', 'stty -echo; exec "$PROBE_NODE" "$PROBE_ENTRY" 2>"$PROBE_STDERR"', '/dev/null'],
+			{
+				cwd: ROOT,
+				stdio: ['pipe', 'pipe', 'pipe'],
+				env: {
+					...process.env,
+					PROBE_ENTRY: BUILT_ENTRY,
+					PROBE_NODE: process.execPath,
+					PROBE_STDERR: diagnostic,
+				},
+			},
+		)
+		const output = createInterface({ input: child.stdout })
+		try {
+			await waitForDelay(250)
+			child.stdin.write(JSON.stringify(request) + '\n')
+			let response: unknown
+			for await (const line of output) {
+				const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
+				if (frame.trim() === '') continue
+				response = JSON.parse(frame)
+				break
+			}
+			expect(response).toMatchObject({
+				id: 1,
+				result: {
+					content: [
+						expect.objectContaining({
+							type: 'text',
+							text: expect.stringMatching(/^probe .+receipt probe:/s),
+						}),
+					],
+				},
+			})
+			expect(readFileSync(diagnostic, 'utf8')).toContain('worker-stderr-marker')
+		} finally {
+			output.close()
+			if (child.exitCode === null) {
+				const exited = new Promise<void>((resolveExit) => {
+					child.once('exit', () => resolveExit())
+				})
+				child.kill('SIGTERM')
+				await exited
+			}
+			rmSync(diagnostic, { force: true })
+			try {
+				rmdirSync(directory)
+			} catch {}
+		}
+	})
 
 	it(
 		'records the arming dependency leak when the entry is killed during boot',

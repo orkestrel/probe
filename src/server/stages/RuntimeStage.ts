@@ -33,9 +33,10 @@ import {
  */
 export class RuntimeStage implements StageInterface {
 	readonly #workspace: string
-	readonly #vitest: Promise<Vitest>
+	#vitest: Promise<Vitest>
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
+	#inspections = 0
 	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -102,6 +103,8 @@ export class RuntimeStage implements StageInterface {
 		const { createVitest } = await import('vitest/node')
 		const output = new PassThrough()
 		output.resume()
+		// Only standard output frames the Model Context Protocol transport. Preserve worker
+		// diagnostics on standard error while draining standard output into a bounded stream.
 		return createVitest(
 			'test',
 			{
@@ -118,7 +121,7 @@ export class RuntimeStage implements StageInterface {
 				],
 			},
 			undefined,
-			{ stdout: output, stderr: output },
+			{ stdout: output, stderr: process.stderr },
 		)
 	}
 
@@ -128,19 +131,14 @@ export class RuntimeStage implements StageInterface {
 		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
 		// rather than assigning zero over a code the host set for itself.
 		const exitCode = process.exitCode
-		const vitest = await this.#vitest
+		const vitest = await this.#runner()
 		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
-		const project = this.#project(vitest, subject.test.path)
-		if (project === undefined) {
+		const [project, projectFinding] = this.#project(vitest, subject.test.path)
+		if (projectFinding !== undefined || project === undefined) {
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				findings: [
-					{
-						path: subject.test.path,
-						message: 'Vitest ran no tests because no configured project matches the test path',
-					},
-				],
+				findings: projectFinding === undefined ? [] : [projectFinding],
 			}
 		}
 		this.#revalidate(vitest)
@@ -150,70 +148,118 @@ export class RuntimeStage implements StageInterface {
 		}
 		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
 		this.#revisions.add(file)
+		let findings: readonly Finding[] = []
+		let cleanup: readonly Finding[] = []
 		try {
 			const specification = project.createSpecification(file, undefined, 'threads')
 			const result = await vitest.runTestSpecifications([specification], false)
-			const findings = this.#findings(result, file, subject.test.path)
-			return {
-				stage: this.stage,
-				elapsed: Math.round(performance.now() - started),
-				findings,
-			}
+			findings = this.#findings(result, file, subject.test.path)
 		} finally {
 			process.exitCode = exitCode
-			if (existsSync(file)) unlinkSync(file)
-			await this.#evict(vitest, file)
 			this.#revisions.delete(file)
+			cleanup = await this.#evict(vitest, file, subject.test.path)
+			try {
+				if (existsSync(file)) unlinkSync(file)
+			} catch (error) {
+				cleanup = [
+					...cleanup,
+					{
+						path: subject.test.path,
+						message: `Vitest could not delete the generated specification (${messageFromUnknown(error)})`,
+					},
+				]
+			}
+		}
+		return {
+			stage: this.stage,
+			elapsed: Math.round(performance.now() - started),
+			findings: [...findings, ...cleanup],
 		}
 	}
 
-	#project(vitest: Vitest, path: string): TestProject | undefined {
+	#project(
+		vitest: Vitest,
+		path: string,
+	): readonly [project: TestProject | undefined, finding: Finding | undefined] {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently
 		// selected the root project before this resolved.
 		const name = inferTestProject(relative(this.#workspace, resolve(this.#workspace, path)))
-		if (name === undefined) return undefined
-		return vitest.projects.find((candidate) => candidate.name === name)
+		if (name === undefined) {
+			return [
+				undefined,
+				{
+					path,
+					message: 'Vitest ran no tests because no configured project matches the test path',
+				},
+			]
+		}
+		const project = vitest.projects.find((candidate) => candidate.name === name)
+		if (project === undefined) {
+			return [undefined, { path, message: `Vitest has no configured project named ${name}` }]
+		}
+		return [project, undefined]
 	}
 
-	async #evict(vitest: Vitest, file: string): Promise<void> {
-		const ids: string[] = []
-		for (const [id, task] of vitest.state.idMap) {
-			const path = 'filepath' in task ? task.filepath : task.file.filepath
-			if (resolve(path) === resolve(file)) ids.push(id)
-		}
-		for (const id of ids) vitest.state.idMap.delete(id)
-		vitest.state.pathsSet.delete(file)
-		vitest.clearSpecificationsCache(file)
-		vitest.invalidateFile(file)
-		const graphs = vitest.projects.flatMap((project) =>
-			Object.values(project.vite.environments).map((environment) => environment.moduleGraph),
-		)
-		for (const graph of graphs) {
-			const modules = graph.getModulesByFile(file)
-			graph.onFileDelete(file)
-			if (modules === undefined) continue
-			for (const module of modules) {
-				for (const importer of module.importers) {
-					importer.importedModules.delete(module)
-					importer.acceptedHmrDeps.delete(module)
-				}
-				if (module.id !== null) graph.idToModuleMap.delete(module.id)
-				graph.urlToModuleMap.delete(module.url)
+	async #evict(vitest: Vitest, file: string, original: string): Promise<readonly Finding[]> {
+		try {
+			const ids: string[] = []
+			for (const [id, task] of vitest.state.idMap) {
+				const path = 'filepath' in task ? task.filepath : task.file.filepath
+				if (resolve(path) === resolve(file)) ids.push(id)
 			}
-			graph.fileToModulesMap.delete(file)
+			for (const id of ids) vitest.state.idMap.delete(id)
+			vitest.state.pathsSet.delete(file)
+			vitest.clearSpecificationsCache(file)
+			vitest.invalidateFile(file)
+			const graphs = vitest.projects.flatMap((project) =>
+				Object.values(project.vite.environments).map((environment) => environment.moduleGraph),
+			)
+			for (const graph of graphs) {
+				const modules = graph.getModulesByFile(file)
+				graph.onFileDelete(file)
+				if (modules === undefined) continue
+				for (const module of modules) {
+					for (const importer of module.importers) {
+						importer.importedModules.delete(module)
+						importer.acceptedHmrDeps.delete(module)
+					}
+					if (module.id !== null) graph.idToModuleMap.delete(module.id)
+					graph.urlToModuleMap.delete(module.url)
+				}
+				graph.fileToModulesMap.delete(file)
+			}
+			vitest.watcher.onFileDelete(file)
+			vitest.watcher.invalidates.delete(file)
+			vitest.cache.results.removeFromCache(relative(this.#workspace, file).replaceAll('\\', '/'))
+			await vitest.cache.results.writeToCache()
+			return []
+		} catch (error) {
+			return [
+				{
+					path: original,
+					message: `Vitest could not evict the generated specification (${messageFromUnknown(error)})`,
+				},
+			]
 		}
-		vitest.watcher.onFileDelete(file)
-		vitest.watcher.invalidates.delete(file)
-		vitest.cache.results.removeFromCache(relative(this.#workspace, file).replaceAll('\\', '/'))
-		await vitest.cache.results.writeToCache()
-		if (
-			vitest.state.filesMap.has(file) ||
-			ids.some((id) => vitest.state.idMap.has(id)) ||
-			graphs.some((graph) => graph.getModulesByFile(file) !== undefined)
-		) {
-			throw new Error(`Vitest retained the generated specification: ${file}`)
-		}
+	}
+
+	#runner(): Promise<Vitest> {
+		this.#inspections += 1
+		// Vite retains one unresolved URL for each fresh specification path. A 64-inspection
+		// lifetime bounds that internal map without giving up the resident runner on each call.
+		if (this.#inspections <= 64) return this.#vitest
+		this.#inspections = 1
+		this.#vitest = this.#replace(this.#vitest)
+		void this.#vitest.catch(() => {})
+		return this.#vitest
+	}
+
+	async #replace(current: Promise<Vitest>): Promise<Vitest> {
+		const vitest = await current
+		await vitest.close()
+		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		return this.#warm()
 	}
 
 	#revalidate(vitest: Vitest): void {
@@ -267,7 +313,18 @@ export class RuntimeStage implements StageInterface {
 				for (const error of errors) findings.push(this.#finding(error, file, original))
 			}
 			const state: string = module.state()
-			if (state === 'passed') continue
+			if (state === 'passed') {
+				if (Array.from(module.children.allTests()).length === 0) {
+					findings.push({ path: original, message: 'Vitest ran no tests in the module' })
+				}
+				for (const test of module.children.allTests('skipped')) {
+					findings.push({
+						path: original,
+						message: `Vitest did not run the test (${test.fullName})`,
+					})
+				}
+				continue
+			}
 			if (state === 'skipped') {
 				findings.push({ path: original, message: 'Vitest ran no tests in the module' })
 				continue
