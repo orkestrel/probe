@@ -3,10 +3,11 @@ import type { StageInterface } from '../types.js'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { basename } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
 	inferDocumentLanguage,
+	inferTestProject,
 	messageFromUnknown,
 	parseContentLength,
 	relativeWorkspaceFile,
@@ -42,10 +43,6 @@ export class LintStage implements StageInterface {
 	#sequence = 0
 	#closing: Promise<void> | undefined
 	#destroyed = false
-	// How the language server ended, while it runs. Node leaves `exitCode` at `null` for a child
-	// killed by a signal, so reading the child reports a signalled server as alive and every write
-	// after that vanishes into a dead pipe.
-	#ending: string | undefined
 
 	/**
 	 * Starts warming the target workspace's Oxlint language server.
@@ -127,7 +124,8 @@ export class LintStage implements StageInterface {
 		child.stdout.on('data', (chunk: Buffer) => this.#read(chunk))
 		// A write racing the server's death reports `EPIPE` on this stream rather than throwing, and
 		// an unobserved stream error ends the resident host. Report it as a stage fault so the
-		// coordinator can recycle around it.
+		// inspection that raced the death is refused rather than left waiting for a reply the pipe
+		// swallowed.
 		child.stdin.on('error', (error) => this.#fail(error))
 		child.on('error', (error) => this.#fail(error))
 		child.on('exit', (code, signal) => this.#exit(code, signal))
@@ -172,6 +170,22 @@ export class LintStage implements StageInterface {
 		return inspected
 	}
 
+	// How the language server ended, or `undefined` while it runs. Node records a signal death on
+	// `signalCode`, an exit on `exitCode`, and a child that never spawned on `exitCode` too, and it
+	// sets each one before the event that announces it. Reading the child covers every ending,
+	// including the spawn failure, which reports `error` and `close` and never `exit`.
+	get #ending(): string | undefined {
+		const child = this.#child
+		if (child === undefined) return undefined
+		if (child.exitCode === null && child.signalCode === null) return undefined
+		return this.#describe(child.exitCode, child.signalCode)
+	}
+
+	// Names one ending for a message. Node announces an exit with exactly one non-null argument.
+	#describe(code: number | null, signal: NodeJS.Signals | null): string {
+		return signal === null ? `code ${code}` : `signal ${signal}`
+	}
+
 	// Whether the language server can still receive a message. A server that ended, and one that
 	// closed its input while its process lives, both take no further writes.
 	get #reachable(): boolean {
@@ -194,14 +208,14 @@ export class LintStage implements StageInterface {
 			this.#workspace,
 			resolveWorkspaceFile(this.#workspace, source.path),
 		)
-		const [axis, environment] = declared.split('/')
-		const directory =
-			(axis === 'src' || axis === 'app') && environment !== undefined && environment !== ''
-				? `${axis}/${environment}`
-				: 'tests'
-		// Keep the declared file name. Oxlint keys its overrides on globs, so a synthesized name that
-		// dropped it selects a different rule set from the one the workspace's own gate applies, and
-		// the stage reports a finding that gate exempts.
+		// Lint the candidate where it was declared, under its own name. Oxlint keys its overrides on
+		// globs, so a synthesized path that moved the candidate out of its declared directory, or
+		// that dropped its declared file name, selects a different rule set from the one the
+		// workspace's own gate applies, and the stage reports a finding that gate exempts. The
+		// exception is a candidate the probe stages in its own scratch directory, which the
+		// workspace's ignore files keep out of linting entirely: that one is a test, so lint it
+		// where the workspace's test rules reach it.
+		const directory = inferTestProject(declared) === 'probe' ? 'tests' : dirname(declared)
 		return resolveWorkspaceFile(
 			this.#workspace,
 			`${directory}/probe-${randomUUID()}.${basename(declared)}`,
@@ -344,9 +358,10 @@ export class LintStage implements StageInterface {
 		this.#refusals.clear()
 	}
 
+	// Settles everything the ended server can no longer answer. A teardown in flight is registered
+	// here too: its own `shutdown` request is the last thing outstanding, and a server that exits
+	// without replying leaves teardown waiting on it unless this refuses it.
 	#exit(code: number | null, signal: NodeJS.Signals | null): void {
-		this.#ending = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
-		if (this.#destroyed && code === 0) return
-		this.#fail(new Error(`The Oxlint language server exited with ${this.#ending}`))
+		this.#fail(new Error(`The Oxlint language server exited with ${this.#describe(code, signal)}`))
 	}
 }
