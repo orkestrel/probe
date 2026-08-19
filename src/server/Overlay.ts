@@ -39,7 +39,7 @@ export class Overlay implements OverlayInterface {
 	 * @returns Nothing
 	 */
 	set(path: string, text: string): void {
-		this.#candidates.set(path, text)
+		this.#candidates.set(path.replaceAll('\\', '/'), text)
 	}
 
 	/**
@@ -49,7 +49,7 @@ export class Overlay implements OverlayInterface {
 	 * @returns The recorded text, or `undefined` when this overlay holds no candidate there
 	 */
 	text(path: string): string | undefined {
-		return this.#candidates.get(path)
+		return this.#candidates.get(path.replaceAll('\\', '/'))
 	}
 
 	/**
@@ -67,7 +67,7 @@ export class Overlay implements OverlayInterface {
 	covers(directory: string): boolean {
 		const base = `${directory.replaceAll('\\', '/').replace(/\/+$/, '')}/`
 		for (const path of this.#candidates.keys()) {
-			if (path.replaceAll('\\', '/').startsWith(base)) return true
+			if (path.startsWith(base)) return true
 		}
 		return false
 	}

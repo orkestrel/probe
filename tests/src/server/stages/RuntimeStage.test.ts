@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { computeReceipt } from '@src/core'
 import { RuntimeStage } from '@src/server'
@@ -267,6 +268,102 @@ describe('runtime stage', () => {
 				expect(candidate.findings).toStrictEqual([])
 				expect(restored.findings).toStrictEqual([])
 				expect(scratch.read('src/value.ts')).toBe(disk)
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('instruments a function-declared project', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		const disk = "export const VALUE = 'disk'\n"
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nconst probe = () => ({ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } })\nexport default defineConfig({ test: { projects: [probe] } })\n",
+		)
+		scratch.write('src/value.ts', disk)
+		scratch.write('tmp/probe/.keep', '')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+				test: {
+					path: 'tmp/probe/function.test.ts',
+					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([])
+			expect(scratch.read('src/value.ts')).toBe(disk)
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('refuses a string-declared project without an overlay', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: ['./vitest.probe.config.ts'] } })\n",
+		)
+		scratch.write(
+			'vitest.probe.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } })\n",
+		)
+		scratch.write('src/value.ts', "export const VALUE = 'disk'\n")
+		scratch.write('tmp/probe/.keep', '')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+				test: {
+					path: 'tmp/probe/string.test.ts',
+					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([
+				{
+					origin: 'instrument',
+					path: 'tmp/probe/string.test.ts',
+					message:
+						'The runtime stage cannot instrument the string-declared Vitest project probe because its configuration carries no runtime overlay plugin',
+				},
+			])
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it(
+		'preserves transform selectors while serving versioned candidates',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			const disk = "export const VALUE = 'disk'\n"
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('src/value.ts', disk)
+			scratch.write('tmp/probe/.keep', '')
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const check = await stage.inspect({
+					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+					test: {
+						path: 'tmp/probe/query.test.ts',
+						text: "import RAW from '../../src/value.ts?raw'\nimport { VALUE } from '../../src/value.ts?v=123'\nimport { expect, test } from 'vitest'\ntest('preserves query semantics', () => { expect(RAW).toBe(\"export const VALUE = 'disk'\\n\"); expect(VALUE).toBe('candidate') })\n",
+					},
+				})
+				expect(check.findings).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 				scratch.destroy()
@@ -600,4 +697,43 @@ describe('runtime stage', () => {
 		await expect(inspection).rejects.toThrow('The runtime stage has been destroyed')
 		await expect(stage.destroy()).resolves.toBeUndefined()
 	})
+
+	it(
+		'continues teardown when a generated specification cannot be unlinked',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const stage = new RuntimeStage(scratch.path)
+			const inspection = stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+				test: {
+					path: 'tmp/probe/unlink.test.ts',
+					text: "import { mkdirSync, rmSync, writeFileSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('blocks teardown', async () => { const file = fileURLToPath(import.meta.url); rmSync(file); mkdirSync(file); writeFileSync(new URL('unlink-ready', import.meta.url), ''); await new Promise(() => {}) })\n",
+				},
+			})
+			void inspection.catch(() => {})
+			try {
+				for (
+					let attempt = 0;
+					attempt < 500 && !existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready'));
+					attempt += 1
+				) {
+					await waitForDelay(10)
+				}
+				expect(existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready'))).toBe(true)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+			} finally {
+				await stage.destroy().catch(() => {})
+				await inspection.catch(() => {})
+				scratch.destroy()
+			}
+		},
+	)
 })

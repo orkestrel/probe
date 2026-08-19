@@ -1,7 +1,6 @@
 import type { Case, Check, Finding, Stage } from '@src/core'
 import type { OverlayInterface, StageInterface } from '../types.js'
 import type {
-	Plugin,
 	TestProjectConfiguration,
 	UserProjectConfigFn,
 	UserWorkspaceConfig,
@@ -28,12 +27,13 @@ import { Overlay } from '../Overlay.js'
  * Inspects tests through one resident Vitest service from the target workspace.
  *
  * @remarks
- * Construction starts Vitest with the threads pool and augments each configured project with a
- * Vite plugin that reads the active inspection's candidate overlay. Every inspection writes one
- * fresh sibling specification, invalidates each workspace module whose disk content or candidate
- * revision changed, runs that specification, evicts its result, and deletes the file. Clearing the
- * overlay makes the next snapshot differ from the candidate revision, so the next inspection
- * invalidates that module and reads disk again.
+ * Construction starts Vitest with the threads pool and instruments each inline or function-declared
+ * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
+ * string-declared project reports an instrument finding because its project server carries no
+ * runtime overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
+ * workspace module whose disk content or candidate revision changed, runs that specification,
+ * evicts its result, and deletes the file. Clearing the overlay makes the next snapshot differ from
+ * the candidate revision, so the next inspection invalidates that module and reads disk again.
  *
  * Vite retains one unresolved URL for every specification path, so the stage replaces its whole
  * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
@@ -157,22 +157,27 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	async #destroy(): Promise<void> {
-		// Remove the abandoned specifications first. An inspection the coordinator gave up on keeps
-		// its file until the run it started finally settles, and that file matches the workbench
-		// project's glob, so a developer running the workbench meets a stranger's hung test.
-		for (const file of this.#revisions) {
-			if (existsSync(file)) unlinkSync(file)
+		try {
+			// Remove the abandoned specifications first. An inspection the coordinator gave up on keeps
+			// its file until the run it started finally settles, and that file matches the workbench
+			// project's glob, so a developer running the workbench meets a stranger's hung test.
+			for (const file of this.#revisions) {
+				try {
+					if (existsSync(file)) unlinkSync(file)
+				} catch {}
+			}
+			this.#revisions.clear()
+			// A stage whose warming failed holds nothing to release, so teardown settles rather than
+			// re-reporting a failure its constructor already surfaced.
+			const vitest = await this.#vitest.catch(() => undefined)
+			if (vitest !== undefined) {
+				void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
+				await vitest.close()
+			}
+		} finally {
+			this.#modules.clear()
+			this.#overlay.clear()
 		}
-		this.#revisions.clear()
-		// A stage whose warming failed holds nothing to release, so teardown settles rather than
-		// re-reporting a failure its constructor already surfaced.
-		const vitest = await this.#vitest.catch(() => undefined)
-		if (vitest !== undefined) {
-			void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
-			await vitest.close()
-		}
-		this.#modules.clear()
-		this.#overlay.clear()
 	}
 
 	async #warm(): Promise<Vitest> {
@@ -204,7 +209,7 @@ export class RuntimeStage implements StageInterface {
 			{
 				plugins: [
 					{
-						name: 'orkestrel:probe-runtime-overlay-projects',
+						name: 'orkestrel-project-instrumentation',
 						enforce: 'post',
 						config: this.#configure.bind(this),
 					},
@@ -225,37 +230,43 @@ export class RuntimeStage implements StageInterface {
 	#augment(project: TestProjectConfiguration): TestProjectConfiguration {
 		if (typeof project === 'string') return project
 		if (typeof project === 'function') return this.#wrap(project)
-		return Promise.resolve(project).then(this.#configuration.bind(this))
+		return Promise.resolve(project).then(this.#instrument.bind(this))
 	}
 
 	#wrap(project: UserProjectConfigFn): UserProjectConfigFn {
-		return async (environment) => this.#configuration(await project(environment))
+		return async (environment) => this.#instrument(await project(environment))
 	}
 
-	#configuration(config: UserWorkspaceConfig): UserWorkspaceConfig {
+	#instrument(config: UserWorkspaceConfig): UserWorkspaceConfig {
 		return {
 			...config,
-			plugins: [...(config.plugins ?? []), this.#plugin()],
-		}
-	}
-
-	#plugin(): Plugin {
-		return {
-			name: 'orkestrel:probe-runtime-overlay',
-			enforce: 'pre',
-			load: this.#load.bind(this),
+			plugins: [
+				...(config.plugins ?? []),
+				{
+					name: 'orkestrel-runtime-overlay',
+					enforce: 'pre',
+					load: this.#load.bind(this),
+				},
+			],
 		}
 	}
 
 	#load(id: string): string | undefined {
-		const [path] = id.split(/[?#]/, 1)
-		if (path === undefined) return undefined
-		const normalized = path.replaceAll('\\', '/')
-		for (const candidate of this.#overlay.paths) {
-			if (candidate.replaceAll('\\', '/') !== normalized) continue
-			return this.#overlay.text(candidate)
+		const text = this.#overlay.text(id)
+		if (text !== undefined) return text
+		const separator = id.lastIndexOf('?')
+		if (separator === -1) return undefined
+		const query = id.slice(separator + 1)
+		if (
+			!query.startsWith('v=') ||
+			query.length === 2 ||
+			query.includes('&') ||
+			query.includes('#') ||
+			query.slice(2).includes('?')
+		) {
+			return undefined
 		}
-		return undefined
+		return this.#overlay.text(id.slice(0, separator))
 	}
 
 	// Returns the project or the finding that replaces it, never both and never neither. A pair of
@@ -279,6 +290,15 @@ export class RuntimeStage implements StageInterface {
 				origin: 'instrument',
 				path,
 				message: `The runtime stage found no configured Vitest project named ${name}`,
+			}
+		}
+		if (
+			!project.vite.config.plugins.some((plugin) => plugin.name === 'orkestrel-runtime-overlay')
+		) {
+			return {
+				origin: 'instrument',
+				path,
+				message: `The runtime stage cannot instrument the string-declared Vitest project ${name} because its configuration carries no runtime overlay plugin`,
 			}
 		}
 		return project
@@ -351,21 +371,19 @@ export class RuntimeStage implements StageInterface {
 		const modules = this.#snapshot()
 		for (const [path, digest] of modules) {
 			if (this.#modules.get(path) === digest) continue
-			this.#invalidate(vitest, [path])
+			this.#invalidate(vitest, path)
 		}
 		for (const path of this.#modules.keys()) {
 			if (modules.has(path)) continue
-			this.#invalidate(vitest, [path])
+			this.#invalidate(vitest, path)
 		}
 		this.#modules.clear()
 		for (const [path, digest] of modules) this.#modules.set(path, digest)
 	}
 
-	#invalidate(vitest: Vitest, paths: readonly string[]): void {
-		for (const path of paths) {
-			vitest.invalidateFile(path)
-			vitest.watcher.invalidates.add(path)
-		}
+	#invalidate(vitest: Vitest, path: string): void {
+		vitest.invalidateFile(path)
+		vitest.watcher.invalidates.add(path)
 	}
 
 	#snapshot(): ReadonlyMap<string, string> {
