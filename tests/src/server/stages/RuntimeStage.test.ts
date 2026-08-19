@@ -234,6 +234,114 @@ describe('runtime stage', () => {
 	)
 
 	it(
+		'runs a directly imported candidate without changing its disk file',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			const disk = "export const VALUE = 'disk'\n"
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('src/value.ts', disk)
+			scratch.write('tmp/probe/.keep', '')
+			expect(scratch.read('src/value.ts')).toBe(disk)
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const candidate = await stage.inspect({
+					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+					test: {
+						path: 'tmp/probe/direct.test.ts',
+						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
+					},
+				})
+				const restored = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/restored.test.ts',
+						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads disk', () => expect(VALUE).toBe('disk'))\n",
+					},
+				})
+				expect(candidate.findings).toStrictEqual([])
+				expect(restored.findings).toStrictEqual([])
+				expect(scratch.read('src/value.ts')).toBe(disk)
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('runs a candidate imported through a barrel', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		const disk = "export const VALUE = 'disk'\n"
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('src/value.ts', disk)
+		scratch.write('src/index.ts', "export { VALUE } from './value.js'\n")
+		scratch.write('tmp/probe/.keep', '')
+		expect(scratch.read('src/value.ts')).toBe(disk)
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+				test: {
+					path: 'tmp/probe/barrel.test.ts',
+					text: "import { VALUE } from '../../src/index.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate through the barrel', () => expect(VALUE).toBe('candidate'))\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([])
+			expect(scratch.read('src/value.ts')).toBe(disk)
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('runs each candidate revision for one resident path', { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		const disk = "export const VALUE = 'disk'\n"
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('src/value.ts', disk)
+		scratch.write('tmp/probe/.keep', '')
+		expect(scratch.read('src/value.ts')).toBe(disk)
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const first = await stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'first'\n" }],
+				test: {
+					path: 'tmp/probe/revision.test.ts',
+					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the first revision', () => expect(VALUE).toBe('first'))\n",
+				},
+			})
+			const second = await stage.inspect({
+				files: [{ path: 'src/value.ts', text: "export const VALUE = 'second'\n" }],
+				test: {
+					path: 'tmp/probe/revision.test.ts',
+					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the second revision', () => expect(VALUE).toBe('second'))\n",
+				},
+			})
+			expect(first.findings).toStrictEqual([])
+			expect(second.findings).toStrictEqual([])
+			expect(scratch.read('src/value.ts')).toBe(disk)
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it(
 		'reports a finding for a test path outside every real Vitest project',
 		{ timeout: 60_000 },
 		async () => {
