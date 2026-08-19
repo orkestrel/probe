@@ -2,6 +2,7 @@ import type { WorkspaceManifest } from './types.js'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
+import { isRecord } from '@orkestrel/contract'
 
 /**
  * Resolves a path inside a target workspace and rejects traversal outside it.
@@ -50,19 +51,19 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
  *
  * @param workspace - The target workspace root
  * @param name - The installed package name
- * @returns The manifest's absolute path and parsed object
- * @throws When the package cannot be resolved, read, parsed, or does not publish an object manifest
+ * @returns The manifest's absolute path and parsed record
+ * @throws When the package cannot be resolved, read, parsed, or does not publish a record manifest
  *
  * @example
  * ```ts
  * const manifest = readWorkspaceManifest(process.cwd(), 'typescript')
- * console.log(Reflect.get(manifest.contents, 'version'))
+ * console.log(manifest.contents.version)
  * ```
  */
 export function readWorkspaceManifest(workspace: string, name: string): WorkspaceManifest {
 	const path = resolveWorkspaceModule(workspace, `${name}/package.json`)
 	const contents: unknown = JSON.parse(readFileSync(path, 'utf8'))
-	if (typeof contents !== 'object' || contents === null || Array.isArray(contents)) {
+	if (!isRecord(contents)) {
 		throw new Error(`${name} does not publish a readable manifest`)
 	}
 	return { path, contents }
@@ -78,15 +79,15 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
  */
 export function resolveWorkspaceBinary(workspace: string, name: string): string {
 	const manifest = readWorkspaceManifest(workspace, name)
-	const bin: unknown = Reflect.get(manifest.contents, 'bin')
+	const bin = manifest.contents.bin
 	if (bin === undefined) {
 		throw new Error(`${name} does not publish a bin field`)
 	}
 	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
-	if (typeof bin !== 'object' || bin === null || !(name in bin)) {
+	if (!isRecord(bin) || !(name in bin)) {
 		throw new Error(`${name} does not publish the ${name} binary`)
 	}
-	const entry: unknown = Reflect.get(bin, name)
+	const entry = bin[name]
 	if (typeof entry !== 'string') {
 		throw new Error(`${name} publishes an invalid ${name} binary`)
 	}

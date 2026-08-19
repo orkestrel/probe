@@ -22,11 +22,10 @@ export interface StageInterface {
 	 * Inspects one case.
 	 *
 	 * @param subject - The candidate sources and test to inspect
-	 * @param project - The TypeScript project for candidate sources; only the type stage reads it
 	 * @returns One outcome for this stage
 	 * @throws When the resident tool cannot start or has already been destroyed
 	 */
-	inspect(subject: Case, project?: string): Promise<Check>
+	inspect(subject: Case): Promise<Check>
 	/**
 	 * Tears down the resident tool and releases its resources.
 	 *
@@ -55,8 +54,8 @@ export interface StageInterface {
 export interface WorkspaceManifest {
 	/** Absolute path of the package manifest. */
 	readonly path: string
-	/** Parsed manifest object. */
-	readonly contents: object
+	/** Parsed manifest record. */
+	readonly contents: Readonly<Record<string, unknown>>
 }
 
 /**

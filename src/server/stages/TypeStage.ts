@@ -16,15 +16,17 @@ import {
  * Inspects TypeScript source through resident language services from the target workspace.
  *
  * @remarks
- * Construction starts loading the workspace's compiler and warming the root service. Candidate
- * source files use their scoped environment projects, while the test uses the root project. Disk
- * snapshots use their modification time as the service version so dependency edits cannot leave a
- * warm answer stale.
+ * Construction starts loading the workspace's compiler and warming one service per project the
+ * workspace declares. A candidate source file is checked against the project a call names, or
+ * against its own scoped environment project when a call names none, while the test uses the root
+ * project. Disk snapshots use their modification time as the service version so dependency edits
+ * cannot leave a warm answer stale. A project outside the declared set holds one recycled slot,
+ * so a caller varying the project cannot grow the resident set.
  *
  * @example
  * ```ts
  * const stage = new TypeStage('/srv/checkout')
- * const check = await stage.inspect(subject)
+ * const check = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
  * await stage.destroy()
  * ```
  */
@@ -32,10 +34,12 @@ export class TypeStage implements StageInterface {
 	readonly #workspace: string
 	readonly #typescript: Promise<typeof TypeScript>
 	readonly #services = new Map<string, LanguageService>()
+	readonly #resident = new Set<string>()
 	readonly #options = new Map<string, CompilerOptions>()
 	readonly #files = new Map<string, readonly string[]>()
 	readonly #overlays = new Map<string, string>()
 	readonly #versions = new Map<string, number>()
+	#recycled: string | undefined
 	#revision = 0
 	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
@@ -59,6 +63,20 @@ export class TypeStage implements StageInterface {
 		return 'type'
 	}
 
+	/**
+	 * Inspects one case, against a caller-named project where the caller names one.
+	 *
+	 * @remarks
+	 * The second parameter is this stage's own, not the stage contract's: the lint and runtime
+	 * stages read no project, so `StageInterface` declares one parameter and every caller that
+	 * needs this one holds a `TypeStage`.
+	 *
+	 * @param subject - The candidate sources and test to inspect
+	 * @param project - The workspace-relative TypeScript project the candidate sources are checked
+	 * against. Default: the scoped project each candidate path infers
+	 * @returns One outcome for this stage
+	 * @throws When the resident compiler cannot start or the stage has already been destroyed
+	 */
 	async inspect(subject: Case, project?: string): Promise<Check> {
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
 		const inspection = this.#tail.then(() => this.#inspect(subject, project))
@@ -83,6 +101,8 @@ export class TypeStage implements StageInterface {
 		await this.#typescript.catch(() => undefined)
 		for (const service of this.#services.values()) service.dispose()
 		this.#services.clear()
+		this.#resident.clear()
+		this.#recycled = undefined
 		this.#options.clear()
 		this.#files.clear()
 		this.#overlays.clear()
@@ -96,7 +116,10 @@ export class TypeStage implements StageInterface {
 			throw new Error('The type stage does not share the workspace TypeScript installation')
 		}
 		const typescript = await import('typescript')
-		for (const project of this.#projects()) this.#service(typescript, project)
+		for (const project of this.#projects()) {
+			this.#resident.add(resolveWorkspaceFile(this.#workspace, project))
+			this.#service(typescript, project)
+		}
 		return typescript
 	}
 
@@ -152,10 +175,12 @@ export class TypeStage implements StageInterface {
 		this.#versions.set(path, this.#revision)
 	}
 
+	// Keyed by the resolved project file rather than by the caller's spelling of it, so
+	// `tsconfig.json` and `./tsconfig.json` reach one resident service instead of two.
 	#service(typescript: typeof TypeScript, project: string): LanguageService {
-		const existing = this.#services.get(project)
-		if (existing !== undefined) return existing
 		const path = resolveWorkspaceFile(this.#workspace, project)
+		const existing = this.#services.get(path)
+		if (existing !== undefined) return existing
 		const config = typescript.readConfigFile(path, typescript.sys.readFile)
 		if (config.error !== undefined) {
 			throw new Error(typescript.flattenDiagnosticMessageText(config.error.messageText, '\n'))
@@ -172,11 +197,11 @@ export class TypeStage implements StageInterface {
 				typescript.flattenDiagnosticMessageText(parsed.errors[0]?.messageText ?? '', '\n'),
 			)
 		}
-		this.#options.set(project, parsed.options)
-		this.#files.set(project, parsed.fileNames)
+		this.#options.set(path, parsed.options)
+		this.#files.set(path, parsed.fileNames)
 		const service = typescript.createLanguageService({
-			getCompilationSettings: () => this.#options.get(project) ?? {},
-			getScriptFileNames: () => [...(this.#files.get(project) ?? []), ...this.#overlays.keys()],
+			getCompilationSettings: () => this.#options.get(path) ?? {},
+			getScriptFileNames: () => [...(this.#files.get(path) ?? []), ...this.#overlays.keys()],
 			getScriptVersion: (file) => this.#version(file),
 			getScriptSnapshot: (file) => this.#snapshot(typescript, file),
 			getCurrentDirectory: () => this.#workspace,
@@ -189,8 +214,22 @@ export class TypeStage implements StageInterface {
 			useCaseSensitiveFileNames: () => typescript.sys.useCaseSensitiveFileNames,
 			getNewLine: () => typescript.sys.newLine,
 		})
-		this.#services.set(project, service)
+		this.#services.set(path, service)
+		if (!this.#resident.has(path)) this.#recycle(path)
 		return service
+	}
+
+	// Holds one caller-named project beside the resident set warming created. `project` arrives
+	// from the wire validated only as a non-empty string, so keeping a language service per
+	// distinct string would let a caller grow this stage without bound for the life of the process.
+	#recycle(path: string): void {
+		const previous = this.#recycled
+		this.#recycled = path
+		if (previous === undefined || previous === path) return
+		this.#services.get(previous)?.dispose()
+		this.#services.delete(previous)
+		this.#options.delete(previous)
+		this.#files.delete(previous)
 	}
 
 	#version(file: string): string {

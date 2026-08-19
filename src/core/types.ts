@@ -299,7 +299,8 @@ export interface ProbeInterface {
 	/**
 	 * Answers one claim with every stage's evidence.
 	 *
-	 * @param claim - The case, its control, and the project to check the case against
+	 * @param claim - The case, its control, and the project the candidate sources in both cases
+	 * are checked against
 	 * @returns The verdict, carrying one check per stage for both the case and the control
 	 * @throws When a stage cannot start, so no verdict ever reports a stage that did not run
 	 */

@@ -269,7 +269,7 @@ export class Probe implements ProbeInterface {
 
 	#version(name: string): string {
 		const manifest = readWorkspaceManifest(this.#workspace, name)
-		const version: unknown = Reflect.get(manifest.contents, 'version')
+		const version = manifest.contents.version
 		if (typeof version !== 'string') {
 			throw new Error(`${name} publishes no readable version`)
 		}
