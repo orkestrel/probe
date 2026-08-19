@@ -257,7 +257,8 @@ export type ProbeEventMap = {
  * resolve, and whose modification times the revalidation sweep reads. Default: the current
  * working directory. `deadline` is the coordinator's own milliseconds budget for one runtime
  * stage; it lives outside the worker because a test timeout expressed in worker configuration
- * cannot fire while that worker spins.
+ * cannot fire while that worker spins. One runtime inspection in every 64 also pays the resident
+ * runner's replacement, so budget `deadline` against that inspection rather than the common one.
  *
  * @example
  * ```ts

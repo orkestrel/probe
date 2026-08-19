@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import type { Check, Verdict } from '@src/core'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -82,18 +83,23 @@ describe('runtime stage', () => {
 					message: 'Vitest did not run the test (skips)',
 				},
 			])
+			const clean: readonly Check[] = [
+				{ stage: 'type', elapsed: 0, findings: [] },
+				{ stage: 'lint', elapsed: 0, findings: [] },
+			]
+			const verdict: Verdict = {
+				id: 'context-skip',
+				toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
+				checks: [...clean, check],
+				control: [control],
+				elapsed: 0,
+			}
+			// Every other condition a receipt needs holds here, so the assertion turns on the skip
+			// finding alone: remove it and the same verdict earns one.
+			expect(computeReceipt(verdict, 'runtime')).toBeUndefined()
 			expect(
-				computeReceipt(
-					{
-						id: 'context-skip',
-						toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
-						checks: [check],
-						control: [control],
-						elapsed: 0,
-					},
-					'runtime',
-				),
-			).toBeUndefined()
+				computeReceipt({ ...verdict, checks: [...clean, { ...check, findings: [] }] }, 'runtime'),
+			).toBe('probe:context-skip:runtime:typescript@test:oxlint@test:vitest@test')
 		} finally {
 			await stage.destroy()
 		}
@@ -207,80 +213,84 @@ describe('runtime stage', () => {
 		}
 	})
 
-	it('resets Vite resident maps when the runner is replaced', { timeout: 60_000 }, async () => {
-		const scratch = createScratch()
-		scratch.write('package.json', '{"type":"module"}\n')
-		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-		scratch.write(
-			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
-		)
-		scratch.write('tmp/probe/.keep', '')
-		const samples: Array<{ readonly unresolved: number; readonly files: number }> = []
-		try {
-			for (let generation = 1; generation <= 2; generation += 1) {
-				const output = new PassThrough()
-				output.resume()
-				const vitest = await createVitest(
-					'test',
-					{
-						root: scratch.path,
-						config: resolve(scratch.path, 'vite.config.ts'),
-						watch: false,
-						run: true,
-						pool: 'threads',
-						reporters: [
-							{
-								onInit() {},
-								onTestRunEnd() {},
-							},
-						],
-					},
-					undefined,
-					{ stdout: output, stderr: output },
-				)
-				const project = vitest.projects.find((candidate) => candidate.name === 'probe')
-				if (project === undefined) throw new Error('The probe project did not load')
-				const file = resolve(scratch.path, `tmp/probe/map-${generation}.test.ts`)
-				writeFileSync(
-					file,
-					"import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
-					'utf8',
-				)
-				try {
-					const specification = project.createSpecification(file, undefined, 'threads')
-					const result = await vitest.runTestSpecifications([specification], false)
-					expect(result.testModules[0]?.state()).toBe('passed')
-					let unresolved = 0
-					let files = 0
-					for (const candidate of vitest.projects) {
-						for (const environment of Object.values(candidate.vite.environments)) {
-							const graph = environment.moduleGraph
-							const retained: unknown = Reflect.get(graph, '_unresolvedUrlToModuleMap')
-							if (!(retained instanceof Map)) {
-								throw new Error('Vite exposes no unresolved-url map')
+	it(
+		'gives a fresh Vitest generation the resident map sizes the first one had',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const samples: Array<{ readonly unresolved: number; readonly files: number }> = []
+			try {
+				for (let generation = 1; generation <= 2; generation += 1) {
+					const output = new PassThrough()
+					output.resume()
+					const vitest = await createVitest(
+						'test',
+						{
+							root: scratch.path,
+							config: resolve(scratch.path, 'vite.config.ts'),
+							watch: false,
+							run: true,
+							pool: 'threads',
+							reporters: [
+								{
+									onInit() {},
+									onTestRunEnd() {},
+								},
+							],
+						},
+						undefined,
+						{ stdout: output, stderr: output },
+					)
+					const project = vitest.projects.find((candidate) => candidate.name === 'probe')
+					if (project === undefined) throw new Error('The probe project did not load')
+					const file = resolve(scratch.path, `tmp/probe/map-${generation}.test.ts`)
+					writeFileSync(
+						file,
+						"import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+						'utf8',
+					)
+					try {
+						const specification = project.createSpecification(file, undefined, 'threads')
+						const result = await vitest.runTestSpecifications([specification], false)
+						expect(result.testModules[0]?.state()).toBe('passed')
+						let unresolved = 0
+						let files = 0
+						for (const candidate of vitest.projects) {
+							for (const environment of Object.values(candidate.vite.environments)) {
+								const graph = environment.moduleGraph
+								const retained: unknown = Reflect.get(graph, '_unresolvedUrlToModuleMap')
+								if (!(retained instanceof Map)) {
+									throw new Error('Vite exposes no unresolved-url map')
+								}
+								unresolved += retained.size
+								graph.onFileDelete(file)
+								graph.fileToModulesMap.delete(file)
+								files += graph.fileToModulesMap.size
 							}
-							unresolved += retained.size
-							graph.onFileDelete(file)
-							graph.fileToModulesMap.delete(file)
-							files += graph.fileToModulesMap.size
 						}
+						samples.push({ unresolved, files })
+					} finally {
+						rmSync(file, { force: true })
+						await vitest.close()
 					}
-					samples.push({ unresolved, files })
-				} finally {
-					rmSync(file, { force: true })
-					await vitest.close()
 				}
+				expect(samples[1]?.unresolved).toBe(samples[0]?.unresolved)
+				expect(samples[1]?.files).toBe(samples[0]?.files)
+			} finally {
+				scratch.destroy()
 			}
-			expect(samples[1]?.unresolved).toBe(samples[0]?.unresolved)
-			expect(samples[1]?.files).toBe(samples[0]?.files)
-		} finally {
-			scratch.destroy()
-		}
-	})
+		},
+	)
 
 	it(
-		'recycles the resident runner at its retention bound and evicts disk caches',
+		'recycles the resident runner after 64 written specifications and evicts disk caches',
 		{ timeout: 60_000 },
 		async () => {
 			const scratch = createScratch()
@@ -296,12 +306,36 @@ describe('runtime stage', () => {
 			const marker = `runtime-retention-${id}`
 			const stage = new RuntimeStage(scratch.path)
 			try {
-				for (let index = 1; index <= 65; index += 1) {
+				// An inspection that matches no project writes no specification, so it retains no URL
+				// and must not advance the bound. Leading with one moves the replacement a call
+				// earlier whenever the bound counts inspections instead.
+				await expect(
+					stage.inspect({
+						files: [],
+						test: {
+							path: 'tests/unmapped.test.ts',
+							text: "import { test } from 'vitest'\ntest('unmapped', () => {})\n",
+						},
+					}),
+				).resolves.toMatchObject({
+					findings: [
+						{
+							path: 'tests/unmapped.test.ts',
+							message: 'Vitest ran no tests because no configured project matches the test path',
+						},
+					],
+				})
+				for (let index = 1; index <= 64; index += 1) {
 					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`
 					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
 						findings: [],
 					})
 				}
+				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual(['warm'])
+				const last = `import { expect, test } from 'vitest'\ntest('passes ${marker}-65', () => expect(1).toBe(1))\n`
+				await expect(
+					stage.inspect({ files: [], test: { path, text: last } }),
+				).resolves.toMatchObject({ findings: [] })
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual([
 					'warm',
 					'warm',
@@ -346,9 +380,15 @@ describe('runtime stage', () => {
 				)
 			} finally {
 				await stage.destroy()
-				for (const file of readdirSync(resolve(ROOT, 'tmp/probe'))) {
-					if (file.includes(marker))
-						rmSync(resolve(ROOT, 'tmp/probe', file), { force: true, recursive: true })
+				// A fresh clone has no `tmp/probe`, and an unguarded read throws there and replaces
+				// whatever the inspection actually reported.
+				const directory = resolve(ROOT, 'tmp/probe')
+				if (existsSync(directory)) {
+					for (const file of readdirSync(directory)) {
+						if (file.includes(marker)) {
+							rmSync(resolve(directory, file), { force: true, recursive: true })
+						}
+					}
 				}
 			}
 		},

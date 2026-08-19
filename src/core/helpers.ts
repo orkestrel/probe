@@ -83,6 +83,10 @@ export function formatVerdict(verdict: Verdict): string {
  * token names the toolchain that produced it, so a receipt read away from its verdict still says
  * which compiler, linter, and runner stood behind it.
  *
+ * The case's condition counts every finding a stage reported, including one a stage raised about
+ * its own instrument rather than about the candidate's code. A case the instrument could not
+ * inspect end to end is not a clean case, so it earns no receipt.
+ *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
  * @returns The receipt token, or `undefined` when either condition fails

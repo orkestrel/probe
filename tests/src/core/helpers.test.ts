@@ -1,4 +1,4 @@
-import type { Check, Toolchain, Verdict } from '@src/core'
+import type { Check, Finding, Toolchain, Verdict } from '@src/core'
 import {
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
@@ -166,5 +166,46 @@ describe('core receipt helper', () => {
 		expect(
 			computeReceipt({ ...base, control: [{ stage: 'type', elapsed: 1, findings: [] }] }, 'type'),
 		).toBeUndefined()
+	})
+
+	it('refuses a receipt for a case whose stage reported a fault in its own instrument', () => {
+		const toolchain: Toolchain = {
+			typescript: '6.0.3',
+			oxlint: '1.78.0',
+			vitest: '4.1.10',
+		}
+		// The stage's own fault, not the candidate's: nothing here is a message about the code the
+		// case supplied, and the case still cannot be certified clean.
+		const fault: Finding = {
+			path: 'tests/src/core/greeting.test.ts',
+			message:
+				'Vitest could not delete the generated specification (EPERM: operation not permitted)',
+		}
+		const clean: readonly Check[] = PROBE_STAGES.map((stage) => ({
+			stage,
+			elapsed: 1,
+			findings: [],
+		}))
+		const faulted: readonly Check[] = clean.map((check) =>
+			check.stage === 'runtime' ? { ...check, findings: [fault] } : check,
+		)
+		const base: Verdict = {
+			id: '01J8Z0',
+			toolchain,
+			checks: faulted,
+			control: [
+				{
+					stage: 'runtime',
+					elapsed: 1,
+					findings: [{ path: 'tests/src/core/greeting.test.ts', message: 'expected 4 to be 5' }],
+				},
+			],
+			elapsed: 7,
+		}
+
+		expect(computeReceipt(base, 'runtime')).toBeUndefined()
+		expect(computeReceipt({ ...base, checks: clean }, 'runtime')).toBe(
+			'probe:01J8Z0:runtime:typescript@6.0.3:oxlint@1.78.0:vitest@4.1.10',
+		)
 	})
 })

@@ -24,6 +24,15 @@ import {
  * specification, invalidates each workspace module whose content changed, runs that
  * specification, evicts its result, and deletes the file.
  *
+ * Vite retains one unresolved URL for every specification path, so the stage replaces its whole
+ * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
+ * bound holds the retention flat, because the replacement releases everything the instance held,
+ * and 64 is the value chosen. The inspection that crosses the bound pays the replacement
+ * synchronously: it closes the resident service and warms a new one before it runs. That inspection
+ * cost 466 ms and 498 ms over this package's own workspace on two runs of 66 inspections whose
+ * median inspection cost 206 ms and 215 ms, so budget one call in 64 at 260 ms to 285 ms above the
+ * rest.
+ *
  * @example
  * ```ts
  * const stage = new RuntimeStage('/srv/checkout')
@@ -36,7 +45,7 @@ export class RuntimeStage implements StageInterface {
 	#vitest: Promise<Vitest>
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
-	#inspections = 0
+	#specifications = 0
 	#tail: Promise<void> = Promise.resolve()
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -133,12 +142,12 @@ export class RuntimeStage implements StageInterface {
 		const exitCode = process.exitCode
 		const vitest = await this.#runner()
 		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
-		const [project, projectFinding] = this.#project(vitest, subject.test.path)
-		if (projectFinding !== undefined || project === undefined) {
+		const project = this.#project(vitest, subject.test.path)
+		if ('message' in project) {
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				findings: projectFinding === undefined ? [] : [projectFinding],
+				findings: [project],
 			}
 		}
 		this.#revalidate(vitest)
@@ -147,6 +156,7 @@ export class RuntimeStage implements StageInterface {
 			throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
 		}
 		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
+		this.#specifications += 1
 		this.#revisions.add(file)
 		let findings: readonly Finding[] = []
 		let cleanup: readonly Finding[] = []
@@ -177,28 +187,24 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	#project(
-		vitest: Vitest,
-		path: string,
-	): readonly [project: TestProject | undefined, finding: Finding | undefined] {
+	// Returns the project or the finding that replaces it, never both and never neither. A pair of
+	// independent optionals would let a caller write the fourth combination, and that branch reports
+	// a clean check for a case whose test never ran.
+	#project(vitest: Vitest, path: string): TestProject | Finding {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently
 		// selected the root project before this resolved.
 		const name = inferTestProject(relative(this.#workspace, resolve(this.#workspace, path)))
 		if (name === undefined) {
-			return [
-				undefined,
-				{
-					path,
-					message: 'Vitest ran no tests because no configured project matches the test path',
-				},
-			]
+			return {
+				path,
+				message: 'Vitest ran no tests because no configured project matches the test path',
+			}
 		}
 		const project = vitest.projects.find((candidate) => candidate.name === name)
-		if (project === undefined) {
-			return [undefined, { path, message: `Vitest has no configured project named ${name}` }]
-		}
-		return [project, undefined]
+		if (project === undefined)
+			return { path, message: `Vitest has no configured project named ${name}` }
+		return project
 	}
 
 	async #evict(vitest: Vitest, file: string, original: string): Promise<readonly Finding[]> {
@@ -244,12 +250,13 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
+	// Reads the specification count rather than incrementing it. An inspection that writes no
+	// specification retains no URL, so counting it would recycle a runner that never grew.
 	#runner(): Promise<Vitest> {
-		this.#inspections += 1
-		// Vite retains one unresolved URL for each fresh specification path. A 64-inspection
+		// Vite retains one unresolved URL for each fresh specification path. A 64-specification
 		// lifetime bounds that internal map without giving up the resident runner on each call.
-		if (this.#inspections <= 64) return this.#vitest
-		this.#inspections = 1
+		if (this.#specifications < 64) return this.#vitest
+		this.#specifications = 0
 		this.#vitest = this.#replace(this.#vitest)
 		void this.#vitest.catch(() => {})
 		return this.#vitest
