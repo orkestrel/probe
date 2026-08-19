@@ -25,7 +25,7 @@ describe('bin entry', () => {
 	})
 
 	it(
-		'answers legacy and modern requests through the built stdio entry',
+		'answers both protocol eras without exposing worker output on stdout',
 		{ timeout: 60_000 },
 		async () => {
 			const modern = {
@@ -38,6 +38,59 @@ describe('bin entry', () => {
 				'io.modelcontextprotocol/clientInfo',
 				'io.modelcontextprotocol/protocolVersion',
 			])
+			const passing = {
+				project: 'configs/src/tsconfig.core.json',
+				case: {
+					files: [{ path: 'src/core/wire.ts', text: "export const VALUE = 'ok'\n" }],
+					test: {
+						path: 'tests/src/bin/wire-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+					},
+				},
+				control: {
+					files: [{ path: 'src/core/wire.ts', text: "export const VALUE: number = 'bad'\n" }],
+					test: {
+						path: 'tests/src/bin/wire-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+					},
+					stage: 'type',
+					reason: 'the source assigns a string to a number',
+				},
+			}
+			const withoutNewline = {
+				...passing,
+				case: {
+					...passing.case,
+					test: {
+						path: 'tests/src/bin/wire-without-newline-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
+					},
+				},
+				control: {
+					...passing.control,
+					test: {
+						path: 'tests/src/bin/wire-without-newline-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
+					},
+				},
+			}
+			const withNewline = {
+				...passing,
+				case: {
+					...passing.case,
+					test: {
+						path: 'tests/src/bin/wire-with-newline-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
+					},
+				},
+				control: {
+					...passing.control,
+					test: {
+						path: 'tests/src/bin/wire-with-newline-runtime.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
+					},
+				},
+			}
 			const requests = [
 				{
 					jsonrpc: '2.0',
@@ -57,32 +110,21 @@ describe('bin entry', () => {
 					method: 'tools/call',
 					params: {
 						name: 'prove',
-						arguments: {
-							project: 'configs/src/tsconfig.core.json',
-							case: {
-								files: [{ path: 'src/core/wire.ts', text: "export const VALUE = 'ok'\n" }],
-								test: {
-									path: 'tmp/probe/wire.test.ts',
-									text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-								},
-							},
-							control: {
-								files: [
-									{
-										path: 'src/core/wire.ts',
-										text: "export const VALUE: number = 'bad'\n",
-									},
-								],
-								test: {
-									path: 'tmp/probe/wire.test.ts',
-									text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-								},
-								stage: 'type',
-								reason: 'the source assigns a string to a number',
-							},
-						},
+						arguments: passing,
 						_meta: modern,
 					},
+				},
+				{
+					jsonrpc: '2.0',
+					id: 5,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: withoutNewline, _meta: modern },
+				},
+				{
+					jsonrpc: '2.0',
+					id: 6,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: withNewline, _meta: modern },
 				},
 			]
 			const child = spawn(
@@ -106,11 +148,11 @@ describe('bin entry', () => {
 				await waitForDelay(250)
 				child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
 				for await (const line of output) {
-					const start = line.indexOf('{')
-					if (start >= 0) lines.push(line.slice(start))
+					const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
+					if (frame.trim() !== '') lines.push(frame)
 					if (lines.length === requests.length) break
 				}
-				expect(lines).toHaveLength(4)
+				expect(lines).toHaveLength(6)
 				expect(Buffer.concat(errors).toString('utf8')).not.toContain('Error')
 				const responses: readonly unknown[] = lines.map((line) => JSON.parse(line))
 				expect(responses).toEqual(
@@ -144,6 +186,14 @@ describe('bin entry', () => {
 									}),
 								],
 							}),
+						}),
+						expect.objectContaining({
+							id: 5,
+							result: expect.objectContaining({ content: expect.any(Array) }),
+						}),
+						expect.objectContaining({
+							id: 6,
+							result: expect.objectContaining({ content: expect.any(Array) }),
 						}),
 					]),
 				)

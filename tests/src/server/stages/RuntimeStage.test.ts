@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +37,24 @@ describe('runtime stage', () => {
 		},
 	)
 
+	it('reports a finding when a test module executes nothing', { timeout: 60_000 }, async () => {
+		const stage = new RuntimeStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: 'tmp/probe/runtime-skipped.test.ts',
+					text: "import { describe, expect, test } from 'vitest'\ntest.skip('skips', () => expect(1).toBe(2))\ntest.todo('defers')\ndescribe.skip('group', () => { test('skips with its group', () => expect(1).toBe(2)) })\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([
+				{ path: 'tmp/probe/runtime-skipped.test.ts', message: 'Vitest ran no tests in the module' },
+			])
+		} finally {
+			await stage.destroy()
+		}
+	})
+
 	it(
 		'changes its verdict after an imported dependency changes on disk',
 		{ timeout: 60_000 },
@@ -66,22 +84,65 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it('refuses a test path outside every real Vitest project', { timeout: 60_000 }, async () => {
-		const stage = new RuntimeStage(ROOT)
-		try {
-			await expect(
-				stage.inspect({
+	it(
+		'reports a finding for a test path outside every real Vitest project',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const check = await stage.inspect({
 					files: [],
 					test: {
 						path: 'tests/unmapped.test.ts',
 						text: "import { test } from 'vitest'\ntest('unmapped', () => {})\n",
 					},
-				}),
-			).rejects.toThrow('Cannot infer a Vitest project for tests/unmapped.test.ts')
-		} finally {
-			await stage.destroy()
-		}
-	})
+				})
+				expect(check.findings).toStrictEqual([
+					{
+						path: 'tests/unmapped.test.ts',
+						message: 'Vitest ran no tests because no configured project matches the test path',
+					},
+				])
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
+
+	it(
+		'evicts every generated specification from resident and disk caches',
+		{ timeout: 60_000 },
+		async () => {
+			const id = randomUUID()
+			const path = `tmp/probe/runtime-retention-${id}.test.ts`
+			const marker = `runtime-retention-${id}`
+			const stage = new RuntimeStage(ROOT)
+			try {
+				for (let index = 1; index <= 15; index += 1) {
+					const text =
+						index === 15
+							? "import { describe, expect, test } from 'vitest'\ndescribe('first', () => { test('a', () => expect(1).toBe(1)); test('b', () => expect(2).toBe(2)) })\ndescribe('second', () => { test('c', () => expect(3).toBe(3)) })\n"
+							: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n"
+					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
+						findings: [],
+					})
+				}
+				const caches = readdirSync(resolve(ROOT, 'node_modules/.vite'), {
+					recursive: true,
+					encoding: 'utf8',
+				}).filter((file) => file.endsWith('results.json'))
+				const retained = caches.filter((file) =>
+					readFileSync(resolve(ROOT, 'node_modules/.vite', file), 'utf8').includes(marker),
+				)
+				expect(retained).toStrictEqual([])
+				expect(
+					readdirSync(resolve(ROOT, 'tmp/probe')).filter((file) => file.includes(marker)),
+				).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
 
 	it('abandons an inspection and destroys idempotently', { timeout: 60_000 }, async () => {
 		const stage = new RuntimeStage(ROOT)

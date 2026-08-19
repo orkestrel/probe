@@ -4,6 +4,7 @@ import type { TestProject, TestRunResult, Vitest } from 'vitest/node'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import {
 	createRevisionFile,
@@ -99,19 +100,26 @@ export class RuntimeStage implements StageInterface {
 			throw new Error('The runtime stage does not share the workspace Vitest installation')
 		}
 		const { createVitest } = await import('vitest/node')
-		return createVitest('test', {
-			root: this.#workspace,
-			config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
-			watch: false,
-			run: true,
-			pool: 'threads',
-			reporters: [
-				{
-					onInit() {},
-					onTestRunEnd() {},
-				},
-			],
-		})
+		const output = new PassThrough()
+		output.resume()
+		return createVitest(
+			'test',
+			{
+				root: this.#workspace,
+				config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
+				watch: false,
+				run: true,
+				pool: 'threads',
+				reporters: [
+					{
+						onInit() {},
+						onTestRunEnd() {},
+					},
+				],
+			},
+			undefined,
+			{ stdout: output, stderr: output },
+		)
 	}
 
 	async #inspect(subject: Case): Promise<Check> {
@@ -122,12 +130,24 @@ export class RuntimeStage implements StageInterface {
 		const exitCode = process.exitCode
 		const vitest = await this.#vitest
 		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		const project = this.#project(vitest, subject.test.path)
+		if (project === undefined) {
+			return {
+				stage: this.stage,
+				elapsed: Math.round(performance.now() - started),
+				findings: [
+					{
+						path: subject.test.path,
+						message: 'Vitest ran no tests because no configured project matches the test path',
+					},
+				],
+			}
+		}
 		this.#revalidate(vitest)
 		const file = createRevisionFile(this.#workspace, subject.test.path, randomUUID())
 		if (!existsSync(dirname(file))) {
 			throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
 		}
-		const project = this.#project(vitest, subject.test.path)
 		writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
 		this.#revisions.add(file)
 		try {
@@ -141,23 +161,59 @@ export class RuntimeStage implements StageInterface {
 			}
 		} finally {
 			process.exitCode = exitCode
-			vitest.state.clearFiles(project, [file])
-			vitest.clearSpecificationsCache(file)
-			vitest.invalidateFile(file)
 			if (existsSync(file)) unlinkSync(file)
+			await this.#evict(vitest, file)
 			this.#revisions.delete(file)
 		}
 	}
 
-	#project(vitest: Vitest, path: string): TestProject {
+	#project(vitest: Vitest, path: string): TestProject | undefined {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently
-		// selected the root project before this resolved — a project `invalidateFile` cannot reach.
+		// selected the root project before this resolved.
 		const name = inferTestProject(relative(this.#workspace, resolve(this.#workspace, path)))
-		if (name === undefined) throw new Error(`Cannot infer a Vitest project for ${path}`)
-		const project = vitest.projects.find((candidate) => candidate.name === name)
-		if (project === undefined) throw new Error(`The Vitest project ${name} does not exist`)
-		return project
+		if (name === undefined) return undefined
+		return vitest.projects.find((candidate) => candidate.name === name)
+	}
+
+	async #evict(vitest: Vitest, file: string): Promise<void> {
+		const ids: string[] = []
+		for (const [id, task] of vitest.state.idMap) {
+			const path = 'filepath' in task ? task.filepath : task.file.filepath
+			if (resolve(path) === resolve(file)) ids.push(id)
+		}
+		for (const id of ids) vitest.state.idMap.delete(id)
+		vitest.state.pathsSet.delete(file)
+		vitest.clearSpecificationsCache(file)
+		vitest.invalidateFile(file)
+		const graphs = vitest.projects.flatMap((project) =>
+			Object.values(project.vite.environments).map((environment) => environment.moduleGraph),
+		)
+		for (const graph of graphs) {
+			const modules = graph.getModulesByFile(file)
+			graph.onFileDelete(file)
+			if (modules === undefined) continue
+			for (const module of modules) {
+				for (const importer of module.importers) {
+					importer.importedModules.delete(module)
+					importer.acceptedHmrDeps.delete(module)
+				}
+				if (module.id !== null) graph.idToModuleMap.delete(module.id)
+				graph.urlToModuleMap.delete(module.url)
+			}
+			graph.fileToModulesMap.delete(file)
+		}
+		vitest.watcher.onFileDelete(file)
+		vitest.watcher.invalidates.delete(file)
+		vitest.cache.results.removeFromCache(relative(this.#workspace, file).replaceAll('\\', '/'))
+		await vitest.cache.results.writeToCache()
+		if (
+			vitest.state.filesMap.has(file) ||
+			ids.some((id) => vitest.state.idMap.has(id)) ||
+			graphs.some((graph) => graph.getModulesByFile(file) !== undefined)
+		) {
+			throw new Error(`Vitest retained the generated specification: ${file}`)
+		}
 	}
 
 	#revalidate(vitest: Vitest): void {
@@ -204,14 +260,35 @@ export class RuntimeStage implements StageInterface {
 	#findings(result: TestRunResult, file: string, original: string): readonly Finding[] {
 		const findings: Finding[] = []
 		for (const module of result.testModules) {
+			const before = findings.length
 			for (const error of module.errors()) findings.push(this.#finding(error, file, original))
 			for (const test of module.children.allTests('failed')) {
 				const errors = test.result().errors ?? []
 				for (const error of errors) findings.push(this.#finding(error, file, original))
 			}
-			if (module.state() === 'failed' && findings.length === 0) {
-				findings.push({ path: original, message: 'Vitest reported a failed test module' })
+			const state: string = module.state()
+			if (state === 'passed') continue
+			if (state === 'skipped') {
+				findings.push({ path: original, message: 'Vitest ran no tests in the module' })
+				continue
 			}
+			if (state === 'failed') {
+				if (findings.length === before) {
+					findings.push({ path: original, message: 'Vitest reported a failed test module' })
+				}
+				continue
+			}
+			if (state === 'pending' || state === 'queued') {
+				findings.push({
+					path: original,
+					message: `Vitest did not finish the test module (${state})`,
+				})
+				continue
+			}
+			findings.push({
+				path: original,
+				message: `Vitest reported an unrecognized test module state (${state})`,
+			})
 		}
 		for (const error of result.unhandledErrors) {
 			findings.push(this.#finding(error, file, original))

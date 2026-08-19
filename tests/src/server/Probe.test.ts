@@ -9,7 +9,7 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
 describe.sequential('probe', () => {
 	it(
-		'arms only after both resident hosts detect dependency changes and issues receipts selectively',
+		'issues receipts only when every stage executes cleanly and returns admitted path findings',
 		{ timeout: 60_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
@@ -21,6 +21,14 @@ describe.sequential('probe', () => {
 			const broken = {
 				path: 'src/core/probe-receipt.ts',
 				text: "export const VALUE: number = 'bad'\n",
+			}
+			const skipped = {
+				path: 'tmp/probe/probe-skipped.test.ts',
+				text: "import { describe, expect, test } from 'vitest'\ntest.skip('skips', () => expect(1).toBe(2))\ntest.todo('defers')\ndescribe.skip('group', () => { test('skips with its group', () => expect(1).toBe(2)) })\n",
+			}
+			const unmapped = {
+				path: 'tests/unmapped.test.ts',
+				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			try {
 				const issued = await probe.prove({
@@ -43,8 +51,38 @@ describe.sequential('probe', () => {
 						reason: 'this control is deliberately clean',
 					},
 				})
+				const unexecuted = await probe.prove({
+					project: 'configs/src/tsconfig.core.json',
+					case: { files: [clean], test: skipped },
+					control: {
+						files: [broken],
+						test: skipped,
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				})
+				const admitted = await probe.prove({
+					project: 'configs/src/tsconfig.core.json',
+					case: { files: [clean], test: unmapped },
+					control: {
+						files: [broken],
+						test: unmapped,
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				})
 				expect(issued.receipt).toMatch(/^probe:/)
 				expect(refused.receipt).toBeUndefined()
+				expect(unexecuted.receipt).toBeUndefined()
+				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
+					expect.objectContaining({ message: 'Vitest ran no tests in the module' }),
+				])
+				expect(admitted.receipt).toBeUndefined()
+				expect(admitted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
+					expect.objectContaining({
+						message: 'Vitest ran no tests because no configured project matches the test path',
+					}),
+				])
 			} finally {
 				await probe.destroy()
 			}
