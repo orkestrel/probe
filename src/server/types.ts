@@ -29,7 +29,11 @@ export interface StageInterface {
 	/**
 	 * Tears down the resident tool and releases its resources.
 	 *
-	 * @returns A promise that settles after teardown completes
+	 * @remarks
+	 * A stage may abandon an in-flight inspection rather than waiting behind it. The inspection may
+	 * reject as the owned tool closes.
+	 *
+	 * @returns A promise that settles after the resident tool releases its resources
 	 */
 	destroy(): Promise<void>
 }

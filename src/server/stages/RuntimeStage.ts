@@ -65,8 +65,8 @@ export class RuntimeStage implements StageInterface {
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#destroyed = true
-		this.#closing = this.#tail.then(async () => {
-			const vitest = await this.#vitest
+		this.#closing = this.#vitest.then(async (vitest) => {
+			void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
 			await vitest.close()
 			this.#modules.clear()
 		})

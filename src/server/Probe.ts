@@ -1,0 +1,229 @@
+import type {
+	Case,
+	Check,
+	Claim,
+	ProbeEventMap,
+	ProbeInterface,
+	ProbeOptions,
+	Toolchain,
+	Verdict,
+} from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { Emitter } from '@orkestrel/emitter'
+import { createTimeout } from '@orkestrel/timeout'
+import { computeReceipt } from '@src/core'
+import { resolveWorkspaceFile, resolveWorkspaceModule } from './helpers.js'
+import { LintStage } from './stages/LintStage.js'
+import { RuntimeStage } from './stages/RuntimeStage.js'
+import { TypeStage } from './stages/TypeStage.js'
+
+/**
+ * Answers claims through resident TypeScript, Oxlint, and Vitest stages.
+ *
+ * @remarks
+ * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
+ * control mutates an imported dependency and refuses service unless the runtime reports that
+ * change. Each runtime inspection has a coordinator-owned deadline that abandons and replaces a
+ * hung runtime stage.
+ *
+ * @example
+ * ```ts
+ * const probe = new Probe({ workspace: '/srv/checkout' })
+ * const verdict = await probe.prove(claim)
+ * await probe.destroy()
+ * ```
+ */
+export class Probe implements ProbeInterface {
+	readonly #workspace: string
+	readonly #deadline: number
+	readonly #emitter: Emitter<ProbeEventMap>
+	readonly #toolchain: Toolchain
+	readonly #type: TypeStage
+	readonly #lint: LintStage
+	#runtime: RuntimeStage
+	readonly #warmth: Promise<void>
+	#closing: Promise<void> | undefined
+	#destroyed = false
+
+	/**
+	 * Resolves the target toolchain and starts warming the resident stages.
+	 *
+	 * @param options - Workspace, deadline, and initial observation hooks
+	 */
+	constructor(options?: ProbeOptions) {
+		this.#workspace = options?.workspace ?? process.cwd()
+		this.#deadline = createTimeout({ ms: options?.deadline ?? 30_000 }).ms
+		this.#emitter = new Emitter({
+			...(options?.on === undefined ? {} : { on: options.on }),
+			...(options?.error === undefined ? {} : { error: options.error }),
+		})
+		this.#toolchain = Object.freeze({
+			typescript: this.#version('typescript'),
+			oxlint: this.#version('oxlint'),
+			vitest: this.#version('vitest'),
+		})
+		this.#type = new TypeStage(this.#workspace)
+		this.#lint = new LintStage(this.#workspace)
+		this.#runtime = new RuntimeStage(this.#workspace)
+		this.#warmth = this.#warm()
+	}
+
+	get emitter(): EmitterInterface<ProbeEventMap> {
+		return this.#emitter
+	}
+
+	get toolchain(): Toolchain {
+		return this.#toolchain
+	}
+
+	async prove(claim: Claim): Promise<Verdict> {
+		await this.#warmth
+		if (this.#destroyed) throw new Error('The probe has been destroyed')
+		const started = performance.now()
+		const id = randomUUID()
+		try {
+			const checks = Object.freeze(await this.#inspect(claim.case, claim))
+			const control = Object.freeze(await this.#inspect(claim.control, claim))
+			const basis: Verdict = {
+				id,
+				toolchain: this.#toolchain,
+				checks,
+				control,
+				elapsed: performance.now() - started,
+			}
+			const receipt = computeReceipt(basis, claim.control.stage)
+			const verdict: Verdict = receipt === undefined ? basis : { ...basis, receipt }
+			this.#emitter.emit('prove', verdict)
+			return verdict
+		} catch (error) {
+			this.#emitter.emit('error', error)
+			throw error
+		}
+	}
+
+	destroy(): Promise<void> {
+		if (this.#closing !== undefined) return this.#closing
+		this.#destroyed = true
+		this.#closing = this.#destroy()
+		return this.#closing
+	}
+
+	async #warm(): Promise<void> {
+		try {
+			await this.#arm()
+			this.#emitter.emit('arm', this.#toolchain)
+		} catch (error) {
+			this.#emitter.emit('error', error)
+			throw error
+		}
+	}
+
+	async #arm(): Promise<void> {
+		const id = randomUUID()
+		const directory = resolveWorkspaceFile(this.#workspace, 'tmp/probe')
+		const dependency = resolveWorkspaceFile(this.#workspace, `tmp/probe/arm-${id}.ts`)
+		const created = !existsSync(directory)
+		const path = `tmp/probe/arm-${id}.test.ts`
+		const test = {
+			path,
+			text: `import { SIGNAL } from './arm-${id}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated dependency', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
+		}
+		const claim: Claim = {
+			project: 'tsconfig.json',
+			case: { files: [], test },
+			control: {
+				files: [],
+				test,
+				stage: 'runtime',
+				reason: 'the imported dependency changed after the resident runtime cached it',
+			},
+		}
+		mkdirSync(directory, { recursive: true })
+		writeFileSync(dependency, "export const SIGNAL = 'before'\n", { encoding: 'utf8', flag: 'wx' })
+		try {
+			const before = await this.#inspect(claim.case, claim)
+			if (before.some((check) => check.findings.length > 0)) {
+				throw new Error('The probe boot control did not begin clean')
+			}
+			writeFileSync(dependency, "export const SIGNAL = 'after'\n", 'utf8')
+			const after = await this.#inspect(claim.control, claim)
+			const runtime = after.find((check) => check.stage === claim.control.stage)
+			if (runtime === undefined || runtime.findings.length === 0) {
+				throw new Error('The probe boot control did not detect a mutated dependency')
+			}
+		} finally {
+			rmSync(dependency, { force: true })
+			if (created) {
+				try {
+					rmdirSync(directory)
+				} catch {}
+			}
+		}
+	}
+
+	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
+		return Promise.all([
+			this.#type.inspect(subject),
+			this.#lint.inspect(subject),
+			this.#inspectRuntime(subject, claim),
+		])
+	}
+
+	async #inspectRuntime(subject: Case, claim: Claim): Promise<Check> {
+		const stage = this.#runtime
+		const timeout = createTimeout({ ms: this.#deadline })
+		timeout.start()
+		try {
+			return await Promise.race([
+				stage.inspect(subject),
+				new Promise<Check>((_resolve, reject) => {
+					timeout.signal.addEventListener(
+						'abort',
+						() => reject(new Error(`The runtime stage exceeded ${this.#deadline} ms`)),
+						{ once: true },
+					)
+				}),
+			])
+		} catch (error) {
+			if (!timeout.expired) throw error
+			this.#emitter.emit('expire', claim)
+			await this.#recycle(stage)
+			throw error
+		} finally {
+			timeout.clear()
+		}
+	}
+
+	async #recycle(stage: RuntimeStage): Promise<void> {
+		await stage.destroy()
+		if (this.#destroyed || this.#runtime !== stage) return
+		this.#runtime = new RuntimeStage(this.#workspace)
+	}
+
+	async #destroy(): Promise<void> {
+		try {
+			await this.#warmth
+		} catch {}
+		try {
+			await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])
+		} finally {
+			this.#emitter.destroy()
+		}
+	}
+
+	#version(name: string): string {
+		const path = resolveWorkspaceModule(this.#workspace, `${name}/package.json`)
+		const manifest: unknown = JSON.parse(readFileSync(path, 'utf8'))
+		if (
+			typeof manifest !== 'object' ||
+			manifest === null ||
+			!('version' in manifest) ||
+			typeof manifest.version !== 'string'
+		) {
+			throw new Error(`${name} publishes no readable version`)
+		}
+		return manifest.version
+	}
+}
