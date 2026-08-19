@@ -14,6 +14,7 @@ import {
 	isToolchain,
 	isVerdict,
 } from '@src/core'
+import { createHostileValues } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
 
 describe('core guards', () => {
@@ -102,7 +103,7 @@ describe('core guards', () => {
 		const claim: Claim = { project: 'configs/src/tsconfig.core.json', case: subject, control }
 		const compiled = compileGuard(CLAIM_SHAPE)
 		const nullPrototype = Object.assign(Object.create(null), claim)
-		const throwingProxy = new Proxy({}, Object.create(WeakMap.prototype))
+		const hostileValues = createHostileValues()
 
 		expect(isClaim(claim), 'valid claim').toBe(compiled(claim))
 		expect(isClaim({ ...claim, project: '' }), 'empty project').toBe(
@@ -147,7 +148,9 @@ describe('core guards', () => {
 		expect(isClaim([]), 'array').toBe(compiled([]))
 		expect(isClaim('claim'), 'string').toBe(compiled('claim'))
 		expect(isClaim(nullPrototype), 'null-prototype object').toBe(compiled(nullPrototype))
-		expect(isClaim(throwingProxy), 'throwing proxy').toBe(compiled(throwingProxy))
+		for (const [index, value] of hostileValues.entries()) {
+			expect(isClaim(value), `hostile value ${index}`).toBe(compiled(value))
+		}
 	})
 
 	it('keeps the frozen stage sequence in execution order', () => {
