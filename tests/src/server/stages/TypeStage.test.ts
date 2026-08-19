@@ -1,5 +1,5 @@
 import { Session } from 'node:inspector/promises'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -97,6 +97,120 @@ describe('type stage', () => {
 			}
 		},
 	)
+
+	it.each(['first', 'middle', 'last'])(
+		'removes every applied overlay when an escaping source is %s',
+		{ timeout: 60_000 },
+		async (position) => {
+			const id = randomUUID()
+			const stem = `type-overlay-${position}-${id}`
+			const testPath = `tmp/probe/${stem}.ts`
+			const firstPath = `tmp/probe/${stem}-first.ts`
+			const secondPath = `tmp/probe/${stem}-second.ts`
+			const laterPath = `tmp/probe/${stem}-later.test.ts`
+			const testFile = resolve(ROOT, testPath)
+			const firstFile = resolve(ROOT, firstPath)
+			const secondFile = resolve(ROOT, secondPath)
+			const diskTest = "export const TEST_SIGNAL = 'disk'\n"
+			const diskFirst = "export const FIRST_SIGNAL = 'disk'\n"
+			const diskSecond = "export const SECOND_SIGNAL = 'disk'\n"
+			const first = { path: firstPath, text: "export const FIRST_SIGNAL = 'overlay'\n" }
+			const second = { path: secondPath, text: "export const SECOND_SIGNAL = 'overlay'\n" }
+			const escaping = { path: '../outside.ts', text: 'export {}\n' }
+			const files =
+				position === 'first'
+					? [escaping, first, second]
+					: position === 'middle'
+						? [first, escaping, second]
+						: [first, second, escaping]
+			const stage = new TypeStage(ROOT)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			writeFileSync(testFile, diskTest, 'utf8')
+			writeFileSync(firstFile, diskFirst, 'utf8')
+			writeFileSync(secondFile, diskSecond, 'utf8')
+			try {
+				await expect(
+					stage.inspect({
+						files,
+						test: { path: testPath, text: "export const TEST_SIGNAL = 'overlay'\n" },
+					}),
+				).rejects.toThrow('Path escapes the workspace: ../outside.ts')
+				const later = await stage.inspect({
+					files: [],
+					test: {
+						path: laterPath,
+						text: `import { TEST_SIGNAL } from './${stem}.js'\nimport { FIRST_SIGNAL } from './${stem}-first.js'\nimport { SECOND_SIGNAL } from './${stem}-second.js'\nconst TEST: 'disk' = TEST_SIGNAL\nconst FIRST: 'disk' = FIRST_SIGNAL\nconst SECOND: 'disk' = SECOND_SIGNAL\nvoid TEST\nvoid FIRST\nvoid SECOND\n`,
+					},
+				})
+				expect(readFileSync(testFile, 'utf8')).toBe(diskTest)
+				expect(readFileSync(firstFile, 'utf8')).toBe(diskFirst)
+				expect(readFileSync(secondFile, 'utf8')).toBe(diskSecond)
+				expect(later.findings).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+				rmSync(testFile, { force: true })
+				rmSync(firstFile, { force: true })
+				rmSync(secondFile, { force: true })
+			}
+		},
+	)
+
+	it('releases candidate versions after every inspection', { timeout: 60_000 }, async () => {
+		const id = randomUUID()
+		const stage = new TypeStage(ROOT)
+		const session = new Session()
+		try {
+			for (const sequence of [1, 2, 3]) {
+				await stage.inspect({
+					files: [
+						{
+							path: `src/core/version-release-${id}-${sequence}.ts`,
+							text: `export const VALUE = ${sequence}\n`,
+						},
+					],
+					test: {
+						path: `tests/src/core/version-release-${id}-${sequence}.test.ts`,
+						text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
+					},
+				})
+			}
+			Reflect.set(globalThis, '__probeTypeStage', stage)
+			session.connect()
+			await session.post('Runtime.enable')
+			const evaluated = await session.post('Runtime.evaluate', {
+				expression: 'globalThis.__probeTypeStage',
+			})
+			const stageId = evaluated.result.objectId
+			if (stageId === undefined) throw new Error('The debugger did not expose the type stage')
+			const properties: unknown = await session.post('Runtime.getProperties', {
+				objectId: stageId,
+				ownProperties: true,
+			})
+			if (!isRecord(properties) || !Array.isArray(properties.privateProperties)) {
+				throw new Error('The debugger did not expose private properties')
+			}
+			const versions = properties.privateProperties.find(
+				(property: unknown) => isRecord(property) && property.name === '#versions',
+			)
+			if (!isRecord(versions) || !isRecord(versions.value)) {
+				throw new Error('The debugger did not expose the type stage version map')
+			}
+			const versionsId = versions.value.objectId
+			if (typeof versionsId !== 'string') {
+				throw new Error('The debugger exposed an invalid version map identity')
+			}
+			const size = await session.post('Runtime.callFunctionOn', {
+				objectId: versionsId,
+				functionDeclaration: 'function () { return this.size }',
+				returnByValue: true,
+			})
+			expect(size.result.value).toBe(0)
+		} finally {
+			session.disconnect()
+			Reflect.deleteProperty(globalThis, '__probeTypeStage')
+			await stage.destroy()
+		}
+	})
 
 	it('bounds equivalent and caller-named project services', { timeout: 60_000 }, async () => {
 		const id = randomUUID()

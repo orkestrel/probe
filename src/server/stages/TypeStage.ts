@@ -81,10 +81,11 @@ export class TypeStage implements StageInterface {
 		const started = performance.now()
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw new Error('The type stage has been destroyed')
-		this.#revision += 1
-		this.#overlay(subject.test)
-		for (const source of subject.files) this.#overlay(source)
+		const applied: string[] = []
 		try {
+			this.#revision += 1
+			this.#overlay(subject.test, applied)
+			for (const source of subject.files) this.#overlay(source, applied)
 			const findings: Finding[] = []
 			const root = this.#service(typescript, 'tsconfig.json')
 			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
@@ -99,9 +100,9 @@ export class TypeStage implements StageInterface {
 				findings,
 			}
 		} finally {
-			this.#overlays.delete(resolveWorkspaceFile(this.#workspace, subject.test.path))
-			for (const source of subject.files) {
-				this.#overlays.delete(resolveWorkspaceFile(this.#workspace, source.path))
+			for (const path of applied) {
+				this.#overlays.delete(path)
+				this.#versions.delete(path)
 			}
 		}
 	}
@@ -159,8 +160,9 @@ export class TypeStage implements StageInterface {
 		return projects
 	}
 
-	#overlay(source: Source): void {
+	#overlay(source: Source, applied: string[]): void {
 		const path = resolveWorkspaceFile(this.#workspace, source.path)
+		applied.push(path)
 		this.#overlays.set(path, source.text)
 		this.#versions.set(path, this.#revision)
 	}
