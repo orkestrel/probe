@@ -18,6 +18,7 @@ import { Emitter } from '@orkestrel/emitter'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import { computeReceipt, formatCheck } from '@src/core'
+import { peerDependencies } from '../../package.json' with { type: 'json' }
 import { readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
 import { LintStage } from './stages/LintStage.js'
 import { RuntimeStage } from './stages/RuntimeStage.js'
@@ -117,6 +118,7 @@ export class Probe implements ProbeInterface {
 
 	async prove(claim: Claim): Promise<Verdict> {
 		try {
+			this.#support()
 			await this.#arming
 			if (this.#destroyed) throw new Error('The probe has been destroyed')
 			const started = performance.now()
@@ -334,5 +336,15 @@ export class Probe implements ProbeInterface {
 			throw new Error(`${name} publishes no readable version`)
 		}
 		return version
+	}
+
+	#support(): void {
+		const version = this.#toolchain.typescript
+		const range = peerDependencies.typescript
+		const supported = /^\^(\d+)\./u.exec(range)?.[1]
+		const found = /^(\d+)\./u.exec(version)?.[1]
+		if (supported === undefined || found !== supported) {
+			throw new Error(`The supported TypeScript range is ${range}; found ${version}`)
+		}
 	}
 }

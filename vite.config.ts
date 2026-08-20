@@ -173,6 +173,22 @@ export const config = (options?: UserConfig): UserConfig =>
 		options ?? {},
 	)
 
+export const distribution = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'distribution', color: 'cyan' },
+				include: ['tests/distribution.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+				testTimeout: 180_000,
+			},
+		},
+		options ?? {},
+	)
+
 // A workbench, not a proof. No gate selects this project.
 export const probe = (options?: UserConfig): UserConfig =>
 	mergeConfig(
@@ -192,6 +208,6 @@ export const probe = (options?: UserConfig): UserConfig =>
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcCore, srcServer, srcBin, policy, config, probe],
+		projects: [srcCore, srcServer, srcBin, policy, config, distribution, probe],
 	},
 })

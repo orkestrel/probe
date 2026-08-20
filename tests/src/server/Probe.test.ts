@@ -170,6 +170,53 @@ describe.sequential('probe', () => {
 		}
 	})
 
+	it('names an unsupported TypeScript installation before entering the compiler', async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.write(
+			'node_modules/typescript/package.json',
+			'{"name":"typescript","version":"7.0.2","type":"module","exports":{".":"./index.js","./package.json":"./package.json"}}\n',
+		)
+		scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
+		scratch.write(
+			'node_modules/oxlint/package.json',
+			'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
+		)
+		scratch.write('node_modules/oxlint/fixture.js', 'process.exit(1)\n')
+		scratch.write(
+			'node_modules/vitest/package.json',
+			'{"name":"vitest","version":"4.1.11","type":"module","exports":{"./node":"./node.js","./package.json":"./package.json"}}\n',
+		)
+		scratch.write('node_modules/vitest/node.js', 'export const createVitest = undefined\n')
+		const probe = new Probe({ workspace: scratch.path })
+		try {
+			await expect(
+				probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probe/unsupported.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probe/unsupported.test.ts',
+							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						},
+						stage: 'runtime',
+						reason: 'the test throws',
+					},
+				}),
+			).rejects.toThrow('The supported TypeScript range is ^6.0.0; found 7.0.2')
+		} finally {
+			await probe.destroy()
+			scratch.destroy()
+		}
+	})
+
 	it(
 		'preserves the host exit code through arming and every proof',
 		{ timeout: 60_000 },
