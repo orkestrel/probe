@@ -1,15 +1,27 @@
 import type { Check, Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { Probe, readWorkspaceManifest } from '@src/server'
+import { matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+
+function waitForExit(child: ChildProcess): Promise<void> {
+	return new Promise<void>((settle, reject) => {
+		child.once('error', reject)
+		child.once('exit', (code) => {
+			if (code === 0) settle()
+			else reject(new Error(`Cache reader exited with code ${code}`))
+		})
+	})
+}
 
 // A protocol-faithful Oxlint language server that records every document session it is given. It
 // appends one line per `didOpen` carrying the number of documents open at that moment, waits, then
@@ -497,7 +509,7 @@ describe.sequential('probe', () => {
 				expect(outcomes[0]).toMatchObject({
 					status: 'rejected',
 					reason: expect.objectContaining({
-						origin: 'instrument',
+						origin: 'claimant',
 						code: 'deadline',
 						message: 'The runtime stage exceeded 6000 ms',
 					}),
@@ -515,6 +527,86 @@ describe.sequential('probe', () => {
 				expect(failures.count).toBe(1)
 			} finally {
 				await probe.destroy()
+			}
+		},
+	)
+
+	it(
+		'attributes a deadline in runtime cleanup to the instrument',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["vitest/globals"]},"include":["src/**/*.ts","tmp/**/*.ts"]}\n',
+			)
+			scratch.write(
+				'configs/src/tsconfig.core.json',
+				'{"extends":"../../tsconfig.json","compilerOptions":{"types":[]},"include":["../../src/core/**/*.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nconst project = { test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ cacheDir: '.probe-cache', test: { projects: [project] } })\n",
+			)
+			const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
+			let cache: string | undefined
+			try {
+				const ordinary: Claim = {
+					project: 'configs/src/tsconfig.core.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probe/ordinary.test.ts',
+							text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+						},
+					},
+					control: {
+						files: [{ path: 'src/core/broken.ts', text: "export const VALUE: number = 'bad'\n" }],
+						test: {
+							path: 'tmp/probe/ordinary.test.ts',
+							text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+						},
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				}
+				await probe.prove(ordinary)
+				const cacheRoot = resolve(scratch.path, '.probe-cache')
+				const entries = readdirSync(cacheRoot, { recursive: true, encoding: 'utf8' })
+				const result = entries.find((entry) => entry.endsWith('results.json'))
+				if (result === undefined) throw new Error('Vitest wrote no results cache')
+				cache = resolve(cacheRoot, result)
+				rmSync(cache, { force: true })
+				const fifo = spawnSync('mkfifo', [cache])
+				if (fifo.status !== 0) throw new Error('The host cannot create a FIFO for the cache stall')
+				const stalled = probe.prove(ordinary)
+				const outcome = Promise.allSettled([stalled])
+				await waitForDelay(6_500)
+				const closing = probe.destroy()
+				const reader = spawn(process.execPath, [
+					'-e',
+					"const fs = require('node:fs'); fs.readFileSync(process.argv[1]); fs.readFileSync(process.argv[1])",
+					cache,
+				])
+				await waitForExit(reader)
+				expect(await outcome).toMatchObject([
+					{
+						status: 'rejected',
+						reason: {
+							origin: 'instrument',
+							code: 'deadline',
+							message: 'The runtime stage exceeded 6000 ms',
+						},
+					},
+				])
+				await closing
+			} finally {
+				if (cache !== undefined) rmSync(cache, { force: true })
+				await probe.destroy()
+				scratch.destroy()
 			}
 		},
 	)
@@ -789,6 +881,74 @@ describe.sequential('probe', () => {
 					expect.stringMatching(new RegExp(`^arm-runtime\\.${revision}\\.ts$`)),
 					expect.stringMatching(new RegExp(`^arm-type\\.${revision}\\.ts$`)),
 				])
+				for (const name of observed) {
+					const match = /\.probe-(.+)\.ts$/u.exec(name)
+					const marked = match?.[1]
+					if (marked === undefined) throw new Error(`Boot dependency carries no revision: ${name}`)
+					expect(matchesSpecification(readFileSync(resolve(directory, name), 'utf8'), marked)).toBe(
+						true,
+					)
+				}
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'refuses a receipt when the case reaches a string-declared runtime project',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["vitest/globals"]},"include":["src/**/*.ts","tests/**/*.ts","tmp/**/*.ts"]}\n',
+			)
+			scratch.write(
+				'configs/src/tsconfig.core.json',
+				'{"extends":"../../tsconfig.json","compilerOptions":{"types":[]},"include":["../../src/core/**/*.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nconst probe = { test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ test: { projects: [probe, './vitest.src.config.ts'] } })\n",
+			)
+			scratch.write(
+				'vitest.src.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { name: { label: 'src:core' }, include: ['tests/src/core/**/*.test.ts'], environment: 'node' } })\n",
+			)
+			const id = randomUUID()
+			const claim: Claim = {
+				project: 'configs/src/tsconfig.core.json',
+				case: {
+					files: [{ path: `src/core/string-${id}.ts`, text: 'export const VALUE = 1\n' }],
+					test: {
+						path: `tests/src/core/string-${id}.test.ts`,
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+				},
+				control: {
+					files: [
+						{ path: `src/core/string-${id}.ts`, text: "export const VALUE: number = 'bad'\n" },
+					],
+					test: {
+						path: `tests/src/core/string-${id}.test.ts`,
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+					stage: 'type',
+					reason: 'the source assigns a string to a number',
+				},
+			}
+			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			try {
+				const verdict = await probe.prove(claim)
+				expect(verdict.checks.flatMap((check) => check.findings)).toEqual([
+					expect.objectContaining({ origin: 'instrument', path: claim.case.test.path }),
+				])
+				expect(verdict.receipt).toBeUndefined()
 			} finally {
 				await probe.destroy()
 				scratch.destroy()

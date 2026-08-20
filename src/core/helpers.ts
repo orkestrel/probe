@@ -101,7 +101,7 @@ export function formatVerdict(verdict: Verdict): string {
  *
  * @remarks
  * A receipt is issued on these conditions together: both phases report one check per stage, the
- * case carries no claimant finding, the control carries at least one `origin: 'claimant'` finding
+ * case carries no finding, the control carries at least one `origin: 'claimant'` finding
  * at the stage it declared, and every other control stage carries no claimant finding. A control
  * that fails somewhere else has falsified the instrument rather than the claim, so no receipt is
  * issued for it.
@@ -124,7 +124,8 @@ export function formatVerdict(verdict: Verdict): string {
  * total for a workspace-relative project path containing either character.
  *
  * An `origin: 'instrument'` finding in either phase means the inspection did not complete and
- * refuses the receipt. A workspace finding does not decide whether the claimant's candidate broke.
+ * refuses the receipt. A workspace finding in the control does not decide whether the claimant's
+ * candidate broke, while one in the case still means that the case did not run clean.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
@@ -143,9 +144,7 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 			verdict.checks.some((check) => check.stage === name) &&
 			verdict.control.some((check) => check.stage === name),
 	)
-	const clean = verdict.checks.every((check) =>
-		check.findings.every((finding) => finding.origin !== 'claimant'),
-	)
+	const clean = verdict.checks.every((check) => check.findings.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
 	const broke = declared?.findings.some((finding) => finding.origin === 'claimant') ?? false
 	const faulted =

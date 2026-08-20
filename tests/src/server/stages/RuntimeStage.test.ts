@@ -161,7 +161,7 @@ describe('runtime stage', () => {
 
 			expect(check.findings).toEqual([
 				expect.objectContaining({
-					origin: 'instrument',
+					origin: 'workspace',
 					path: 'tmp/probe/escape.test.ts',
 					message: expect.stringContaining('symbolic link'),
 				}),
@@ -546,28 +546,32 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it('reports a write failure as an instrument finding', { timeout: 60_000 }, async () => {
-		const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
-		const stage = new RuntimeStage(ROOT)
-		try {
-			const check = await stage.inspect({
-				files: [],
-				test: {
-					path,
-					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-				},
-			})
-			expect(check.findings).toEqual([
-				expect.objectContaining({
-					origin: 'instrument',
-					path,
-					message: expect.stringContaining('ENAMETOOLONG'),
-				}),
-			])
-		} finally {
-			await stage.destroy()
-		}
-	})
+	it(
+		'reports a target path inspection failure as a workspace finding',
+		{ timeout: 60_000 },
+		async () => {
+			const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path,
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				})
+				expect(check.findings).toEqual([
+					expect.objectContaining({
+						origin: 'workspace',
+						path,
+						message: expect.stringContaining('The workspace path cannot be inspected'),
+					}),
+				])
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
 
 	it(
 		'runs a directly imported candidate without changing its disk file',
@@ -663,7 +667,7 @@ describe('runtime stage', () => {
 			})
 			expect(check.findings).toStrictEqual([
 				{
-					origin: 'workspace',
+					origin: 'instrument',
 					path: 'tmp/probe/string.test.ts',
 					message:
 						'The runtime stage cannot instrument the string-declared Vitest project probe because its configuration carries no runtime overlay plugin',
@@ -1182,15 +1186,16 @@ describe('runtime stage', () => {
 			`${departed.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, arming), 'export type Signal = string\n')
-		const abandonedRevision = `${departed.pid}-${randomUUID()}`
-		const abandoned = createRevisionFile(
+		const dependencyRevision = `${departed.pid}-${randomUUID()}`
+		const specificationRevision = `${departed.pid}-${randomUUID()}`
+		const boot = createRevisionFile(
 			scratch.path,
-			'tmp/probe/arm-runtime.ts',
-			abandonedRevision,
+			`tmp/probe/arm-runtime.probe-${dependencyRevision}.test.ts`,
+			specificationRevision,
 		)
 		scratch.write(
-			relative(scratch.path, abandoned),
-			formatSpecification("export const SIGNAL = 'before'\n", abandonedRevision),
+			relative(scratch.path, boot),
+			formatSpecification("export const SIGNAL = 'before'\n", specificationRevision),
 		)
 		const serving = createRevisionFile(
 			scratch.path,
@@ -1203,7 +1208,9 @@ describe('runtime stage', () => {
 			expect(existsSync(orphan), 'a marked specification whose writer is gone').toBe(false)
 			expect(existsSync(live), "a live neighbour's specification").toBe(true)
 			expect(existsSync(arming), "a caller's unmarked file at a boot path").toBe(true)
-			expect(existsSync(abandoned), 'a marked boot dependency whose writer is gone').toBe(false)
+			expect(existsSync(boot), 'a marked boot-derived specification whose writer is gone').toBe(
+				false,
+			)
 			expect(existsSync(serving), "a live neighbour's boot dependency").toBe(true)
 			expect(existsSync(authored), "a developer's own file outside the workbench").toBe(true)
 			expect(existsSync(drafted), "a developer's own file inside the workbench").toBe(true)

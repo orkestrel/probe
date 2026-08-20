@@ -345,7 +345,7 @@ describe('guides fences', () => {
 		const origins = new Set(rows.map((row) => row[1] ?? ''))
 		const codes = new Set(rows.map((row) => row[2] ?? ''))
 		expect([...origins].sort()).toStrictEqual([...core.ORIGINS].sort())
-		for (const code of codes) expect(core.PROBE_ERROR_CODES).toContain(code)
+		expect([...codes].sort()).toStrictEqual([...core.PROBE_ERROR_CODES].sort())
 	})
 
 	// The guide states what `verdict.digest` covers. `prove` computes it with `computeDigest` over

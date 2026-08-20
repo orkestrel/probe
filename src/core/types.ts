@@ -263,7 +263,7 @@ export interface Project {
  * A verdict exists only when every stage ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when the case reported no
- * claimant finding, the control reported an `origin: 'claimant'` finding at the stage it declared,
+ * finding, the control reported an `origin: 'claimant'` finding at the stage it declared,
  * every other control stage reported no claimant finding, and neither phase reported an
  * `origin: 'instrument'` finding.
  *

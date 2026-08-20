@@ -48,7 +48,7 @@ import { Overlay } from '../Overlay.js'
  * @remarks
  * Construction starts Vitest with the threads pool and instruments each inline or function-declared
  * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
- * string-declared project reports a workspace finding because its project server carries no runtime
+ * string-declared project reports an instrument finding because its project server carries no runtime
  * overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
  * workspace module whose disk content or candidate revision changed, runs that specification,
  * evicts its result, and deletes the file. Clearing the overlay makes the next snapshot differ from
@@ -66,7 +66,7 @@ import { Overlay } from '../Overlay.js'
  * A failure Vitest reported about the candidate carries `origin: 'claimant'`. An unmapped caller
  * test or a test whose named project is absent is also a claimant failure with `code: 'missing'`.
  * Failures in the stage's own machinery carry `origin: 'instrument'`. A string-declared project
- * that cannot install the overlay is a workspace finding.
+ * that cannot install the overlay is an instrument finding because no runtime inspection ran.
  *
  * @example
  * ```ts
@@ -146,12 +146,13 @@ export class RuntimeStage implements StageInterface {
 			this.#revisions.add(file)
 			let findings: readonly Finding[] = []
 			let cleanup: readonly Finding[] = []
+			const task = project.createSpecification(file, undefined, 'threads')
+			this.#progress += 1
 			try {
-				const task = project.createSpecification(file, undefined, 'threads')
 				const result = await vitest.runTestSpecifications([task], false)
-				this.#progress += 1
 				findings = this.#findings(result, file, subject.test.path)
 			} finally {
+				this.#progress -= 1
 				process.exitCode = exitCode
 				this.#revisions.delete(file)
 				cleanup = await this.#evict(vitest, file)
@@ -361,8 +362,8 @@ export class RuntimeStage implements StageInterface {
 			// declaration asked for. `tmp` is ignored by version control and the coordinator's boot
 			// tidies away the workbench it created, so the path the convention names is absent in a
 			// fresh checkout of a target: a stage that refused over the absence alone refused the first
-			// claim of every consumer. A directory the host will not create still refuses, through the
-			// same instrument finding a failed write reports.
+			// claim of every consumer. A directory the host will not create still refuses through the
+			// finding a failed write reports.
 			mkdirSync(dirname(file), { recursive: true })
 			resolveWorkspaceFile(this.#workspace, target, true)
 			// The marker goes in the file rather than in its name alone, because the name is the
@@ -376,7 +377,10 @@ export class RuntimeStage implements StageInterface {
 		})
 		if (outcome.success) return outcome.value
 		return {
-			origin: 'instrument',
+			origin:
+				outcome.error instanceof ProbeError && outcome.error.origin === 'workspace'
+					? 'workspace'
+					: 'instrument',
 			path: test.path,
 			message: `The runtime stage could not write the generated specification (${messageFromUnknown(outcome.error)})`,
 		}
@@ -412,7 +416,7 @@ export class RuntimeStage implements StageInterface {
 			!project.vite.config.plugins.some((plugin) => plugin.name === 'orkestrel-runtime-overlay')
 		) {
 			return {
-				origin: 'workspace',
+				origin: 'instrument',
 				path,
 				message: `The runtime stage cannot instrument the string-declared Vitest project ${name} because its configuration carries no runtime overlay plugin`,
 			}
@@ -529,10 +533,12 @@ export class RuntimeStage implements StageInterface {
 	// stays where it is, whoever wrote it.
 	#sweep(): void {
 		for (const path of this.#walk()) {
-			const match =
-				/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.|$)/u.exec(
-					basename(path),
-				)
+			const matches = [
+				...basename(path).matchAll(
+					/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.|$)/gu,
+				),
+			]
+			const match = matches.at(-1)
 			const revision = match?.[1]
 			const owner = match?.[2]
 			if (revision === undefined || owner === undefined) continue

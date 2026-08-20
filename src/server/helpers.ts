@@ -38,7 +38,8 @@ export function normalizePath(path: string): string {
  * @param mutate - If `true`, refuses a symbolic link in an existing descendant; if `false`,
  * resolves lexically. Default: `false`
  * @returns The absolute contained path
- * @throws When the path resolves outside the workspace or mutation would cross a symbolic link
+ * @throws When the path resolves outside the workspace, mutation would cross a symbolic link, or
+ * the target tree cannot be inspected
  *
  * @example
  * ```ts
@@ -60,39 +61,49 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		})
 	}
 	if (!mutate) return file
-	const canonical = realpathSync(root)
-	let descendant = root
-	for (const segment of path.split(sep)) {
-		descendant = resolve(descendant, segment)
-		const outcome = attempt(() => lstatSync(descendant))
-		if (!outcome.success) {
-			const error = outcome.error
-			if (
-				typeof error === 'object' &&
-				error !== null &&
-				'code' in error &&
-				(error.code === 'ENOENT' || error.code === 'ENOTDIR')
-			) {
-				break
+	try {
+		const canonical = realpathSync(root)
+		let descendant = root
+		for (const segment of path.split(sep)) {
+			descendant = resolve(descendant, segment)
+			const outcome = attempt(() => lstatSync(descendant))
+			if (!outcome.success) {
+				const error = outcome.error
+				if (
+					typeof error === 'object' &&
+					error !== null &&
+					'code' in error &&
+					(error.code === 'ENOENT' || error.code === 'ENOTDIR')
+				) {
+					break
+				}
+				throw error
 			}
-			throw error
+			if (outcome.value.isSymbolicLink()) {
+				throw new ProbeError(`Path crosses a symbolic link: ${target}`, {
+					origin: 'workspace',
+					code: 'refused',
+					context: { path: target },
+				})
+			}
+			const resolved = realpathSync(descendant)
+			const remainder = relative(canonical, resolved)
+			if (remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) {
+				throw new ProbeError(`Path escapes the workspace: ${target}`, {
+					origin: 'claimant',
+					code: 'refused',
+					context: { path: target },
+				})
+			}
 		}
-		if (outcome.value.isSymbolicLink()) {
-			throw new ProbeError(`Path crosses a symbolic link: ${target}`, {
-				origin: 'claimant',
-				code: 'refused',
-				context: { path: target },
-			})
-		}
-		const resolved = realpathSync(descendant)
-		const remainder = relative(canonical, resolved)
-		if (remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) {
-			throw new ProbeError(`Path escapes the workspace: ${target}`, {
-				origin: 'claimant',
-				code: 'refused',
-				context: { path: target },
-			})
-		}
+	} catch (error) {
+		if (error instanceof ProbeError) throw error
+		throw new ProbeError(`The workspace path cannot be inspected: ${target}`, {
+			origin: 'workspace',
+			code: 'malformed',
+			context: { path: target },
+			cause: error,
+		})
 	}
 	return file
 }

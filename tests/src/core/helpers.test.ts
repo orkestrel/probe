@@ -361,7 +361,7 @@ describe('core receipt helper', () => {
 		expect(computeReceipt(base, 'type')).toBeUndefined()
 	})
 
-	it('permits workspace messages outside the claimant failure', () => {
+	it('refuses a workspace finding in the case and permits one in the control', () => {
 		const workspace: Finding = {
 			origin: 'workspace',
 			path: 'tsconfig.json',
@@ -385,7 +385,20 @@ describe('core receipt helper', () => {
 			elapsed: 7,
 		}
 
-		expect(computeReceipt(verdict, 'type')).toBe(TOKEN)
+		expect(computeReceipt(verdict, 'type')).toBeUndefined()
+		expect(
+			computeReceipt(
+				{
+					...verdict,
+					checks: PROBE_STAGES.map((stage) => ({
+						stage,
+						elapsed: 1,
+						findings: [],
+					})),
+				},
+				'type',
+			),
+		).toBe(TOKEN)
 	})
 
 	it('refuses a receipt when either phase reports an instrument fault', () => {

@@ -108,7 +108,7 @@ export interface OverlayInterface {
 export interface StageInterface {
 	/** The inspection this resident stage performs. */
 	readonly stage: Stage
-	/** Completed inspection boundaries this stage has reported across its lifetime. */
+	/** Claimant-owned progress the coordinator compares with its inspection snapshot. */
 	readonly progress: number
 	/**
 	 * Inspects one case.

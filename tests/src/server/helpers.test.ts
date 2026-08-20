@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { lstatSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { captureError } from '@orkestrel/test'
@@ -205,9 +206,31 @@ describe('server path helpers', () => {
 			expect(resolveWorkspaceFile(scratch.path, 'link/value.ts')).toBe(
 				resolve(scratch.path, 'link/value.ts'),
 			)
-			expect(() => resolveWorkspaceFile(scratch.path, 'link/value.ts', true)).toThrow(
-				'Path crosses a symbolic link: link/value.ts',
-			)
+			const error = captureError(() => resolveWorkspaceFile(scratch.path, 'link/value.ts', true))
+			expect(error).toMatchObject({
+				origin: 'workspace',
+				code: 'refused',
+				context: { path: 'link/value.ts' },
+			})
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('translates a native path inspection fault and retains its cause', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-native-fault-' })
+		try {
+			const target = 'invalid\0path.ts'
+			const native = captureError(() => lstatSync(resolve(scratch.path, target)))
+			const translated = captureError(() => resolveWorkspaceFile(scratch.path, target, true))
+
+			expect(native).toBeInstanceOf(TypeError)
+			expect(translated).toMatchObject({
+				origin: 'workspace',
+				code: 'malformed',
+				context: { path: target },
+				cause: native,
+			})
 		} finally {
 			scratch.destroy()
 		}

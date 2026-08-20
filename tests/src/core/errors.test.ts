@@ -15,21 +15,8 @@ import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
-// The modules whose failures need a resident TypeScript, Oxlint, or Vitest running before they can
-// be raised at all. This project starts none of those, so the adoption sweep reads their text, and
-// their own mirrored proofs drive them: `Probe.test.ts`, `ProbeServer.test.ts`,
-// `TypeStage.test.ts`, `LintStage.test.ts`, and `RuntimeStage.test.ts` each assert the ownership
-// and the condition of the failures their module raises.
-const RESIDENT: readonly string[] = Object.freeze([
-	'../../../src/server/Probe.ts',
-	'../../../src/server/ProbeServer.ts',
-	'../../../src/server/stages/LintStage.ts',
-	'../../../src/server/stages/RuntimeStage.ts',
-	'../../../src/server/stages/TypeStage.ts',
-])
-
-// The resident modules' own source text, read as strings rather than as modules, so the text check
-// below reads what a consumer receives rather than what an import resolves to.
+// Every source module's own text, read as strings rather than as modules, so the construction check
+// reads what a consumer receives rather than what an import resolves to.
 const SOURCES: Record<string, unknown> = import.meta.glob('../../../src/**/*.ts', {
 	eager: true,
 	query: '?raw',
@@ -48,6 +35,12 @@ function stripComments(source: string): string {
 		.split('\n')
 		.filter((line) => !line.trimStart().startsWith('//'))
 		.join('\n')
+}
+
+function findBareErrors(source: string, path: string): readonly string[] {
+	return [...stripComments(source).matchAll(/\bthrow new ([A-Za-z_][\w]*)\(/g)]
+		.filter((match) => match[1] !== 'ProbeError')
+		.map((match) => `${path} ${match[1] ?? ''}`)
 }
 
 // Runs one failure path and hands back what it raised, so an assertion reads the value a consumer
@@ -206,9 +199,15 @@ describe('failure adoption', () => {
 				],
 				[
 					'a mutation crossing a symbolic link',
-					'claimant',
+					'workspace',
 					'refused',
 					() => resolveWorkspaceFile(workspace.path, 'link/secret.ts', true),
+				],
+				[
+					'an unreadable mutation path',
+					'workspace',
+					'malformed',
+					() => resolveWorkspaceFile(workspace.path, 'invalid\0path.ts', true),
 				],
 				[
 					'a candidate outside every scoped project',
@@ -301,22 +300,20 @@ describe('failure adoption', () => {
 		}
 	})
 
-	// The narrow text check, for the modules alone whose failures cannot be raised without a
-	// resident tool this project does not start. Their own mirrored proofs drive those failures for
-	// real; this reads their text for a failure constructed outside the declared contract, which is
-	// the one class a reading can still see.
-	it('constructs no unclassified failure in the resident modules', () => {
+	// The text check covers every source module. Driven paths prove the branches this project can
+	// reach, while this catches a bare construction in a branch that requires a resident tool.
+	it('constructs no unclassified failure in any source module', () => {
 		const paths = Object.keys(SOURCES).sort()
-		for (const path of RESIDENT) expect(paths, `${path} was not read`).toContain(path)
+		expect(paths).toContain('../../../src/server/helpers.ts')
+		expect(findBareErrors("throw new Error('unclassified')", 'control.ts')).toStrictEqual([
+			'control.ts Error',
+		])
 		const bare: string[] = []
-		for (const path of RESIDENT) {
+		for (const path of paths) {
 			const source = SOURCES[path]
 			expect(source, `${path} did not load as text`).toBeTypeOf('string')
 			if (typeof source !== 'string') continue
-			const constructed = [...stripComments(source).matchAll(/\bthrow new ([A-Za-z_][\w]*)\(/g)]
-			for (const match of constructed) {
-				if (match[1] !== 'ProbeError') bare.push(`${path} ${match[1] ?? ''}`)
-			}
+			bare.push(...findBareErrors(source, path))
 		}
 		expect(bare).toStrictEqual([])
 	})
