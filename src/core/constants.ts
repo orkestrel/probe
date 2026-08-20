@@ -1,7 +1,7 @@
 import type { FindingOrigin, Stage } from './types.js'
 
 /**
- * The three stages a claim passes through, in the order a verdict reports them.
+ * The stages a claim passes through, in the order a verdict reports them.
  *
  * @remarks
  * One list feeds the wire shape, the stage guard, and the receipt computation, so a stage cannot
@@ -15,7 +15,7 @@ import type { FindingOrigin, Stage } from './types.js'
 export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'runtime'])
 
 /**
- * The two origins a finding carries, naming where the fault it reports lives.
+ * The origins a finding carries, naming where the fault it reports lives.
  *
  * @remarks
  * One list feeds the origin guard and the wire shape the stages produce, so an origin cannot be

@@ -37,7 +37,7 @@ function buildControl(stage: Stage, findings: readonly Finding[]): readonly Chec
 }
 
 describe('core formatting helpers', () => {
-	// The two findings `formatFinding` documents, transcribed as the typed literals the contract
+	// The findings `formatFinding` documents, transcribed as the typed literals the contract
 	// requires. `origin` is required on `Finding`, so a documented call that omitted it would fail
 	// this file's typecheck before any assertion ran.
 	it('renders both origins with and without a line', () => {
@@ -149,8 +149,8 @@ describe('core formatting helpers', () => {
 		}
 		const rendered = formatVerdict(verdict).split('\n')
 
-		// A reader compares two verdicts by reading down the heading block, so the four heading
-		// lines are pinned by position rather than by membership.
+		// A reader compares two verdicts by reading down the heading block, so the heading lines
+		// are pinned by position rather than by membership.
 		expect(rendered[0]).toBe('probe 88a5addc-7d33-40dc-9a5a-104b71f8787d (337 ms)')
 		expect(rendered[1]).toBe('claim 6ca20c3bff623031d3955b9d1a76d71d')
 		expect(rendered[2]).toBe('toolchain typescript 6.0.3, oxlint 1.79.0, vitest 4.1.11')
@@ -182,7 +182,7 @@ describe('core receipt helper', () => {
 		expect(computeReceipt({ ...verdict, id: 'a-different-call' }, 'type')).toBe(TOKEN)
 	})
 
-	it('keeps the field rule total for a project path carrying both token characters', () => {
+	it('keeps the field rule total for a project path carrying the separator and the digest marker', () => {
 		const project: Project = {
 			path: 'configs/src/tsconfig.core@2:beta.json',
 			digest: '3b674fdf121c85efb9ed1bab25ceeec8',

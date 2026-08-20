@@ -11,12 +11,12 @@ const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately and can read whether that child is still alive. Five
-// marker files select how it ends: `frail` exits with a code on the first document,
+// the real child the stage owns privately and can read whether that child is still alive. Marker
+// files select how it ends: `frail` exits with a code on the first document,
 // `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` exits
 // without replying to `initialize`, `silent-initialize` stays alive and never replies to
 // `initialize`, and `ignored-exit` answers `shutdown` and then stays alive through `exit`, which is
-// the one ending the protocol leaves to the client to force. Two markers in a document's own text
+// the one ending the protocol leaves to the client to force. Markers in a document's own text
 // select how it answers that document: `PROBE_SILENT` publishes nothing, and `PROBE_CLOSES_INPUT`
 // closes the server's own standard input when that document is closed.
 const SERVER = [
@@ -173,9 +173,9 @@ async function expectReleased(stage: LintStage): Promise<void> {
 }
 
 // Allocates a workspace that runs the target's own Oxlint binary against a configuration this file
-// owns, so every override under test is one the workspace's gate really applies. The three
-// overrides are the three selection shapes a candidate's declared path has to preserve: a whole
-// directory, a file name inside a directory, and one exact path.
+// owns, so every override under test is one the workspace's gate really applies. The overrides
+// are the selection shapes a candidate's declared path has to preserve: a whole directory, a file
+// name inside a directory, and one exact path.
 function createLintWorkspace(): ScratchInterface {
 	return createScratch({
 		files: {
@@ -230,9 +230,9 @@ describe('lint stage', () => {
 			const stage = new LintStage(ROOT)
 			const path = 'tests/src/server/lint-sequence.ts'
 			try {
-				// Nothing distinguishes these three documents but their text and the order they arrive
-				// in, so a server that answered from a cached document rather than the supplied one
-				// would repeat the first answer for all three.
+				// Nothing distinguishes these documents but their text and the order they arrive in, so
+				// a server that answered from a cached document rather than the supplied one would
+				// repeat its earliest answer for every one of them.
 				const first = await stage.inspect({ files: [], test: { path, text: 'debugger\n' } })
 				const second = await stage.inspect({
 					files: [],
@@ -475,11 +475,11 @@ describe('lint stage', () => {
 						message: expect.stringContaining('debugger'),
 					}),
 				])
-				// The first control is the boot control's own clean text at the same path. Without it a
+				// The `clean` control is the boot control's own clean text at the same path. Without it a
 				// stage that reported a finding for everything would pass the assertion above.
 				const clean = await stage.inspect({ files: [], test: { path, text: PASSING } })
 				expect(clean.findings).toStrictEqual([])
-				// The second control is the same violation under the same file name outside that
+				// The `elsewhere` control is the same violation under the same file name outside that
 				// directory, where the workspace leaves the rule off. It is what makes the finding
 				// above evidence that the declared directory selected the rule set.
 				const elsewhere = await stage.inspect({

@@ -24,7 +24,7 @@ import { Probe } from './Probe.js'
  * the stdio transport. The probe begins warming there, so a harness that spawns the entry pays
  * arming while its client is still handshaking.
  *
- * `start` seizes standard input and registers the two signals a harness ends a child with. It takes
+ * `start` seizes standard input and registers the signals a harness ends a child with. It takes
  * a listener capture on each before it does either, and records whether standard input was already
  * flowing. `destroy` releases exactly what appeared between them, and pauses the stream only when
  * this server is what set it flowing, so a process that outlives this server reads its own standard
@@ -62,8 +62,8 @@ export class ProbeServer implements ProbeServerInterface {
 		// that the server is already serving. A second call would otherwise register a second pair of
 		// signal handlers and forget the first pair's capture.
 		if (this.#signals !== undefined) return
-		// The stream's flow is the third thing this server takes from the process, beside the two
-		// listener sets. Read it here, before anything attaches, because this is the only moment the
+		// The stream's flow is what this server takes from the process beside the listener sets. Read
+		// it here, before anything attaches, because this is the only moment the
 		// answer exists. Read `readableFlowing` rather than `isPaused()`: a stream nobody has read
 		// reports `readableFlowing` as `null`, and `isPaused()` folds that into the same `false` an
 		// already-flowing stream reports, so only the flow itself separates a flow this server is

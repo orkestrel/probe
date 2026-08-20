@@ -4,10 +4,10 @@ Prove a claim about a code change with type, lint, and runtime evidence, from th
 TypeScript, Oxlint, and Vitest.
 
 A claim carries a `case` — the edit you believe is correct — and a `control`, the same edit
-deliberately broken, naming the stage it must fail at. `prove` runs all three stages over both and
-returns a `Verdict`. When the case ran clean and the control broke where it said it would, the
-verdict carries a `receipt`: a one-line token naming the claim, the stage, the three tool versions,
-and the TypeScript project that judged the candidates.
+deliberately broken, naming the stage it must fail at. `prove` runs every stage over the case and
+the control and returns a `Verdict`. When the case ran clean and the control broke where it said it
+would, the verdict carries a `receipt`: a one-line token naming the claim, the stage, the tool
+versions, and the TypeScript project that judged the candidates.
 
 Read [`guides/probe.md`](guides/probe.md) before the first claim. It states the prerequisites, the
 receipt's verification method and its limits, and what a receipt does not vouch for.
@@ -22,7 +22,7 @@ npm install --save-dev @orkestrel/probe
 
 ## The `probe` binary
 
-The package installs a `probe` binary that serves one Model Context Protocol tool, `prove`, over a
+The package installs a `probe` binary that serves the `prove` Model Context Protocol tool over a
 newline-delimited JSON stdio transport. Register the resolved JavaScript entry rather than a global
 install, an `npx` invocation, or the `node_modules/.bin` shim:
 
@@ -38,7 +38,7 @@ install, an `npx` invocation, or the `node_modules/.bin` shim:
 }
 ```
 
-## One claim, in process
+## Proving a claim in process
 
 ```ts
 import type { Claim } from '@orkestrel/probe'

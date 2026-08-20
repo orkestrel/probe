@@ -47,7 +47,7 @@ async function waitForArming(directory: string): Promise<readonly string[]> {
 }
 
 // Waits for the boot to finish rather than for the `arm` event, which no observer outside the
-// process can read. The two boot dependencies exist for the whole boot and are removed as it ends,
+// process can read. The boot dependencies exist for the whole boot and are removed as it ends,
 // so their disappearance is the same moment from out here.
 async function waitForArmed(directory: string): Promise<void> {
 	await waitForArming(directory)
@@ -386,7 +386,7 @@ describe('bin entry', () => {
 		}
 	})
 
-	// Two signals, and the two moments a harness delivers one in. The boot-time delivery is the
+	// The signals, and the moments a harness delivers one in. The boot-time delivery is the
 	// load-bearing half: teardown awaits the boot in flight, so it takes seconds, and every
 	// termination listener Vitest installs while warming would end the process a millisecond after
 	// the signal and leave the boot's own files in the target's tree.

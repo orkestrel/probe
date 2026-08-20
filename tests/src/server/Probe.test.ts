@@ -110,8 +110,8 @@ function createHeavySource(index: number): Source {
 	return { path: `src/core/probe-heavy-${index}.ts`, text: `${rows.join('\n')}\n` }
 }
 
-// The seven timings the `Verdict` contract's own `@example` states, in the order the block writes
-// them: three case stages, three control stages, then the whole call. `prove` runs the case through
+// The timings the `Verdict` contract's own `@example` states, in the order the block writes them:
+// each case stage, each control stage, then the whole call. `prove` runs the case through
 // its stages and only then the control through its own, so an example whose call is faster than the
 // slowest stage of each phase together describes an accounting this coordinator does not have.
 function readDocumentedTimings(): readonly number[] {
@@ -245,7 +245,7 @@ describe.sequential('probe', () => {
 					slowest(verdict.checks) + slowest(verdict.control),
 				)
 				// The same relation applied to the contract's own example, so the documented figure
-				// cannot drift back below the accounting the run above just demonstrated.
+				// cannot drift back below the accounting the run above demonstrated.
 				expect(documented).toHaveLength(7)
 				expect(documented[6]).toBeGreaterThanOrEqual(
 					Math.max(...documented.slice(0, 3)) + Math.max(...documented.slice(3, 6)),
@@ -744,7 +744,7 @@ describe.sequential('probe', () => {
 		"writes its boot dependencies under the sweep's revision identity",
 		{ timeout: 60_000 },
 		async () => {
-			// The boot controls write two real files into the target's `tmp/probe`, and a host killed
+			// The boot controls write real files into the target's `tmp/probe`, and a host killed
 			// before the boot's own cleanup runs leaves them there. They carry the revision marker
 			// for the same reason a generated specification does: the next warm sweeps a file whose
 			// writing process is gone and leaves a live neighbour's alone.
@@ -917,7 +917,7 @@ describe.sequential('probe', () => {
 			).toStrictEqual([])
 		},
 	)
-	it('publishes exactly the four events its map declares', () => {
+	it('publishes exactly the events its map declares', () => {
 		// `Record<keyof ProbeEventMap, …>` admits no other key and requires every declared one, so a
 		// queue lifecycle event added to the published map fails this file's typecheck before it can
 		// reach a listener.
@@ -999,7 +999,7 @@ describe.sequential('probe', () => {
 			}
 			try {
 				// Boot runs its own controls through the same server, so the record starts once the
-				// instrument serves and holds the two claims alone.
+				// instrument serves and holds these claims alone.
 				await new Promise<void>((armed, failed) => {
 					probe.emitter.on('arm', () => armed())
 					probe.emitter.on('error', (error) => failed(error))
@@ -1009,7 +1009,7 @@ describe.sequential('probe', () => {
 				const lines = (scratch.read('probe-lint.log') ?? '')
 					.split('\n')
 					.filter((line) => line.startsWith('open '))
-				// Four inspections, each opening its candidate source and then its test.
+				// Each inspection opens its candidate source and then its test.
 				expect(lines).toHaveLength(8)
 				expect(lines.map((line) => line.split(' ')[1])).toStrictEqual(Array(8).fill('1'))
 				expect(
@@ -1070,7 +1070,7 @@ describe.sequential('probe', () => {
 				const honestToken = honest.receipt?.split(':') ?? []
 				const chosenToken = chosen.receipt?.split(':') ?? []
 
-				// The claim is byte-identical across all three calls and only the project moves, so
+				// The claim is byte-identical across every call and only the project moves, so
 				// the claim digest must hold and the project digest must not.
 				expect(honest.digest).toBe(chosen.digest)
 				expect(honest.project.path).toBe('configs/src/tsconfig.core.json')

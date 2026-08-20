@@ -363,8 +363,8 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	// Returns the project or the finding that replaces it, never both and never neither. A pair of
-	// independent optionals would let a caller write the fourth combination, and that branch reports
-	// a clean check for a case whose test never ran.
+	// independent optionals would let a caller write the combination carrying neither, and that branch
+	// reports a clean check for a case whose test never ran.
 	#project(vitest: Vitest, path: string): TestProject | Finding {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently
@@ -500,7 +500,7 @@ export class RuntimeStage implements StageInterface {
 	// No Vitest project collects it — the revision marker sits between the stem and the extension,
 	// so a specification generated from a `.test.ts` path is not itself a `.test.ts` file — but it
 	// is ordinary TypeScript in the target's tree, so the workspace's own `check` and `lint:check`
-	// report its diagnostics against the consumer. Three conditions together make one file this
+	// report its diagnostics against the consumer. These conditions together make one file this
 	// package's to delete: the name carries a revision, the identity leading that revision names a
 	// process that is gone, and the file is one `#owned` can attribute. A file failing any of them
 	// stays where it is, whoever wrote it.
@@ -525,8 +525,8 @@ export class RuntimeStage implements StageInterface {
 	// can carry the same shape, and deleting it is data loss in their tree. A generated
 	// specification carries the caller's own test text, so the marker this stage appends to it is
 	// what attributes it, and the revision in the name must be the revision in the marker. The
-	// coordinator's boot writes two dependencies whose text it authors rather than receives, at the
-	// two fixed workbench paths named here, so their own path attributes them.
+	// coordinator's boot writes dependencies whose text it authors rather than receives, at the fixed
+	// workbench paths named here, so their own path attributes them.
 	#owned(path: string, revision: string): boolean {
 		for (const dependency of ['tmp/probe/arm-type.ts', 'tmp/probe/arm-runtime.ts']) {
 			if (path === createRevisionFile(this.#workspace, dependency, revision)) return true

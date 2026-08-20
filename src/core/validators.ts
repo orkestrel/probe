@@ -24,7 +24,7 @@ import {
 import { FINDING_ORIGINS, PROBE_STAGES } from './constants.js'
 
 /**
- * Checks whether a value names one of the three stages.
+ * Checks whether a value names a stage.
  *
  * @param value - The value to check
  * @returns True if the value is a stage name; false otherwise
@@ -117,8 +117,8 @@ export const isControl: Guard<Control> = recordOf({
  * sending a contract this service does not implement rather than a wider caller it must tolerate.
  *
  * `CLAIM_SHAPE` is the wire contract's shape and this is the admission rule the tool enforces, and
- * the rule is strictly narrower than the shape. They agree on every member but one: the shape
- * constrains `Source.path` to a non-empty string, while `isSource` also refuses an absolute path
+ * the rule is strictly narrower than the shape. They agree on every member but `Source.path`: the
+ * shape constrains it to a non-empty string, while `isSource` also refuses an absolute path
  * and one that traverses out of the workspace, so `../../etc/hosts` satisfies
  * `compileGuard(CLAIM_SHAPE)` and is refused here. `ProbeServer` advertises the shape and enforces
  * this rule, so it names the refused member with `findRefusedPaths` rather than reporting only that
@@ -140,7 +140,7 @@ export const isClaim: Guard<Claim> = recordOf({
 })
 
 /**
- * Checks whether a value names one of the two origins a finding carries.
+ * Checks whether a value names an origin a finding carries.
  *
  * @param value - The value to check
  * @returns True if the value is an origin; false otherwise
@@ -193,7 +193,7 @@ export const isCheck: Guard<Check> = recordOf({
 })
 
 /**
- * Checks whether a value names all three resolved tool versions.
+ * Checks whether a value names every resolved tool version.
  *
  * @param value - The value to check
  * @returns True if the value is a toolchain; false otherwise

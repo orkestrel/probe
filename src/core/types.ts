@@ -2,11 +2,11 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 import type { PROBE_ERROR_CODES } from './constants.js'
 
 /**
- * Names one of the three inspections a claim passes through.
+ * Names an inspection a claim passes through.
  *
  * @remarks
- * The three are irreducible modes rather than labels: each reads a different tool, and a verdict
- * that omits one hides a defect the agent would then believe it had fixed.
+ * They are irreducible modes rather than labels: each reads a different tool, and a verdict that
+ * omits one hides a defect the agent would then believe it had fixed.
  *
  * @example
  * ```ts
@@ -139,7 +139,7 @@ export interface Claim {
  * @remarks
  * `code` is a diagnostic the stage's tool reported about the candidate's source. `instrument` is
  * the stage's own report that its inspection did not complete over that source — a specification
- * it could not delete, a project it could not select, a module that ran no test. The two are
+ * it could not delete, a project it could not select, a module that ran no test. They are
  * irreducible modes rather than labels, because only a `code` finding disproves a claim: a control
  * whose test never ran has produced no evidence about the code it was written to break.
  *
@@ -213,12 +213,12 @@ export interface Check {
 }
 
 /**
- * Names the three tool versions a verdict was produced with.
+ * Names the tool versions a verdict was produced with.
  *
  * @remarks
  * A probe is worth running only when its verdict predicts the gate's verdict, which holds only
- * when both read one installed copy of each tool. Carrying the resolved versions on the verdict
- * makes that claim checkable rather than assumed.
+ * when the probe and the gate read one installed copy of each tool. Carrying the resolved versions
+ * on the verdict makes that claim checkable rather than assumed.
  *
  * @example
  * ```ts
@@ -263,7 +263,7 @@ export interface Project {
  * Carries the full result of one claim: every stage, for both the case and its control.
  *
  * @remarks
- * A verdict exists only when all three stages ran on both the case and the control, so `checks`
+ * A verdict exists only when every stage ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when every stage ran clean
  * on the case, the control reported at least one `origin: 'code'` finding at the stage it declared,
@@ -276,14 +276,14 @@ export interface Project {
  * `reason` unchanged. A hand-built verdict may omit it because the receipt helper needs only the
  * recorded checks and declared stage.
  *
- * `digest` covers three things: the case bytes, the control bytes including this `reason`, and the
+ * `digest` covers these things: the case bytes, the control bytes including this `reason`, and the
  * workspace they were read against. The reason is part of the control, so two claims differing only
  * in its prose are two claims and digest differently — a claimant who restates the falsifier has
  * answered a different question, and a digest that excluded it would describe less than the claim.
  * The workspace enters because every absolute string in a claim is rewritten relative to it before
  * hashing, so a claim carrying no absolute string digests the same in every workspace and one that
- * carries any digests per workspace. `receipt` carries this digest as its second field, so the same
- * three things reach the token.
+ * carries any digests per workspace. `receipt` carries this digest as a field, so the same inputs
+ * reach the token.
  *
  * @example
  * ```ts
@@ -404,7 +404,7 @@ export interface ProbeOptions {
  * the process and a restart is a new process rather than a second lifecycle.
  *
  * `prove` re-reads the target workspace before it answers, so a file edited since the last call is
- * judged as it now stands rather than as a warm service remembers it. The two resident readers key
+ * judged as it now stands rather than as a warm service remembers it. The resident readers key
  * that sweep differently: the runtime stage compares each workspace module's contents, and the type
  * stage versions a disk file by its modification time.
  *
@@ -441,8 +441,8 @@ export interface ProbeInterface {
  * Names the category one probe failure belongs to, derived from {@link PROBE_ERROR_CODES}.
  *
  * @remarks
- * The five are irreducible modes rather than labels, because each one names a different party as
- * the one that must act. `invalid` is the caller's input. `destroyed` is an instrument the caller
+ * They are irreducible modes rather than labels, because each one names a different party as the
+ * one that must act. `invalid` is the caller's input. `destroyed` is an instrument the caller
  * already tore down. `deadline` is the coordinator's budget, and the stage behind it was replaced.
  * `workspace` is the target tree: a tool it does not install, a manifest it does not publish, a
  * project its compiler cannot parse. `instrument` is this package's own tooling reporting that it

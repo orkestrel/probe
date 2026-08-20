@@ -100,7 +100,7 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is issued on four conditions together: both phases report one check per stage, every
+ * A receipt is issued on these conditions together: both phases report one check per stage, every
  * stage ran clean on the case, the control produced at least one `origin: 'code'` finding at the
  * stage it declared, and every other control stage stayed clean. A control that fails somewhere
  * else has falsified the instrument rather than the claim, so no receipt is issued for it.
@@ -112,7 +112,7 @@ export function formatVerdict(verdict: Verdict): string {
  *
  * The token names every condition the verdict was reached under, so a receipt read away from its
  * verdict still says what was judged and what judged it: the claim's digest, the stage the control
- * broke at, the three tool versions, and the project the candidate sources were checked against.
+ * broke at, the tool versions, and the project the candidate sources were checked against.
  * The call's identity is deliberately absent. It carries no integrity and it is the only value
  * stopping two honest runs of one claim from producing one comparable string, so leaving it out is
  * what makes "re-run `prove` and compare tokens" a verification a reader can perform.

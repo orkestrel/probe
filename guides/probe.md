@@ -1,26 +1,27 @@
 # Probe
 
-> **The claim prover for the `@orkestrel` line.** `@orkestrel/probe` answers one question about a
+> **The claim prover for the `@orkestrel` line.** `@orkestrel/probe` answers this question about a
 > proposed edit: does it compile, lint, and pass its test in this workspace? It holds resident
 > TypeScript, Oxlint, and Vitest engines, runs a claim's case and its negative control through all
-> three, and returns a `Verdict` carrying every finding — and, when the case ran clean and the
+> of them, and returns a `Verdict` carrying every finding — and, when the case ran clean and the
 > control broke where it said it would, a `receipt`. Source: [`src/core`](../src/core),
 > [`src/server`](../src/server), [`src/bin`](../src/bin). Published through `@orkestrel/probe` and
 > `@orkestrel/probe/server`.
 >
 > **An agent is the caller this exists for.** Deciding whether an edit compiles by reasoning about
 > it costs more than asking, and the answer is a guess. A `Claim` states the edit and what would
-> falsify it; a `Verdict` answers with the three tools the workspace's own gate runs.
+> falsify it; a `Verdict` answers with the tools the workspace's own gate runs.
 >
 > **Mechanism, not policy.** probe reports evidence and issues a receipt under stated conditions. It
 > holds no key, signs nothing, and compels nothing. It also **executes caller-supplied test code
 > with the privileges of the process that hosts it**, so give a probe a workspace and a caller you
 > already trust with a shell.
 
-Three nouns carry the package. A `Claim` is the question: a case, a control that must break, and the
-TypeScript project both are judged under. A `Verdict` is the answer: one `Check` per stage for the
-case and one per stage for the control. A `receipt` is the verdict's one-line summary of the
-conditions it was reached under, and it exists only when the claim proved itself.
+A `Claim`, a `Verdict`, and a `receipt` carry the package. A `Claim` is the question: a case, a
+control that must break, and the TypeScript project both are judged under. A `Verdict` is the
+answer: one `Check` per stage for the case and one per stage for the control. A `receipt` is the
+verdict's one-line summary of the conditions it was reached under, and it exists only when the claim
+proved itself.
 
 ## Surface
 
@@ -31,7 +32,7 @@ optional field is absent rather than empty.
 
 | Name                | Kind      | Shape / Purpose                                                                                                                                       |
 | ------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Stage`             | type      | `'type' \| 'lint' \| 'runtime'` — the three inspections every claim passes through.                                                                   |
+| `Stage`             | type      | `'type' \| 'lint' \| 'runtime'` — the inspections every claim passes through.                                                                         |
 | `Source`            | interface | `{ path, text }` — one file's contained workspace-relative path and its full contents. The path need not exist on disk.                               |
 | `Case`              | interface | `{ files, test }` — the candidate sources a claim asserts about and the test that exercises them.                                                     |
 | `Control`           | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                     |
@@ -56,7 +57,7 @@ From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 | Name                | Kind  | Value / Purpose                                                                                       |
 | ------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
 | `PROBE_STAGES`      | const | `['type', 'lint', 'runtime']` — the stage order a verdict reports, shared by the guard and the token. |
-| `FINDING_ORIGINS`   | const | `['code', 'instrument']` — the two origins a finding carries.                                         |
+| `FINDING_ORIGINS`   | const | `['code', 'instrument']` — the origins a finding carries.                                             |
 | `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                       |
 | `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                     |
 | `PROBE_ERROR_CODES` | const | `['invalid', 'destroyed', 'deadline', 'workspace', 'instrument']` — the categories the guard admits.  |
@@ -76,7 +77,7 @@ Every failure this package raises, from [`errors.ts`](../src/core/errors.ts).
 The blueprints behind both the published tool schema and the guard applied to an arriving call, from
 [`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON Schema. The
 schema is the wire contract's shape and `isClaim` is the admission rule, and the rule is narrower on
-one member: see [The advertised schema is wider than the admission rule](#registering-the-server).
+`Source.path`: see [The advertised schema is wider than the admission rule](#registering-the-server).
 
 | Name            | Kind  | Describes                                                                      |
 | --------------- | ----- | ------------------------------------------------------------------------------ |
@@ -92,7 +93,7 @@ and never throws.
 
 | Name          | Kind     | Signature                                    | Behavior                                                                                                                                                        |
 | ------------- | -------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isStage`     | function | `(value: unknown) => value is Stage`         | Admits one of the three stage names.                                                                                                                            |
+| `isStage`     | function | `(value: unknown) => value is Stage`         | Admits a name the `Stage` type carries.                                                                                                                         |
 | `isOrigin`    | function | `(value: unknown) => value is FindingOrigin` | Admits `'code'` or `'instrument'`.                                                                                                                              |
 | `isSource`    | function | `(value: unknown) => value is Source`        | Admits a record with a contained relative `path` and string `text`; refuses absolute and escaping paths.                                                        |
 | `isCase`      | function | `(value: unknown) => value is Case`          | Admits a record whose `files` are sources and whose `test` is one source.                                                                                       |
@@ -100,7 +101,7 @@ and never throws.
 | `isClaim`     | function | `(value: unknown) => value is Claim`         | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. Narrower than `CLAIM_SHAPE` on `Source.path` alone. |
 | `isFinding`   | function | `(value: unknown) => value is Finding`       | Admits a record carrying an origin, a path, a message, and an optional line.                                                                                    |
 | `isCheck`     | function | `(value: unknown) => value is Check`         | Admits a record carrying a stage, an elapsed number, and findings.                                                                                              |
-| `isToolchain` | function | `(value: unknown) => value is Toolchain`     | Admits a record carrying the three tool versions.                                                                                                               |
+| `isToolchain` | function | `(value: unknown) => value is Toolchain`     | Admits a record carrying every resolved tool version.                                                                                                           |
 | `isProject`   | function | `(value: unknown) => value is Project`       | Admits a record carrying a non-empty path and a non-empty digest.                                                                                               |
 | `isVerdict`   | function | `(value: unknown) => value is Verdict`       | Admits a whole verdict, including the required `digest` and `project` members.                                                                                  |
 
@@ -138,21 +139,21 @@ From [`factories.ts`](../src/server/factories.ts).
 
 | Name                | Kind     | Signature                                          | Behavior                                                                  |
 | ------------------- | -------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
-| `createProbe`       | function | `(options?: ProbeOptions) => ProbeInterface`       | Creates a probe that begins warming its three stages at construction.     |
+| `createProbe`       | function | `(options?: ProbeOptions) => ProbeInterface`       | Creates a probe that begins warming its stages at construction.           |
 | `createProbeServer` | function | `(options?: ProbeOptions) => ProbeServerInterface` | Creates the Model Context Protocol stdio server, and the probe it serves. |
 
 ### The engine
 
-The six classes, each exported from its own file.
+The classes, each exported from its own file.
 
-| Name           | Kind  | Implements             | Purpose                                                                                                                                               |
-| -------------- | ----- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Probe`        | class | `ProbeInterface`       | The coordinator: one queue per stage, one deadline per active inspection, and the receipt decision. [`Probe.ts`](../src/server/Probe.ts)              |
-| `ProbeServer`  | class | `ProbeServerInterface` | The process owner: one probe, this process's stdio, and the two signals a harness ends a child with. [`ProbeServer.ts`](../src/server/ProbeServer.ts) |
-| `TypeStage`    | class | `TypeStageInterface`   | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)               |
-| `LintStage`    | class | `StageInterface`       | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)                      |
-| `RuntimeStage` | class | `StageInterface`       | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)               |
-| `Overlay`      | class | `OverlayInterface`     | The candidate set one inspection holds in memory, under an identity minted fresh per instance. [`Overlay.ts`](../src/server/Overlay.ts)               |
+| Name           | Kind  | Implements             | Purpose                                                                                                                                           |
+| -------------- | ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | `ProbeInterface`       | The coordinator: one queue per stage, one deadline per active inspection, and the receipt decision. [`Probe.ts`](../src/server/Probe.ts)          |
+| `ProbeServer`  | class | `ProbeServerInterface` | The process owner: one probe, this process's stdio, and the signals a harness ends a child with. [`ProbeServer.ts`](../src/server/ProbeServer.ts) |
+| `TypeStage`    | class | `TypeStageInterface`   | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)           |
+| `LintStage`    | class | `StageInterface`       | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)                  |
+| `RuntimeStage` | class | `StageInterface`       | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)           |
+| `Overlay`      | class | `OverlayInterface`     | The candidate set one inspection holds in memory, under an identity minted fresh per instance. [`Overlay.ts`](../src/server/Overlay.ts)           |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -239,21 +240,21 @@ and the `reason` in your own words. Both are judged under the TypeScript project
 Every verdict returned by `prove` carries that explanation unchanged as `Verdict.reason`. The
 member reports why the claimant chose the control. No receipt condition reads it, and it still
 reaches the token: the reason is part of the control, so it enters `verdict.digest`, and the digest
-is the token's second field. Two claims that differ only in the reason's prose are two
-claims, and they digest differently.
+is a field of the token. Two claims that differ only in the reason's prose are two claims, and they
+digest differently.
 
-`verdict.digest` covers three things and nothing else: the case bytes, the control bytes including
+`verdict.digest` covers these things and nothing else: the case bytes, the control bytes including
 the reason, and the workspace those bytes were read against. The workspace enters because probe
 rewrites every absolute string in a claim relative to the workspace before hashing, which is what
 keeps one commit checked out at two paths reading as one claim. A claim carrying no absolute string
 therefore digests the same in every workspace; a claim that carries one digests per workspace, so
 compare two such tokens only when both were minted against the same tree.
 
-`prove` runs all three stages over the case, then all three over the control, and returns one
-`Check` per stage for each. A stage that cannot start throws rather than returning an empty check,
-so no verdict ever reports a stage that did not run.
+`prove` runs every stage over the case, then every stage over the control, and returns one `Check`
+per stage for each. A stage that cannot start throws rather than returning an empty check, so no
+verdict ever reports a stage that did not run.
 
-The receipt is issued on four conditions together:
+The receipt is issued on these conditions together:
 
 - both phases report one check per stage; and
 - every stage ran clean on the case — no findings of either origin; and
@@ -262,24 +263,24 @@ The receipt is issued on four conditions together:
 
 A control that also breaks somewhere else has falsified the instrument rather than the claim, so no
 receipt is issued for it. A case the stage could not inspect end to end is not a clean case, which
-is why the case's condition counts `origin: 'instrument'` findings too. The first condition binds
-both phases, because the last one reads the control entries a verdict carries: a control that omits
-a stage would otherwise read as a stage that stayed clean. `prove` records every stage for both
-phases, so that condition refuses only a verdict you assembled by hand and passed to
-`computeReceipt` yourself.
+is why the case's condition counts `origin: 'instrument'` findings too. The check-per-stage
+condition binds both phases, because the clean-elsewhere condition reads the control entries a
+verdict carries: a control that omits a stage would otherwise read as a stage that stayed clean.
+`prove` records every stage for both phases, so that condition refuses only a verdict you assembled
+by hand and passed to `computeReceipt` yourself.
 
-`Finding.origin` is the member that separates the two. A `code` finding carries the tool's own
-message about the candidate's source. An `instrument` finding carries the stage's own message about
-an inspection that did not complete — a specification it could not write, a project it could not
-select, a module that ran no test. `formatFinding` renders the value first as `[code]` or
+`Finding.origin` is the member that separates `code` from `instrument`. A `code` finding carries the
+tool's own message about the candidate's source. An `instrument` finding carries the stage's own
+message about an inspection that did not complete — a specification it could not write, a project it
+could not select, a module that ran no test. `formatFinding` renders the value first as `[code]` or
 `[instrument]`, so the distinction survives `formatVerdict`. A clean runtime check means every
 collected test passed, not that the module reported itself passed.
 
 ## Failures
 
 Every failure this package raises is a `ProbeError`. Narrow a caught value with `isProbeError` and
-branch on `code`; read `message` to print it and `context` for the detail behind it. The five
-categories name the party that must act:
+branch on `code`; read `message` to print it and `context` for the detail behind it. Each category
+names the party that must act:
 
 | Code         | Who acts     | Raised when                                                                                                                               |
 | ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
@@ -306,12 +307,12 @@ try {
 
 `isProbeError` reads a global brand rather than the constructor, so it admits a failure raised by a
 second copy of this package — a duplicate installation, or the ESM and CommonJS builds loaded
-together — where `instanceof` refuses one of the two.
+together — where `instanceof` refuses a failure the other copy raised.
 
 ## Prerequisites
 
 probe borrows the target workspace's own toolchain and configuration, so a workspace missing any of
-these five returns a failure the caller cannot diagnose from the verdict alone. Check them before
+these returns a failure the caller cannot diagnose from the verdict alone. Check them before
 the first claim; the boot controls run through the same stages a claim does, so a workspace missing
 one fails at construction rather than at the first `prove`.
 
@@ -336,16 +337,16 @@ one fails at construction rather than at the first `prove`.
    test file against the root project, because a test needs the Vitest and Node globals the scoped
    projects remove.
 5. **The workspace's `typescript`, `oxlint`, and `vitest` are the same resolved files probe
-   resolves.** probe reads all three from the target workspace's `package.json`, never from its own
-   dependencies, and reports the resolved versions on `Verdict.toolchain`. A verdict predicts the
-   gate only while both read one installed copy of each tool.
+   resolves.** probe reads each of them from the target workspace's `package.json`, never from its
+   own dependencies, and reports the resolved versions on `Verdict.toolchain`. A verdict predicts
+   the gate only while probe and the gate read one installed copy of each tool.
 
-Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its three tools
-are optional peers, resolved from that workspace at construction.
+Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its tools are
+optional peers, resolved from that workspace at construction.
 
 ## Registering the server
 
-The package installs a `probe` binary and publishes one Model Context Protocol tool, `prove`, over a
+The package installs a `probe` binary and publishes the `prove` Model Context Protocol tool over a
 stdio transport. Register the resolved JavaScript entry and run it with the harness's own Node:
 
 ```json
@@ -364,14 +365,14 @@ Register that entry rather than a global install, an `npx` invocation, or the `n
 shim. The shim is a shell script on POSIX hosts and a batch file on Windows, and spawning the
 JavaScript entry with the current executable is the form that survives both.
 
-Two facts decide whether a hand-written client works, and both fail silently when they are wrong:
+These facts decide whether a hand-written client works, and each fails silently when it is wrong:
 
 - **The transport is newline-delimited JSON.** One JSON-RPC message per line, terminated by `\n`. A
   client that frames requests with `Content-Length` headers — the way a Language Server Protocol
   client does — gets no reply and no error. That framing is correct for this package's _lint stage_,
   which speaks the Language Server Protocol to Oxlint, and wrong for its _server_. Both live in this
   one package, which is how the mistake gets made.
-- **A current-revision request carries two reserved `_meta` keys.**
+- **A current-revision request carries reserved `_meta` keys.**
   `io.modelcontextprotocol/protocolVersion` and `io.modelcontextprotocol/clientCapabilities` are
   both required; `io.modelcontextprotocol/clientInfo` is optional and must be a valid identity when
   present. A request carrying the version alone is refused with
@@ -386,14 +387,14 @@ takes every `ProbeOptions` member for it, because `start()` seizes this process'
 output: a host that starts one has given the process to it. `destroy()` gives the process back and
 tears the probe down with it.
 
-**The advertised schema is wider than the admission rule, in one place.** The `prove` tool publishes
-`compileSchema(CLAIM_SHAPE)` and admits a call with `isClaim`, and the two agree on every member but
-`Source.path`: the schema constrains it to a non-empty string, while the guard also refuses an
-absolute path and one that traverses out of the workspace. No JSON Schema keyword expresses that
-rule, so a claim naming `../../etc/hosts` satisfies the advertised parameters and is refused. The
-refusal names the members it read — `The prove tool refuses case.files.0.path: a source path must
-stay inside the workspace, which the advertised schema does not constrain` — so a client that
-satisfied the schema is told which path to change rather than that its claim was invalid.
+**The advertised schema is wider than the admission rule, at `Source.path`.** The `prove` tool
+publishes `compileSchema(CLAIM_SHAPE)` and admits a call with `isClaim`, and the two agree on every
+member but `Source.path`: the schema constrains it to a non-empty string, while the guard also
+refuses an absolute path and one that traverses out of the workspace. No JSON Schema keyword
+expresses that rule, so a claim naming `../../etc/hosts` satisfies the advertised parameters and is
+refused. The refusal names the members it read — `The prove tool refuses case.files.0.path: a source
+path must stay inside the workspace, which the advertised schema does not constrain` — so a client
+that satisfied the schema is told which path to change rather than that its claim was invalid.
 
 ## The claim that earns a receipt
 
@@ -430,7 +431,7 @@ verdict.receipt // 'probe:0806fb30f428edb8ea85adfb4b355441:type:typescript@6.0.3
 await probe.destroy()
 ```
 
-Four things in it are load-bearing:
+These things in it are load-bearing:
 
 - **The candidate file lives under `src/`.** It is checked against `configs/src/tsconfig.core.json`,
   the same scoped project the workspace's own `check:src:core` script runs.
@@ -460,7 +461,7 @@ A receipt is a `:`-separated token whose fields are, in order:
 6. `vitest@<version>`;
 7. `<project path>@<project digest>`.
 
-**Parse the last field as a remainder, not as a seventh split.** A workspace-relative project path
+**Parse the project field as a remainder, not as another split.** A workspace-relative project path
 may contain `:` and `@`. Split on `RECEIPT_SEPARATOR`, take fields 0 through 5, rejoin everything
 from index 6 with that separator, and read the project digest as everything after that remainder's
 final `@`. That rule stays total for a path containing either character.
@@ -468,9 +469,9 @@ final `@`. That rule stays total for a path containing either character.
 The call's identity is deliberately absent from the token. It carries no integrity, and it is the
 only value that would stop two honest runs of one claim from producing one comparable string.
 
-**Verify a receipt one of two ways.** Recompute it, holding the claim and the workspace, by reading
-the digests the verdict carries. Or re-run `prove` over the same claim and compare the two strings
-byte for byte: two runs of one claim in one workspace produce one token.
+**Verify a receipt by recomputation, or by re-running the claim.** Recompute it, holding the claim
+and the workspace, by reading the digests the verdict carries. Or re-run `prove` over the same claim
+and compare the two strings byte for byte: two runs of one claim in one workspace produce one token.
 
 **probe holds no key.** The token is a function of public inputs, so anyone can type a well-formed
 receipt. It is a statement of the conditions a verdict was reached under, not an authenticator, and
@@ -490,7 +491,7 @@ its resolved path and the digest of its compiler options. A receipt minted under
 project names that project, so a reader comparing it against the gate's own project refuses it on
 sight.
 
-Three configurations remain outside the token, and no receipt vouches for them:
+These configurations remain outside the token, and no receipt vouches for them:
 
 - `.oxlintrc.json`, which the lint stage reads;
 - `vite.config.ts`, which the runtime stage reads;
@@ -501,14 +502,14 @@ caller that weakens one has defeated the gate itself, and no receipt vouches for
 itself.
 
 The project digest also **moves with the TypeScript version**, because the resolved compiler options
-carry enum-valued members whose numbering the compiler owns. The first compiler upgrade therefore
-changes the digest for an unchanged project file. That is contained rather than surprising: the
-token already names `typescript@<version>`, so any policy pinning a digest already pins the version.
+carry enum-valued members whose numbering the compiler owns. A compiler upgrade therefore changes
+the digest for an unchanged project file. That is contained rather than surprising: the token
+already names `typescript@<version>`, so any policy pinning a digest already pins the version.
 
-One further limit belongs beside those:
+A further limit belongs beside those:
 
 - **A control need not be a mutation of its case.** `Control` carries its own `files` and `test`, so
-  a caller can pair a clean case with unrelated broken code and satisfy both receipt conditions. The
+  a caller can pair a clean case with unrelated broken code and satisfy every receipt condition. The
   claim digest binds the case and the control together, so a reader who reads the control sees it.
 
 ## What the lint stage does not see
@@ -533,11 +534,12 @@ owns the process: a restart is a new process rather than a second lifecycle, and
 a second process with its own resident engines. `ProbeServer.start` is the transport's verb rather
 than the probe's — it decides which process reads the stdio, not when the engines warm.
 
-- **Arming.** Construction runs two boot controls that mutate an imported dependency and refuse
+- **Arming.** Construction runs boot controls that mutate an imported dependency and refuse
   service unless the type and runtime stages report the change. The `arm` event fires once those
   controls have reported red and the boot's own files are gone. The controls run at
-  `tmp/probe/arm-*.test.ts` against the root `tsconfig.json`, which is why prerequisites 1 through 3
-  gate the boot rather than the first claim.
+  `tmp/probe/arm-*.test.ts` against the root `tsconfig.json`, which is why the Vitest project, its
+  composition in the root configuration, and the declared test directory gate the boot rather than
+  the first claim.
 - **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
   workspace module and invalidates the ones whose contents moved; the type stage re-reads a file
   whose modification time moved. A warm service that skipped this would return a confident wrong
@@ -567,7 +569,7 @@ than the probe's — it decides which process reads the stdio, not when the engi
   A server that accepts the connection and answers nothing is therefore released rather than
   deadlocking `destroy()`.
 - **Termination.** `ProbeServer.start` answers `SIGINT` and `SIGTERM` by destroying the server, and
-  the two are the whole set: no evidence names a harness that ends a stdio child any other way, and
+  they are the whole set: no evidence names a harness that ends a stdio child any other way, and
   a configurable set would be a supported way to spell the leak this closes. A second signal during
   a teardown already running reaches the default disposition and ends the process at once, because
   teardown releases its handlers before the probe. Measured on 2026-08-20 on the host § Cost names,
@@ -588,35 +590,35 @@ than the probe's — it decides which process reads the stdio, not when the engi
   process that is gone **and** the file is one this package can attribute. Attribution is what stops
   the sweep reaching your tree: a generated specification carries your own test text, so probe
   appends `// @orkestrel/probe generated specification <pid>-<uuid>` as its last line and the sweep
-  requires that marker to name the same revision the file name does; the two boot dependencies carry
+  requires that marker to name the same revision the file name does; the boot dependencies carry
   text probe authored, at the fixed paths `tmp/probe/arm-type.ts` and `tmp/probe/arm-runtime.ts`, so
   their own path attributes them. A file of yours that happens to carry the same name shape is left
   where it is, wherever it sits, and so is a live neighbour's specification.
 
 ## Cost
 
-Two numbers decide whether a harness's timeout is right. Both were measured on 2026-08-20, over this
-repository as the target workspace, on Linux 6.18.5 x64 with 4 processors, Node 22.22.2, TypeScript
-6.0.3, Oxlint 1.79.0, and Vitest 4.1.11. Read them as the shape of the cost on comparable hardware
-rather than as a figure another host reproduces.
+The measurements below decide whether a harness's timeout is right. Each was taken on 2026-08-20,
+over this repository as the target workspace, on Linux 6.18.5 x64 with 4 processors, Node 22.22.2,
+TypeScript 6.0.3, Oxlint 1.79.0, and Vitest 4.1.11. Read them as the shape of the cost on comparable
+hardware rather than as a figure another host reproduces.
 
 | What                                                                 | Measured                     |
 | -------------------------------------------------------------------- | ---------------------------- |
 | Boot: spawning `dist/bin/main.js` to the first answered `tools/call` | 4.1 s to 4.4 s over 4 runs   |
 | One warm `prove` over the flagship claim, client round trip          | 437 ms to 495 ms over 4 runs |
 
-Boot is dominated by arming, which runs two real controls through all three stages before the
-service answers. A client whose timeout is tighter than boot reports a hang that is a wait.
+Boot is dominated by arming, which runs its real controls through every stage before the service
+answers. A client whose timeout is tighter than boot reports a hang that is a wait.
 Handshake requests answer immediately; only `tools/call` waits on arming.
 
-`prove` runs the case through all three stages and then the control through all three, in sequence,
-so one call pays the runtime stage's floor twice. One runtime inspection in every 64 also replaces
+`prove` runs the case through every stage and then the control through every stage, in sequence, so
+one call pays the runtime stage's floor twice. One runtime inspection in every 64 also replaces
 the resident Vitest runner and costs more than the other 63, so budget a client timeout against that
 inspection rather than the common one.
 
 ## Tests
 
-- [`guides.test.ts`](../tests/guides.test.ts) — this guide's two parity directions, the claim
+- [`guides.test.ts`](../tests/guides.test.ts) — this guide's parity directions, the claim
   literal shared with the `Claim` contract, what `verdict.digest` covers, and the flagship claim run
   for its receipt.
 - [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — the formatters, the receipt token's
@@ -631,14 +633,14 @@ inspection rather than the common one.
   documented example on this page's helper table.
 - [`TypeStage.test.ts`](../tests/src/server/stages/TypeStage.test.ts),
   [`LintStage.test.ts`](../tests/src/server/stages/LintStage.test.ts), and
-  [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the three resident
-  stages against their real tools.
+  [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the resident stages
+  against their real tools.
 - [`ProbeServer.test.ts`](../tests/src/server/ProbeServer.test.ts) — what `start` seizes and what
   `destroy` gives back, standard input's flow included.
 - [`Overlay.test.ts`](../tests/src/server/Overlay.test.ts) — the candidate set's identity,
   containment, and release.
 - [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by a foreign client,
-  and both signals delivered to it during boot and in service.
+  and the signals delivered to it during boot and in service.
 - [`distribution.test.ts`](../tests/distribution.test.ts) — the packed package installed outside the
   repository and driven through its public exports.
 

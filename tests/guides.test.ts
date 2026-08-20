@@ -19,7 +19,7 @@ const INTERNAL: readonly string[] = Object.freeze([])
 
 // The claim the guide tells a reader to run verbatim. The same literal appears in
 // `guides/probe.md`, in the `Claim` contract's own `@example`, and here; the parity test below
-// reads all three out of their files and refuses any difference, so this transcription cannot
+// reads each of them out of their files and refuses any difference, so this transcription cannot
 // drift away from what a consumer copies.
 const CLAIM: Claim = {
 	project: 'configs/src/tsconfig.core.json',
@@ -169,12 +169,12 @@ const SERVER_TYPES = readWorkspaceText('src/server/types.ts')
 const MANIFEST: unknown = JSON.parse(readWorkspaceText('package.json'))
 
 // Returns whichever contract file declares one interface. The package splits its contracts across
-// the two environments, and a lookup that guessed would compare a class against an empty body.
+// its environments, and a lookup that guessed would compare a class against an empty body.
 function readContract(symbol: string): string {
 	return extractBody(CORE_TYPES, symbol).length > 0 ? CORE_TYPES : SERVER_TYPES
 }
 
-// Every source module the two barrels re-export, so a new file joins the sweeps below by being
+// Every source module the barrels re-export, so a new file joins the sweeps below by being
 // barrelled rather than by being listed here.
 const MODULES: readonly string[] = [
 	...extractModules(readWorkspaceText('src/core/index.ts'), 'src/core'),
@@ -192,7 +192,7 @@ const IMPLEMENTATIONS: ReadonlyArray<readonly [string, readonly string[]]> = [
 	['Overlay', ['OverlayInterface']],
 ]
 
-// Every source file the two published environments carry, discovered rather than listed, so the
+// Every source file the published environments carry, discovered rather than listed, so the
 // sweep below compares the barrels against what the tree holds instead of against a memory of it.
 const SOURCES: readonly string[] = [...extractSources('src/core'), ...extractSources('src/server')]
 
@@ -337,7 +337,7 @@ describe('guides fences', () => {
 
 	// The guide states what `verdict.digest` covers. `prove` computes it with `computeDigest` over
 	// the case and the control, read against the workspace, so these assertions read the same
-	// function through the same two inputs and would break if either sentence went false again.
+	// function through the same inputs and would break if either sentence went false again.
 	it('digests the reason and the workspace the guide says it digests', () => {
 		const body = { case: CLAIM.case, control: CLAIM.control }
 		const reworded = {
@@ -353,8 +353,8 @@ describe('guides fences', () => {
 			control: CLAIM.control,
 		}
 
-		// The instrument reproduces the token the flagship fence documents, so the two assertions
-		// below are read against the digest the package really ships.
+		// The instrument reproduces the token the flagship fence documents, so the assertions below
+		// are read against the digest the package really ships.
 		expect(computeDigest(ROOT, body)).toBe(DIGEST)
 		// Two claims differing only in the reason's prose are two claims.
 		expect(computeDigest(ROOT, reworded)).not.toBe(DIGEST)
@@ -372,8 +372,8 @@ describe('guides fences', () => {
 			expect(verdict.digest).toBe(DIGEST)
 			expect(verdict.reason).toBe(CLAIM.control.reason)
 			const receipt = verdict.receipt ?? ''
-			// The guide's parsing rule, applied to the token the run returned: six leading fields,
-			// then a remainder that carries the project path and its digest.
+			// The guide's parsing rule, applied to the token the run returned: the prefix, the digest,
+			// the stage, and a field per tool, then a remainder carrying the project path and its digest.
 			const fields = receipt.split(RECEIPT_SEPARATOR)
 			const remainder = fields.slice(6).join(RECEIPT_SEPARATOR)
 			const boundary = remainder.lastIndexOf('@')

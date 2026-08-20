@@ -26,7 +26,7 @@ export interface Inspection {
  * A stage records every candidate the inspection carries before it reads any of them, and clears
  * the set when the inspection ends, whatever ended it. The entity names no tool: each stage adapts
  * one overlay to the host its own tool expects, so a language service, a document protocol, and a
- * module resolver read one candidate set through three adapters rather than through one shared
+ * module resolver read one candidate set through their own adapters rather than through one shared
  * filesystem. Paths are absolute and the stage resolves them, because only the stage knows the
  * workspace a candidate's declared path is relative to. `revision` identifies the set, so a
  * resident tool that caches by version reads fresh text for a path this overlay holds and reads
@@ -135,7 +135,7 @@ export interface StageInterface {
  * Inspects TypeScript source against a caller-named project and reports what that project is.
  *
  * @remarks
- * The type stage carries two members the shared stage contract cannot: the lint and runtime stages
+ * The type stage carries members the shared stage contract cannot: the lint and runtime stages
  * read no project, so a project parameter and a project lookup belong here rather than on
  * `StageInterface`. `candidates` reports the paths the inspection in flight holds as text, and is
  * empty between inspections and after teardown.
@@ -196,7 +196,7 @@ export interface WorkspaceManifest {
  * the transport and registers the termination handlers a harness signals, so a host that starts one
  * has already given the process to it. `destroy` reverses all of that and tears the probe down with
  * it, which is why there is no verb that stops serving and leaves the resident engines running: a
- * probe nothing is reading from holds three resident tools for nobody.
+ * probe nothing is reading from holds its resident tools for nobody.
  *
  * @example
  * ```ts

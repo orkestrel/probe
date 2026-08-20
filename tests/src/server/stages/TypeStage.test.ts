@@ -362,7 +362,7 @@ describe('type stage', () => {
 			const retained = await stage.inspect(subject, first)
 			await stage.inspect(subject, second)
 			const recycled = await stage.inspect(subject, first)
-			// Three spellings of one resident project reach one service and take no recycled
+			// Each spelling of one resident project reaches one service and takes no recycled
 			// slot, so the first caller-named project survives them.
 			expect(named.findings.length).toBeGreaterThan(0)
 			expect(retained.findings.length).toBeGreaterThan(0)

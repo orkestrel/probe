@@ -230,8 +230,8 @@ describe('runtime stage', () => {
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				})
-				// A verdict `prove` really produces names every stage in both phases, so the two
-				// stages this test does not drive are recorded clean rather than omitted.
+				// A verdict `prove` really produces names every stage in both phases, so the stages
+				// this test does not drive are recorded clean rather than omitted.
 				const clean: readonly Check[] = [
 					{ stage: 'type', elapsed: 0, findings: [] },
 					{ stage: 'lint', elapsed: 0, findings: [] },
@@ -249,7 +249,7 @@ describe('runtime stage', () => {
 					'probe:receipt-origin-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@receipt-origin-project'
 
 				// The stage marks a test it never ran as its own fault and a failed expectation as
-				// the candidate's, which is what the three outcomes below are read from.
+				// the candidate's, which is what the outcomes below are read from.
 				expect(skipped.findings).toStrictEqual([
 					{
 						origin: 'instrument',
@@ -260,7 +260,7 @@ describe('runtime stage', () => {
 				expect(failed.findings[0]?.origin).toBe('code')
 				expect(passed.findings).toStrictEqual([])
 
-				// The three controls reach this assertion through the real stage and differ only in
+				// The controls reach this assertion through the real stage and differ only in
 				// what it reported about them, so each verdict turns on that report alone.
 				expect(computeReceipt({ ...base, control: [...clean, skipped] }, 'runtime')).toBeUndefined()
 				expect(computeReceipt(base, 'runtime')).toBe(token)
@@ -1053,7 +1053,7 @@ describe('runtime stage', () => {
 			relative(scratch.path, orphan),
 			formatSpecification(specification, orphanRevision),
 		)
-		// Five controls the sweep must leave alone. The live one and the developer's own file are
+		// Controls the sweep must leave alone. The live one and the developer's own file are
 		// the load-bearing pair: several hosts share one workspace routinely, so a sweep reading the
 		// name deletes a neighbour's specification while its run is reading it, and a consumer's own
 		// file that happens to carry the same name shape is theirs rather than this package's.
@@ -1081,7 +1081,7 @@ describe('runtime stage', () => {
 			`${departed.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, drafted), specification)
-		// A boot the host did not survive leaves its two arming dependencies in the same directory.
+		// A boot the host did not survive leaves its arming dependencies in the same directory.
 		// They are ordinary TypeScript in the consumer's tree, so they carry the same identity and
 		// the sweep reads them the same way.
 		const arming = createRevisionFile(

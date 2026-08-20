@@ -18,7 +18,7 @@ describe.sequential('published distribution', () => {
 		expect(control.stderr).toContain('ERR_PACKAGE_PATH_NOT_EXPORTED')
 	})
 
-	it('installs and drives every published entry under both module systems', () => {
+	it('installs and drives every published entry under ESM and CommonJS', () => {
 		const scratch = createScratch({ prefix: 'probe-distribution-' })
 		const cache = resolve(scratch.path, 'cache')
 		const environment = { ...process.env, npm_config_cache: cache }
@@ -138,7 +138,7 @@ describe.sequential('published distribution', () => {
 					"if (typeof server.createProbe !== 'function') throw new Error('The server export is unreadable')",
 					"if (typeof server.computeDigest !== 'function' || typeof server.normalizeValue !== 'function') throw new Error('The digest leaves are unreadable')",
 					"if (manifest.name !== '@orkestrel/probe') throw new Error('The manifest export is unreadable')",
-					// The two published formats of one install are two module instances, so the class
+					// The published formats of one install are separate module instances, so the class
 					// this consumer imported is not the class the required copy constructs. The
 					// `instanceof` line is the control: it proves the copies really are distinct, and
 					// without it the guard assertion beneath would pass against a single copy.

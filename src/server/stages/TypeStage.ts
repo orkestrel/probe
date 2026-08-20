@@ -71,7 +71,7 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	/**
-	 * Candidate paths this stage currently holds as text.
+	 * Candidate paths the inspection in flight holds as text.
 	 *
 	 * @remarks
 	 * An inspection installs its own overlay and releases it when it ends, whatever ended it, so
@@ -86,7 +86,7 @@ export class TypeStage implements TypeStageInterface {
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
 	 * @remarks
-	 * The second parameter is this stage's own, not the stage contract's: the lint and runtime
+	 * The `project` parameter is this stage's own, not the stage contract's: the lint and runtime
 	 * stages read no project, so `StageInterface` declares one parameter and every caller that
 	 * needs this one holds a `TypeStage`.
 	 *

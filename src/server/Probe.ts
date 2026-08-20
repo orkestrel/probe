@@ -140,7 +140,7 @@ export class Probe implements ProbeInterface {
 			const started = performance.now()
 			const id = randomUUID()
 			// Resolve the project before any inspection runs, so a project this workspace cannot parse
-			// fails the claim outright rather than after three stages have paid for it.
+			// fails the claim outright rather than after every stage has paid for it.
 			const project = await this.#type.resolve(claim.project)
 			const digest = computeDigest(this.#workspace, {
 				case: claim.case,
@@ -216,7 +216,7 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #boot(): Promise<void> {
-		// The two dependencies below are real files in the target's tree, so they carry the same
+		// The dependencies below are real files in the target's tree, so they carry the same
 		// revision identity a generated specification does: the writing host's process id, then a
 		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
 		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
