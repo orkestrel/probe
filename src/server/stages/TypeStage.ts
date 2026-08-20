@@ -108,7 +108,9 @@ export class TypeStage implements StageInterface {
 			const root = this.#service(typescript, 'tsconfig.json')
 			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
 			for (const source of subject.files) {
-				const selected = project ?? inferTypeProject(source.path)
+				const resolved = resolveWorkspaceFile(this.#workspace, source.path)
+				const selected =
+					project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, resolved))
 				const service = this.#service(typescript, selected)
 				findings.push(...this.#findings(typescript, service, source, selected))
 			}

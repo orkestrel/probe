@@ -244,6 +244,109 @@ describe('runtime stage', () => {
 		},
 	)
 
+	it.each(['.js', '.ts', ''])(
+		'runs a text-only candidate imported with the %s spelling',
+		{ timeout: 60_000 },
+		async (extension) => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('src/.keep', '')
+			scratch.write('tmp/probe/.keep', '')
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const check = await stage.inspect({
+					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+					test: {
+						path: `tmp/probe/text-only-${extension || 'extensionless'}.test.ts`,
+						text: `import { VALUE } from '../../src/value${extension}'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n`,
+					},
+				})
+				expect(check.findings).toStrictEqual([])
+				expect(existsSync(resolve(scratch.path, 'src/value.ts'))).toBe(false)
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'does not resolve a bare package specifier from the candidate overlay',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const check = await stage.inspect({
+					files: [
+						{
+							path: 'node_modules/overlay-package/index.ts',
+							text: "export const VALUE = 'candidate'\n",
+						},
+					],
+					test: {
+						path: 'tmp/probe/bare-package.test.ts',
+						text: "import { VALUE } from 'overlay-package'\nimport { expect, test } from 'vitest'\ntest('does not load the candidate', () => expect(VALUE).toBe('candidate'))\n",
+					},
+				})
+				expect(check.findings).toEqual([
+					expect.objectContaining({
+						origin: 'code',
+						message: expect.stringContaining("Cannot find package 'overlay-package'"),
+					}),
+				])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it.each([
+		{
+			name: 'missing directory',
+			path: 'tmp/probe/absent/deep/runtime.test.ts',
+			message: 'The runtime test directory does not exist',
+		},
+		{
+			name: 'write failure',
+			path: `tmp/probe/${'x'.repeat(300)}.test.ts`,
+			message: 'ENAMETOOLONG',
+		},
+	])('reports a $name as an instrument finding', { timeout: 60_000 }, async ({ path, message }) => {
+		const stage = new RuntimeStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path,
+					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+				},
+			})
+			expect(check.findings).toEqual([
+				expect.objectContaining({
+					origin: 'instrument',
+					path,
+					message: expect.stringContaining(message),
+				}),
+			])
+		} finally {
+			await stage.destroy()
+		}
+	})
+
 	it(
 		'runs a directly imported candidate without changing its disk file',
 		{ timeout: 60_000 },

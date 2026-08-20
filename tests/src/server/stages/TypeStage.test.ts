@@ -107,6 +107,42 @@ describe('type stage', () => {
 		},
 	)
 
+	it(
+		'infers one project for equivalent spellings of a resolved candidate',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new TypeStage(ROOT)
+			const test = {
+				path: 'tmp/probe/project-spelling.test.ts',
+				text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
+			}
+			try {
+				const indirect = await stage.inspect({
+					files: [
+						{
+							path: 'src/core/../server/project-spelling.ts',
+							text: 'export const VERSION = process.version\n',
+						},
+					],
+					test,
+				})
+				const direct = await stage.inspect({
+					files: [
+						{
+							path: 'src/server/project-spelling.ts',
+							text: 'export const VERSION = process.version\n',
+						},
+					],
+					test,
+				})
+				expect(indirect.findings).toStrictEqual(direct.findings)
+				expect(direct.findings).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
+
 	it('imports a candidate that exists only as overlay text', { timeout: 60_000 }, async () => {
 		const id = randomUUID()
 		const candidate = `src/core/overlay-only-${id}.ts`

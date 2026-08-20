@@ -1,4 +1,4 @@
-import type { Case, Check, Finding, Stage } from '@src/core'
+import type { Case, Check, Finding, Source, Stage } from '@src/core'
 import type { OverlayInterface, StageInterface } from '../types.js'
 import type {
 	TestProjectConfiguration,
@@ -9,9 +9,10 @@ import type {
 import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/node'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { attempt } from '@orkestrel/contract'
 import {
 	createRevisionFile,
 	inferTestProject,
@@ -110,18 +111,22 @@ export class RuntimeStage implements StageInterface {
 				overlay.set(resolveWorkspaceFile(this.#workspace, source.path), source.text)
 			}
 			this.#revalidate(vitest)
-			const file = createRevisionFile(this.#workspace, subject.test.path, randomUUID())
-			if (!existsSync(dirname(file))) {
-				throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
+			const specification = this.#specification(subject.test)
+			if (typeof specification !== 'string') {
+				return {
+					stage: this.stage,
+					elapsed: Math.round(performance.now() - started),
+					findings: [specification],
+				}
 			}
-			writeFileSync(file, subject.test.text, { encoding: 'utf8', flag: 'wx' })
+			const file = specification
 			this.#specifications += 1
 			this.#revisions.add(file)
 			let findings: readonly Finding[] = []
 			let cleanup: readonly Finding[] = []
 			try {
-				const specification = project.createSpecification(file, undefined, 'threads')
-				const result = await vitest.runTestSpecifications([specification], false)
+				const task = project.createSpecification(file, undefined, 'threads')
+				const result = await vitest.runTestSpecifications([task], false)
 				findings = this.#findings(result, file, subject.test.path)
 			} finally {
 				process.exitCode = exitCode
@@ -240,10 +245,31 @@ export class RuntimeStage implements StageInterface {
 				{
 					name: 'orkestrel-runtime-overlay',
 					enforce: 'pre',
+					resolveId: this.#resolve.bind(this),
 					load: this.#load.bind(this),
 				},
 			],
 		}
+	}
+
+	#resolve(id: string, importer: string | undefined): string | undefined {
+		const separator = id.lastIndexOf('?')
+		const specifier = separator === -1 ? id : id.slice(0, separator)
+		const suffix = separator === -1 ? '' : id.slice(separator)
+		if (!specifier.startsWith('.') && !isAbsolute(specifier)) return undefined
+		if (importer === undefined && !isAbsolute(specifier)) return undefined
+		const imported = isAbsolute(specifier)
+			? specifier
+			: resolve(dirname(importer ?? this.#workspace), specifier)
+		const candidates = [imported]
+		const extension = extname(imported)
+		if (extension === '.js') candidates.push(`${imported.slice(0, -extension.length)}.ts`)
+		if (extension === '') candidates.push(`${imported}.ts`)
+		for (const candidate of candidates) {
+			const resolved = `${candidate}${suffix}`
+			if (this.#load(resolved) !== undefined) return resolved
+		}
+		return undefined
 	}
 
 	#load(id: string): string | undefined {
@@ -262,6 +288,23 @@ export class RuntimeStage implements StageInterface {
 			return undefined
 		}
 		return this.#overlay.text(id.slice(0, separator))
+	}
+
+	#specification(test: Source): string | Finding {
+		const outcome = attempt(() => {
+			const file = createRevisionFile(this.#workspace, test.path, randomUUID())
+			if (!existsSync(dirname(file))) {
+				throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
+			}
+			writeFileSync(file, test.text, { encoding: 'utf8', flag: 'wx' })
+			return file
+		})
+		if (outcome.success) return outcome.value
+		return {
+			origin: 'instrument',
+			path: test.path,
+			message: `The runtime stage could not write the generated specification (${messageFromUnknown(outcome.error)})`,
+		}
 	}
 
 	// Returns the project or the finding that replaces it, never both and never neither. A pair of

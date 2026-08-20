@@ -170,6 +170,56 @@ describe.sequential('probe', () => {
 		}
 	})
 
+	it(
+		'retains all stage checks when the runtime test directory is missing',
+		{ timeout: 60_000 },
+		async () => {
+			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			try {
+				const verdict = await probe.prove({
+					project: 'configs/src/tsconfig.core.json',
+					case: {
+						files: [{ path: 'src/core/missing-runtime.ts', text: "export const VALUE = 'ok'\n" }],
+						test: {
+							path: 'tmp/probe/absent/deep/missing-runtime.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [
+							{
+								path: 'src/core/missing-runtime.ts',
+								text: "export const VALUE: number = 'bad'\n",
+							},
+						],
+						test: {
+							path: 'tmp/probe/missing-runtime-control.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				})
+				expect(verdict.checks.map((check) => check.stage)).toStrictEqual([
+					'type',
+					'lint',
+					'runtime',
+				])
+				expect(verdict.checks.find((check) => check.stage === 'type')?.findings).toStrictEqual([])
+				expect(verdict.checks.find((check) => check.stage === 'lint')?.findings).toStrictEqual([])
+				expect(verdict.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
+					expect.objectContaining({
+						origin: 'instrument',
+						path: 'tmp/probe/absent/deep/missing-runtime.test.ts',
+						message: expect.stringContaining('The runtime test directory does not exist'),
+					}),
+				])
+			} finally {
+				await probe.destroy()
+			}
+		},
+	)
+
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
