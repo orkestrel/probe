@@ -134,3 +134,22 @@ deviation; record it as the observation criterion 6 asks for and carry on.
 - Files changed.
 
 No process diary.
+
+## What landed since this brief was written
+
+PB6 and PB7 both ran. Read the tree, not the rows as recorded.
+
+- **`guides/probe.md` and `tests/guides.test.ts` exist.** The guides gate sweeps both barrels and fails on any exported declaration whose comment carries no `@example`, and requires every `Object.keys(server)` name to have a backticked row under the guide's `## Surface` heading. If your ruling adds, removes, or renames an export, both move with it — and `guides/probe.md` is **granted to you** for exactly that, minimally.
+- **`Overlay` is interned**, named with `OverlayInterface` in the parity `INTERNAL` list.
+- **`normalizePath` is exported** from `src/server/helpers.ts` and consumed everywhere.
+- **`formatFinding`'s examples are typed `Finding` literals now**, so row 24's rendering change must keep them compiling; `npm run check` is that proof.
+- **The `Verdict` `@example` carries `elapsed: 549`** and a test parses its seven timings back out. If your ruling changes the example, that test moves with it.
+
+Row 39's governing ruling is `.orkestrel/probe/p4-receipt-ruling.md`, and `computeReceipt` now reads
+`verdict.digest` with the project last — PB4 landed the seven-field token. Read `src/core/helpers.ts`
+as it stands before ruling on the strictness question.
+
+## Scope, amended
+
+**Owned, added:** `guides/probe.md` and `tests/guides.test.ts`, for parity only — the rows and
+assertions your own ruling makes true or false. Do not restructure either.
