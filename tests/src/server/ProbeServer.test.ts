@@ -137,4 +137,81 @@ describe('probe server', () => {
 		expect(readInput()).toStrictEqual(input)
 		expect(readSignals()).toStrictEqual(signals)
 	})
+
+	// The two cases below attach after `start`, which is the moment a teardown that removed whatever
+	// an emitter had gained could not see: a listener a host registers there is a gain, and reading
+	// it as this server's takes a listener this server never added.
+	it(
+		'keeps a signal listener a host attached while it was serving',
+		{ timeout: 180_000 },
+		async () => {
+			const interrupt = createRecorder<[NodeJS.Signals]>()
+			const terminate = createRecorder<[NodeJS.Signals]>()
+			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			const signals = readSignals()
+			try {
+				server.start()
+				process.on('SIGINT', interrupt.handler)
+				process.on('SIGTERM', terminate.handler)
+				await server.destroy()
+				// This server's own handler is off both signals and the host's is on both, so each signal
+				// carries the baseline plus the one the host registered.
+				expect(readSignals()).toStrictEqual({
+					SIGINT: signals.SIGINT + 1,
+					SIGTERM: signals.SIGTERM + 1,
+				})
+				expect(process.listeners('SIGINT')).toContain(interrupt.handler)
+				expect(process.listeners('SIGTERM')).toContain(terminate.handler)
+				// Attached is not the same fact as live, so the signals are delivered rather than counted.
+				process.emit('SIGINT', 'SIGINT')
+				process.emit('SIGTERM', 'SIGTERM')
+				expect(interrupt.count).toBe(1)
+				expect(terminate.count).toBe(1)
+			} finally {
+				process.removeListener('SIGINT', interrupt.handler)
+				process.removeListener('SIGTERM', terminate.handler)
+			}
+		},
+	)
+
+	// The fourth flow case, and the one that makes the release-time reader count behavioural. The
+	// stream was not flowing when `start` read it, so the flow is this server's to pause, and the
+	// host then started reading it anyway. A teardown that took the host's reader first always read
+	// a reader count of zero here, so the count could never hold a stream open and the rule it
+	// states could never be observed.
+	it(
+		'keeps delivering to a reader that started reading while it was serving',
+		{ timeout: 180_000 },
+		async () => {
+			const initial = process.stdin.isPaused()
+			const reader = createRecorder<[Buffer]>()
+			process.stdin.pause()
+			const input = readInput()
+			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			try {
+				server.start()
+				expect(process.stdin.isPaused(), 'the server resumed a stream the host had paused').toBe(
+					true,
+				)
+				// The host reads a paused stream the way any host does, by resuming it. Attaching alone
+				// leaves an explicitly paused stream paused, so the flow at release is the host's doing
+				// and the flow at `start` was nobody's.
+				process.stdin.on('data', reader.handler)
+				process.stdin.resume()
+				await server.destroy()
+				// This server took back the three listeners it attached and left the host's reader, so
+				// `data` carries one more than the baseline and the other two are back at it.
+				expect(readInput()).toStrictEqual({ ...input, data: input.data + 1 })
+				expect(process.stdin.listeners('data')).toContain(reader.handler)
+				expect(process.stdin.isPaused()).toBe(false)
+				process.stdin.push('probe')
+				await waitForDelay(20)
+				expect(reader.calls.map((call) => String(call[0]))).toStrictEqual(['probe'])
+			} finally {
+				process.stdin.removeListener('data', reader.handler)
+				if (initial) process.stdin.pause()
+				else process.stdin.resume()
+			}
+		},
+	)
 })

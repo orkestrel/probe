@@ -221,10 +221,13 @@ export interface ProbeServerInterface {
 	 *
 	 * @remarks
 	 * Settling is idempotent: every call after the first returns the first call's promise. The
-	 * process is left as it was before `start`, so a host that keeps running after this call reads
-	 * its own standard input again and receives its own signals. That covers the stream's flow as
-	 * well as its listeners: standard input is left flowing only when it was already flowing before
-	 * `start`, and a stream nothing had read yet was not.
+	 * server removes exactly the listeners it attached, holding each one as a field rather than
+	 * choosing by absence from a capture, so a host that keeps running after this call reads its own
+	 * standard input again and receives its own signals, and a listener the host registered while
+	 * the server was serving is still attached and still fires. That covers the stream's flow as
+	 * well as its listeners: standard input is left flowing when it was already flowing before
+	 * `start` and when something else is reading it at release, and a stream nothing had read yet
+	 * and nothing else reads is paused.
 	 *
 	 * @returns A promise that settles after the probe releases its resident engines
 	 */
@@ -238,6 +241,10 @@ export interface ProbeServerInterface {
  * A capture is the before half of a listener diff. `captureListeners` takes one, and
  * `releaseListeners` removes whatever the emitter has gained since. Identity is what the pair
  * compares, so a listener a capture holds survives the release whatever it is named.
+ *
+ * The pair reads a gain as the callee's own, so it binds its caller to a window nothing else can
+ * attach in. Where a caller cannot promise that window, hold each handler as a field and remove it
+ * by reference instead.
  *
  * @example
  * ```ts

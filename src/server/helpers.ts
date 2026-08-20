@@ -439,6 +439,12 @@ export function captureListeners(
  * listener the capture already held survives, and a listener the capture held that has since been
  * removed is not restored.
  *
+ * A gain is not evidence of who caused it, so this reads every gain as the callee's. Call it only
+ * across a window nothing else can attach in — a synchronous call, or a call whose handlers land
+ * before its first await and that is released as it returns — because a listener anyone else
+ * attaches inside that window is removed with the rest. Where a caller cannot promise that window,
+ * hold each handler as a field and remove it by reference instead of capturing at all.
+ *
  * @param emitter - The emitter to release
  * @param capture - The listeners the emitter carried at capture time
  * @returns Nothing

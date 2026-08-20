@@ -187,7 +187,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `normalizeValue`         | function | `(workspace: string, value: unknown) => unknown`                                            | Rewrites every workspace-contained absolute path to its relative form and sorts every record's keys.         |
 | `computeDigest`          | function | `(workspace: string, value: unknown) => string`                                             | Digests the normalized value and returns 32 lowercase hex characters.                                        |
 | `captureListeners`       | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture`                     | Records the listeners one emitter carries for a set of events.                                               |
-| `releaseListeners`       | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`                                 | Removes every listener one emitter gained for the captured events since its capture.                         |
+| `releaseListeners`       | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`                                 | Removes every listener one emitter gained since its capture, across a window nothing else attaches in.       |
 
 ## Methods
 
@@ -556,12 +556,21 @@ than the probe's — it decides which process reads the stdio, not when the engi
   One inspection in every 64 also replaces the resident runner, and that inspection costs more than
   the other 63 — budget `deadline` against that one rather than the common one.
 - **Teardown.** `destroy()` releases every resident process and is idempotent. `ProbeServer.destroy`
-  adds the process itself: it detaches the transport's standard-input listeners, hands back the
-  signal handlers `start` registered, and pauses the stream unless `start` found it already
-  flowing, so the event loop drains and the process exits 0 with no explicit exit call. A stream
-  nobody has read yet is neither flowing nor paused, and this server is what sets it flowing, so it
-  is paused. A host already reading its own standard input keeps reading it after the server it
-  embedded is destroyed.
+  adds the process itself: it removes the five listeners `start` attached — three on standard input
+  and one on each signal — and pauses the stream unless `start` found it already flowing, so the
+  event loop drains and the process exits 0 with no explicit exit call. A stream nobody has read yet
+  is neither flowing nor paused, and this server is what sets it flowing, so it is paused. A host
+  already reading its own standard input keeps reading it after the server it embedded is destroyed.
+- **The server removes only what it added.** Every listener `ProbeServer` attaches is held as a
+  field and removed by reference, so a listener a host registers while the server is serving is
+  still attached and still fires afterwards. Nothing is chosen by being absent from a capture,
+  because a capture cannot tell a listener the server added from one the host added later. The
+  transport is what makes that reachable: it reads a stream the server owns rather than this
+  process's standard input, so its own listeners never land on `process.stdin` and the only
+  listeners the server puts there are the three that forward into that stream. The release-time
+  reader count is load-bearing for the same reason — a host that starts reading standard input
+  while the server is serving keeps its reader and keeps the flow, even though `start` found the
+  stream stopped and would otherwise pause it.
 - **Stage teardown is bounded.** A resident stage abandons every inspection it holds rather than
   waiting behind one, and it waits no longer for the tool's own answers. The lint stage bounds both
   exchanges the Language Server Protocol leaves to the server — the `initialize` reply that warming
@@ -636,7 +645,8 @@ inspection rather than the common one.
   [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the resident stages
   against their real tools.
 - [`ProbeServer.test.ts`](../tests/src/server/ProbeServer.test.ts) — what `start` seizes and what
-  `destroy` gives back, standard input's flow included.
+  `destroy` gives back, standard input's flow included, and what a host attaches while the server is
+  serving.
 - [`Overlay.test.ts`](../tests/src/server/Overlay.test.ts) — the candidate set's identity,
   containment, and release.
 - [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by a foreign client,
