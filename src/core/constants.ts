@@ -15,7 +15,7 @@ import type { Stage } from './types.js'
 export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'runtime'])
 
 /**
- * The parties that can own action on a finding or probe failure.
+ * The parties that can own action on an issue or probe failure.
  *
  * @remarks
  * One list feeds the `Party` type and its guard, so a party cannot be admitted by one and refused
@@ -53,7 +53,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
  * The leading token every receipt carries.
  *
  * @remarks
- * A receipt travels away from the verdict that issued it — an agent pastes it into the promotion
+ * A receipt travels away from the verdict that minted it — an agent pastes it into the promotion
  * action — so it names itself rather than relying on where it was found.
  *
  * @example

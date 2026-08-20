@@ -1,4 +1,4 @@
-import type { Case, Check, Finding, Source, Stage } from '@src/core'
+import type { Case, Check, Issue, Source, Stage } from '@src/core'
 import type { OverlayInterface, StageInterface } from '../types.js'
 import type {
 	TestProjectConfiguration,
@@ -48,7 +48,7 @@ import { Overlay } from '../Overlay.js'
  * @remarks
  * Construction starts Vitest with the threads pool and instruments each inline or function-declared
  * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
- * string-declared project reports an instrument finding because its project server carries no runtime
+ * string-declared project reports a workspace issue because its configuration carries no runtime
  * overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
  * workspace module whose disk content or candidate revision changed, runs that specification,
  * evicts its result, and deletes the file. Clearing the overlay makes the next snapshot differ from
@@ -63,10 +63,16 @@ import { Overlay } from '../Overlay.js'
  * inspections put that one at 480 ms and 269 ms against median inspections of 156 ms and 155 ms, so
  * budget one call in 64 at 110 ms to 330 ms above the rest.
  *
- * A failure Vitest reported about the candidate carries `origin: 'claimant'`. An unmapped caller
- * test or a test whose named project is absent is also a claimant failure with `code: 'missing'`.
- * Failures in the stage's own machinery carry `origin: 'instrument'`. A string-declared project
- * that cannot install the overlay is an instrument finding because no runtime inspection ran.
+ * Every issue this stage emits names its party, and the stage emits an issue for every party
+ * `Party` declares. An `origin: 'claimant'` issue is a failure Vitest reported about the candidate.
+ * An `origin: 'workspace'` issue names the target tree: a project the root configuration declares
+ * as a path string, into which the stage can install no overlay, and a specification path that
+ * crosses a symbolic link or whose existing components this host cannot inspect. An
+ * `origin: 'instrument'` issue names this package's own machinery: a specification it could not
+ * write, run, evict, or delete for a reason the target tree does not own, and a run that reported
+ * no test. An unmapped caller test and a test whose named project is absent are claimant failures
+ * with `code: 'missing'`, thrown rather than reported, because a test that never ran is no
+ * evidence about the candidate.
  *
  * @example
  * ```ts
@@ -123,7 +129,7 @@ export class RuntimeStage implements StageInterface {
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				findings: [project],
+				issues: [project],
 			}
 		}
 		const overlay = new Overlay()
@@ -138,20 +144,20 @@ export class RuntimeStage implements StageInterface {
 				return {
 					stage: this.stage,
 					elapsed: Math.round(performance.now() - started),
-					findings: [specification],
+					issues: [specification],
 				}
 			}
 			const file = specification
 			this.#specifications += 1
 			this.#revisions.add(file)
-			let findings: readonly Finding[] = []
-			let cleanup: readonly Finding[] = []
+			let issues: readonly Issue[] = []
+			let cleanup: readonly Issue[] = []
 			const task = project.createSpecification(file, undefined, 'threads')
 			this.#progress += 1
 			try {
 				try {
 					const result = await vitest.runTestSpecifications([task], false)
-					findings = this.#findings(result, file, subject.test.path)
+					issues = this.#issues(result, file, subject.test.path)
 				} catch (error) {
 					if (error instanceof ProbeError) throw error
 					throw new ProbeError(
@@ -193,7 +199,7 @@ export class RuntimeStage implements StageInterface {
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				findings: [...findings, ...cleanup],
+				issues: [...issues, ...cleanup],
 			}
 		} finally {
 			overlay.clear()
@@ -363,7 +369,7 @@ export class RuntimeStage implements StageInterface {
 		return this.#overlay.text(id.slice(0, separator))
 	}
 
-	#specification(test: Source): string | Finding {
+	#specification(test: Source): string | Issue {
 		const outcome = attempt(() => {
 			// The writing host's own process id leads the revision, so a later host can tell a file
 			// whose writer is gone from one a live host is running right now. Several hosts share one
@@ -379,7 +385,7 @@ export class RuntimeStage implements StageInterface {
 			// tidies away the workbench it created, so the path the convention names is absent in a
 			// fresh checkout of a target: a stage that refused over the absence alone refused the first
 			// claim of every consumer. A directory the host will not create still refuses through the
-			// finding a failed write reports.
+			// issue a failed write reports.
 			mkdirSync(dirname(file), { recursive: true })
 			resolveWorkspaceFile(this.#workspace, target, true)
 			// The marker goes in the file rather than in its name alone, because the name is the
@@ -410,10 +416,10 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	// Returns the project or the finding that replaces it, never both and never neither. A pair of
+	// Returns the project or the issue that replaces it, never both and never neither. A pair of
 	// independent optionals would let a caller write the combination carrying neither, and that branch
 	// reports a clean check for a case whose test never ran.
-	#project(vitest: Vitest, path: string): TestProject | Finding {
+	#project(vitest: Vitest, path: string): TestProject | Issue {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently
 		// selected the root project before this resolved.
@@ -440,7 +446,7 @@ export class RuntimeStage implements StageInterface {
 			!project.vite.config.plugins.some((plugin) => plugin.name === 'orkestrel-runtime-overlay')
 		) {
 			return {
-				origin: 'instrument',
+				origin: 'workspace',
 				path,
 				message: `The runtime stage cannot instrument the string-declared Vitest project ${name} because its configuration carries no runtime overlay plugin`,
 			}
@@ -448,7 +454,7 @@ export class RuntimeStage implements StageInterface {
 		return project
 	}
 
-	async #evict(vitest: Vitest, file: string): Promise<readonly Finding[]> {
+	async #evict(vitest: Vitest, file: string): Promise<readonly Issue[]> {
 		try {
 			const ids: string[] = []
 			for (const [id, task] of vitest.state.idMap) {
@@ -626,29 +632,29 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	#findings(result: TestRunResult, file: string, original: string): readonly Finding[] {
+	#issues(result: TestRunResult, file: string, original: string): readonly Issue[] {
 		const specification = this.#real(file)
-		const findings: Finding[] = []
+		const issues: Issue[] = []
 		for (const module of result.testModules) {
-			const before = findings.length
+			const before = issues.length
 			for (const error of module.errors()) {
-				findings.push(this.#finding(error, specification, original))
+				issues.push(this.#issue(error, specification, original))
 			}
 			for (const test of module.children.allTests('failed')) {
 				const errors = test.result().errors ?? []
-				for (const error of errors) findings.push(this.#finding(error, specification, original))
+				for (const error of errors) issues.push(this.#issue(error, specification, original))
 			}
 			const state: string = module.state()
 			if (state === 'passed') {
 				if (Array.from(module.children.allTests()).length === 0) {
-					findings.push({
+					issues.push({
 						origin: 'instrument',
 						path: original,
 						message: 'Vitest ran no tests in the module',
 					})
 				}
 				for (const test of module.children.allTests('skipped')) {
-					findings.push({
+					issues.push({
 						origin: 'instrument',
 						path: original,
 						message: `Vitest did not run the test (${test.fullName})`,
@@ -657,7 +663,7 @@ export class RuntimeStage implements StageInterface {
 				continue
 			}
 			if (state === 'skipped') {
-				findings.push({
+				issues.push({
 					origin: 'instrument',
 					path: original,
 					message: 'Vitest ran no tests in the module',
@@ -665,8 +671,8 @@ export class RuntimeStage implements StageInterface {
 				continue
 			}
 			if (state === 'failed') {
-				if (findings.length === before) {
-					findings.push({
+				if (issues.length === before) {
+					issues.push({
 						origin: 'claimant',
 						path: original,
 						message: 'Vitest reported a failed test module',
@@ -675,30 +681,30 @@ export class RuntimeStage implements StageInterface {
 				continue
 			}
 			if (state === 'pending' || state === 'queued') {
-				findings.push({
+				issues.push({
 					origin: 'instrument',
 					path: original,
 					message: `Vitest did not finish the test module (${state})`,
 				})
 				continue
 			}
-			findings.push({
+			issues.push({
 				origin: 'instrument',
 				path: original,
 				message: `Vitest reported an unrecognized test module state (${state})`,
 			})
 		}
 		for (const error of result.unhandledErrors) {
-			findings.push(this.#finding(error, specification, original))
+			issues.push(this.#issue(error, specification, original))
 		}
-		if (result.testModules.length === 0 && findings.length === 0) {
-			findings.push({
+		if (result.testModules.length === 0 && issues.length === 0) {
+			issues.push({
 				origin: 'instrument',
 				path: original,
 				message: 'Vitest returned no test module',
 			})
 		}
-		return findings
+		return issues
 	}
 
 	// Resolves one path through its real form, and leaves a path it cannot resolve as it stands.
@@ -714,7 +720,7 @@ export class RuntimeStage implements StageInterface {
 	// so each one is that code failing rather than this stage faulting. `specification` arrives
 	// already resolved through its real path, and every reported frame is resolved the same way, so
 	// the two sides compare on one spelling.
-	#finding(error: unknown, specification: string, original: string): Finding {
+	#issue(error: unknown, specification: string, original: string): Issue {
 		const message = messageFromUnknown(error)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
 			return { origin: 'claimant', path: original, message }

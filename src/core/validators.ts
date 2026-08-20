@@ -4,7 +4,7 @@ import type {
 	Check,
 	Claim,
 	Control,
-	Finding,
+	Issue,
 	Party,
 	Project,
 	Source,
@@ -44,7 +44,7 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
  * Rejects an empty, absolute, or workspace-escaping path. A contained relative path may contain
  * `.` or may traverse to a parent that remains inside the workspace. Every stage resolves a file
  * by that path, so admitting an escape here would defer the refusal until a stage had already
- * accepted the source. A `Finding` carries no such minimum because this package produces findings
+ * accepted the source. An `Issue` carries no such minimum because this package produces issues
  * rather than admits them.
  *
  * @param value - The value to check
@@ -140,7 +140,7 @@ export const isClaim: Guard<Claim> = recordOf({
 })
 
 /**
- * Checks whether a value names a party a finding carries.
+ * Checks whether a value names a party an issue carries.
  *
  * @param value - The value to check
  * @returns True if the value is a party; false otherwise
@@ -159,20 +159,20 @@ export const isParty: Guard<Party> = literalOf(PARTIES)
  * Checks whether a value carries one message, its location, and the origin of the fault it names.
  *
  * @remarks
- * `origin` is required rather than optional. Every finding this package produces sets it, and a
- * receipt turns on it: a control's finding disproves the claim only when its origin names the
+ * `origin` is required rather than optional. Every issue this package produces sets it, and a
+ * receipt turns on it: a control's issue disproves the claim only when its origin names the
  * claimant.
  *
  * @param value - The value to check
- * @returns True if the value is a finding; false otherwise
+ * @returns True if the value is an issue; false otherwise
  *
  * @example
  * ```ts
- * isFinding({ origin: 'claimant', path: 'src/core/greeting.ts', message: 'not assignable' }) // true
- * isFinding({ path: 'src/core/greeting.ts', message: 'not assignable' }) // false
+ * isIssue({ origin: 'claimant', path: 'src/core/greeting.ts', message: 'not assignable' }) // true
+ * isIssue({ path: 'src/core/greeting.ts', message: 'not assignable' }) // false
  * ```
  */
-export const isFinding: Guard<Finding> = recordOf(
+export const isIssue: Guard<Issue> = recordOf(
 	{ origin: isParty, path: isString, message: isString, line: isNumber },
 	['line'],
 )
@@ -185,13 +185,13 @@ export const isFinding: Guard<Finding> = recordOf(
  *
  * @example
  * ```ts
- * isCheck({ stage: 'lint', elapsed: 17, findings: [] }) // true
+ * isCheck({ stage: 'lint', elapsed: 17, issues: [] }) // true
  * ```
  */
 export const isCheck: Guard<Check> = recordOf({
 	stage: isStage,
 	elapsed: isNumber,
-	findings: arrayOf(isFinding),
+	issues: arrayOf(isIssue),
 })
 
 /**

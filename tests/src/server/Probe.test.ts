@@ -130,7 +130,7 @@ function slowest(checks: readonly Check[]): number {
 
 describe.sequential('probe', () => {
 	it(
-		'issues receipts only when every stage executes cleanly and returns admitted path findings',
+		'mints receipts only when every stage executes cleanly and returns admitted path issues',
 		{ timeout: 60_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
@@ -152,7 +152,7 @@ describe.sequential('probe', () => {
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			try {
-				const issued = await probe.prove({
+				const minted = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
 					case: { files: [clean], test },
 					control: {
@@ -198,11 +198,11 @@ describe.sequential('probe', () => {
 					code: 'missing',
 					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
-				expect(issued.receipt).toMatch(/^probe:/)
-				expect(issued.reason).toBe('the source assigns a string to a number')
+				expect(minted.receipt).toMatch(/^probe:/)
+				expect(minted.reason).toBe('the source assigns a string to a number')
 				expect(refused.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
-				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
+				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						message: 'Vitest ran no tests in the module',
@@ -328,9 +328,9 @@ describe.sequential('probe', () => {
 					'lint',
 					'runtime',
 				])
-				expect(verdict.checks.find((check) => check.stage === 'type')?.findings).toStrictEqual([])
-				expect(verdict.checks.find((check) => check.stage === 'lint')?.findings).toStrictEqual([])
-				expect(verdict.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
+				expect(verdict.checks.find((check) => check.stage === 'type')?.issues).toStrictEqual([])
+				expect(verdict.checks.find((check) => check.stage === 'lint')?.issues).toStrictEqual([])
+				expect(verdict.checks.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						path,
@@ -574,7 +574,7 @@ describe.sequential('probe', () => {
 				},
 			})
 			expect(served.receipt).toBeTypeOf('string')
-			expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+			expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
 		}
@@ -666,7 +666,7 @@ describe.sequential('probe', () => {
 				'runtime',
 				'type',
 			])
-			expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+			expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
 			scratch.destroy()
@@ -746,7 +746,7 @@ describe.sequential('probe', () => {
 					'runtime',
 					'type',
 				])
-				expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+				expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
 			} finally {
 				await probe.destroy()
 				scratch.destroy()
@@ -854,8 +854,8 @@ describe.sequential('probe', () => {
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			try {
 				const verdict = await probe.prove(claim)
-				expect(verdict.checks.flatMap((check) => check.findings)).toEqual([
-					expect.objectContaining({ origin: 'instrument', path: claim.case.test.path }),
+				expect(verdict.checks.flatMap((check) => check.issues)).toEqual([
+					expect.objectContaining({ origin: 'workspace', path: claim.case.test.path }),
 				])
 				expect(verdict.receipt).toBeUndefined()
 			} finally {
@@ -1245,7 +1245,7 @@ describe.sequential('probe', () => {
 				// workspace's own project reports the candidate and issues nothing, so a policy
 				// comparing the token's project field refuses what a token without one admitted.
 				expect(workspace.receipt).toBeUndefined()
-				expect(workspace.checks.flatMap((check) => check.findings)).toEqual([
+				expect(workspace.checks.flatMap((check) => check.issues)).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: `src/core/probe-forgery-${id}.ts`,

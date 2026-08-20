@@ -121,7 +121,7 @@ const HOST = [
 	'await live.destroy()',
 	'await new Promise((settle) => setTimeout(settle, 300))',
 	"console.log('refused ' + refused)",
-	"console.log('settled ' + check.stage + ' ' + check.findings.length)",
+	"console.log('settled ' + check.stage + ' ' + check.issues.length)",
 ].join('\n')
 
 // Reads the process id the fixture server announced. The stage owns its child privately, so this
@@ -198,15 +198,15 @@ function createLintWorkspace(): ScratchInterface {
 }
 
 describe('lint stage', () => {
-	it('reports a workspace lint finding at the declared path', { timeout: 60_000 }, async () => {
+	it('reports a workspace lint issue at the declared path', { timeout: 60_000 }, async () => {
 		const stage = new LintStage(ROOT)
 		try {
 			const check = await stage.inspect({
 				files: [],
 				test: { path: 'tests/src/server/lint-candidate.test.ts', text: 'debugger\n' },
 			})
-			expect(check.findings.length).toBeGreaterThan(0)
-			expect(check.findings).toEqual(
+			expect(check.issues.length).toBeGreaterThan(0)
+			expect(check.issues).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -216,8 +216,8 @@ describe('lint stage', () => {
 				]),
 			)
 			// Oxlint publishes diagnostics about the supplied text and nothing else, so every
-			// finding this stage returns carries the origin that can disprove a claim.
-			expect(check.findings.every((finding) => finding.origin === 'claimant')).toBe(true)
+			// issue this stage returns carries the origin that can disprove a claim.
+			expect(check.issues.every((issue) => issue.origin === 'claimant')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}
@@ -242,9 +242,9 @@ describe('lint stage', () => {
 					files: [],
 					test: { path, text: 'debugger\ndebugger\n' },
 				})
-				expect(first.findings.length).toBe(1)
-				expect(second.findings).toStrictEqual([])
-				expect(third.findings.length).toBe(2)
+				expect(first.issues.length).toBe(1)
+				expect(second.issues).toStrictEqual([])
+				expect(third.issues.length).toBe(2)
 			} finally {
 				await stage.destroy()
 			}
@@ -289,14 +289,14 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'tmp/probe/lint-excluded.test.ts', text: 'debugger\n' },
 				})
-				expect(excluded.findings).toStrictEqual([])
+				expect(excluded.issues).toStrictEqual([])
 				// The control is the same text under a path the gate does lint. Without it a stage that
 				// reported nothing at all would pass the assertion above.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'tests/src/server/lint-excluded.test.ts', text: 'debugger\n' },
 				})
-				expect(reported.findings.length).toBe(1)
+				expect(reported.issues.length).toBe(1)
 			} finally {
 				await stage.destroy()
 			}
@@ -316,14 +316,14 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'tests/src/server/lint-override.config.ts', text },
 				})
-				expect(exempt.findings).toStrictEqual([])
+				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text under a path the exemption does not reach. Without it a
 				// stage that reported nothing at all would pass the assertion above.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'tests/src/server/lint-override.ts', text },
 				})
-				expect(reported.findings).toEqual(
+				expect(reported.issues).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({
 							origin: 'claimant',
@@ -351,7 +351,7 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'configs/candidate.ts', text: 'debugger\n' },
 				})
-				expect(exempt.findings).toStrictEqual([])
+				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text under a directory the override does not reach. Both
 				// candidates carry one declared directory and one declared name, so the only thing that
 				// can separate these two answers is the directory the stage kept.
@@ -359,7 +359,7 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'lib/candidate.ts', text: 'debugger\n' },
 				})
-				expect(reported.findings).toEqual([
+				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: 'lib/candidate.ts',
@@ -386,14 +386,14 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'guides/candidate.ts', text: 'debugger\n' },
 				})
-				expect(exempt.findings).toStrictEqual([])
+				expect(exempt.issues).toStrictEqual([])
 				// The control is a different name in the same directory, so the directory cannot be
 				// what separates these two answers.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'guides/other.ts', text: 'debugger\n' },
 				})
-				expect(reported.findings).toEqual([
+				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: 'guides/other.ts',
@@ -420,14 +420,14 @@ describe('lint stage', () => {
 					files: [],
 					test: { path: 'lib/exempt.ts', text: 'debugger\n' },
 				})
-				expect(exempt.findings).toStrictEqual([])
+				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text in the same directory under a path the override does not
 				// name, so the directory cannot be what separates these two answers.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'lib/reported.ts', text: 'debugger\n' },
 				})
-				expect(reported.findings).toEqual([
+				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: 'lib/reported.ts',
@@ -442,7 +442,7 @@ describe('lint stage', () => {
 	)
 
 	it(
-		'reports a finding for a boot control candidate the target workspace lints',
+		'reports an issue for a boot control candidate the target workspace lints',
 		{ timeout: 60_000 },
 		async () => {
 			// The boot control stages its candidates under `tmp/probe`, and a target workspace that
@@ -468,7 +468,7 @@ describe('lint stage', () => {
 			const violation = `debugger\n${PASSING}`
 			try {
 				const violating = await stage.inspect({ files: [], test: { path, text: violation } })
-				expect(violating.findings).toEqual([
+				expect(violating.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path,
@@ -476,17 +476,17 @@ describe('lint stage', () => {
 					}),
 				])
 				// The `clean` control is the boot control's own clean text at the same path. Without it a
-				// stage that reported a finding for everything would pass the assertion above.
+				// stage that reported an issue for everything would pass the assertion above.
 				const clean = await stage.inspect({ files: [], test: { path, text: PASSING } })
-				expect(clean.findings).toStrictEqual([])
+				expect(clean.issues).toStrictEqual([])
 				// The `elsewhere` control is the same violation under the same file name outside that
-				// directory, where the workspace leaves the rule off. It is what makes the finding
+				// directory, where the workspace leaves the rule off. It is what makes the issue
 				// above evidence that the declared directory selected the rule set.
 				const elsewhere = await stage.inspect({
 					files: [],
 					test: { path: 'lib/arm-runtime-89ab.test.ts', text: violation },
 				})
-				expect(elsewhere.findings).toStrictEqual([])
+				expect(elsewhere.issues).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 				scratch.destroy()
@@ -523,7 +523,7 @@ describe('lint stage', () => {
 					test: { path: 'tests/src/server/served.test.ts', text: PASSING },
 				})
 				expect(served.stage).toBe('lint')
-				expect(served.findings).toStrictEqual([])
+				expect(served.issues).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 				scratch.destroy()

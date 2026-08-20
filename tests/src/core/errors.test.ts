@@ -205,8 +205,8 @@ describe('failure adoption', () => {
 				],
 				[
 					'an unreadable mutation path',
-					'workspace',
-					'malformed',
+					'claimant',
+					'refused',
 					() => resolveWorkspaceFile(workspace.path, 'invalid\0path.ts', true),
 				],
 				[

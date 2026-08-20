@@ -295,7 +295,7 @@ export class Probe implements ProbeInterface {
 			const beforeType = await this.#inspect(typeClaim.case, typeClaim)
 			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
 			const before = [...beforeType, ...beforeRuntime]
-			if (before.some((check) => check.findings.length > 0)) {
+			if (before.some((check) => check.issues.length > 0)) {
 				throw new ProbeError(
 					`The probe boot control did not begin clean\n${before.map(formatCheck).join('\n')}`,
 					{ origin: 'instrument', code: 'malformed' },
@@ -310,7 +310,7 @@ export class Probe implements ProbeInterface {
 			const afterType = await this.#inspect(typeClaim.control, typeClaim)
 			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
 			const tolerant = afterType.find((check) => check.stage === 'runtime')
-			if (type === undefined || type.findings.length === 0) {
+			if (type === undefined || type.issues.length === 0) {
 				throw new ProbeError(
 					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatCheck).join('\n')}`,
 					{
@@ -320,7 +320,7 @@ export class Probe implements ProbeInterface {
 					},
 				)
 			}
-			if (tolerant === undefined || tolerant.findings.length > 0) {
+			if (tolerant === undefined || tolerant.issues.length > 0) {
 				throw new ProbeError(
 					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatCheck).join('\n')}`,
 					{
@@ -338,7 +338,7 @@ export class Probe implements ProbeInterface {
 			)
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
 			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
-			if (runtime === undefined || runtime.findings.length === 0) {
+			if (runtime === undefined || runtime.issues.length === 0) {
 				throw new ProbeError(
 					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatCheck).join('\n')}`,
 					{

@@ -1,4 +1,4 @@
-import type { Case, Check, Finding, Project, Source, Stage } from '@src/core'
+import type { Case, Check, Issue, Project, Source, Stage } from '@src/core'
 import type { OverlayInterface, TypeStageInterface } from '../types.js'
 import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
@@ -116,18 +116,18 @@ export class TypeStage implements TypeStageInterface {
 		try {
 			this.#record(subject.test, overlay)
 			for (const source of subject.files) this.#record(source, overlay)
-			const findings: Finding[] = []
+			const issues: Issue[] = []
 			const projects = new Set<string>()
 			const root = this.#service(typescript, 'tsconfig.json')
-			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json', false, true))
+			issues.push(...this.#issues(typescript, root, subject.test, 'tsconfig.json', false, true))
 			projects.add('tsconfig.json')
 			await this.#unblock()
 			for (const selection of selections) {
 				const source = selection.source
 				const selected = selection.project
 				const service = this.#service(typescript, selected)
-				findings.push(
-					...this.#findings(
+				issues.push(
+					...this.#issues(
 						typescript,
 						service,
 						source,
@@ -142,7 +142,7 @@ export class TypeStage implements TypeStageInterface {
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				findings,
+				issues,
 			}
 		} finally {
 			overlay.clear()
@@ -337,14 +337,14 @@ export class TypeStage implements TypeStageInterface {
 		return text === undefined ? undefined : typescript.ScriptSnapshot.fromString(text)
 	}
 
-	#findings(
+	#issues(
 		typescript: typeof TypeScript,
 		service: LanguageService,
 		source: Source,
 		project: string,
 		selected: boolean,
 		configure: boolean,
-	): readonly Finding[] {
+	): readonly Issue[] {
 		const path = resolveWorkspaceFile(this.#workspace, source.path)
 		const configuration = resolveWorkspaceFile(this.#workspace, project)
 		const diagnostics = [
@@ -352,15 +352,15 @@ export class TypeStage implements TypeStageInterface {
 			...service.getSyntacticDiagnostics(path),
 			...service.getSemanticDiagnostics(path),
 		]
-		return diagnostics.map((diagnostic) => this.#finding(typescript, diagnostic, project, selected))
+		return diagnostics.map((diagnostic) => this.#issue(typescript, diagnostic, project, selected))
 	}
 
-	#finding(
+	#issue(
 		typescript: typeof TypeScript,
 		diagnostic: Diagnostic,
 		project: string,
 		selected: boolean,
-	): Finding {
+	): Issue {
 		const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
 		if (diagnostic.file === undefined) {
 			if (selected) {

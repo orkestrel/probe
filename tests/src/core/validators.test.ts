@@ -3,7 +3,7 @@ import type {
 	Check,
 	Claim,
 	Control,
-	Finding,
+	Issue,
 	Project,
 	Source,
 	Toolchain,
@@ -17,7 +17,7 @@ import {
 	isCheck,
 	isClaim,
 	isControl,
-	isFinding,
+	isIssue,
 	isParty,
 	isProject,
 	isSource,
@@ -39,8 +39,8 @@ describe('core guards', () => {
 			reason: 'must not compile',
 		}
 		const claim: Claim = { project: 'configs/src/tsconfig.core.json', case: subject, control }
-		const finding: Finding = { origin: 'claimant', path: '', message: '' }
-		const check: Check = { stage: 'lint', elapsed: 17, findings: [finding] }
+		const issue: Issue = { origin: 'claimant', path: '', message: '' }
+		const check: Check = { stage: 'lint', elapsed: 17, issues: [issue] }
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
 			oxlint: '1.78.0',
@@ -70,8 +70,8 @@ describe('core guards', () => {
 		expect(isControl({ ...control, reason: '' })).toBe(false)
 		expect(isClaim(claim)).toBe(true)
 		expect(isClaim({ ...claim, project: '' })).toBe(false)
-		expect(isFinding(finding)).toBe(true)
-		expect(isFinding({ ...finding, line: '1' })).toBe(false)
+		expect(isIssue(issue)).toBe(true)
+		expect(isIssue({ ...issue, line: '1' })).toBe(false)
 		expect(isCheck(check)).toBe(true)
 		expect(isCheck({ ...check, elapsed: '17' })).toBe(false)
 		expect(isToolchain(toolchain)).toBe(true)
@@ -93,14 +93,14 @@ describe('core guards', () => {
 		expect(isSource({ path: 'C:\\Windows\\System32\\drivers\\etc\\hosts', text: '' })).toBe(false)
 	})
 
-	it('admits a finding that names its origin and refuses one that does not', () => {
-		const finding: Finding = {
+	it('admits an issue that names its origin and refuses one that does not', () => {
+		const issue: Issue = {
 			origin: 'claimant',
 			path: 'src/core/greeting.ts',
 			message: 'not assignable',
 		}
-		const { origin: _, ...anonymous } = finding
-		const check: Check = { stage: 'runtime', elapsed: 1, findings: [finding] }
+		const { origin: _, ...anonymous } = issue
+		const check: Check = { stage: 'runtime', elapsed: 1, issues: [issue] }
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
@@ -118,9 +118,9 @@ describe('core guards', () => {
 		expect(isParty('workspace')).toBe(true)
 		expect(isParty('instrument')).toBe(true)
 		expect(isParty('stage')).toBe(false)
-		expect(isFinding(finding)).toBe(true)
-		expect(isFinding({ ...finding, origin: 'stage' })).toBe(false)
-		expect(isFinding(anonymous)).toBe(false)
+		expect(isIssue(issue)).toBe(true)
+		expect(isIssue({ ...issue, origin: 'stage' })).toBe(false)
+		expect(isIssue(anonymous)).toBe(false)
 		// The server applies `isVerdict` to every verdict the prove tool returns, so a guard that
 		// refused the origin the stages now produce would throw on every call rather than fail
 		// only here.
@@ -218,7 +218,7 @@ describe('core guards', () => {
 	})
 
 	it('refuses a verdict that omits what judged it or names it blankly', () => {
-		const check: Check = { stage: 'lint', elapsed: 17, findings: [] }
+		const check: Check = { stage: 'lint', elapsed: 17, issues: [] }
 		const project: Project = {
 			path: 'configs/src/tsconfig.core.json',
 			digest: '3b674fdf121c85efb9ed1bab25ceeec8',

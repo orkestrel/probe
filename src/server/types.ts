@@ -91,7 +91,7 @@ export interface OverlayInterface {
  * @remarks
  * Warming begins at construction. The `inspect` method awaits that one warm operation and reuses
  * the resulting tool across calls. A stage serves one inspection at a time and admits none itself.
- * Await an inspection before issuing the next one, or admit through one queue per stage the way
+ * Await an inspection before starting the next one, or admit through one queue per stage the way
  * `Probe` does: a second concurrent call reaches the same resident tool and the same overlay,
  * document, and specification state the first is still using. A stage never holds a later
  * inspection behind an earlier one, so a caller that abandons an inspection at its own deadline
@@ -108,7 +108,15 @@ export interface OverlayInterface {
 export interface StageInterface {
 	/** The inspection this resident stage performs. */
 	readonly stage: Stage
-	/** Claimant-owned progress the coordinator compares with its inspection snapshot. */
+	/**
+	 * Claimant-owned progress the coordinator compares with its inspection snapshot.
+	 *
+	 * @remarks
+	 * When claimant-owned work begins, raise `progress`. Where this stage performs work of its own
+	 * after the claimant's, such as cleanup or eviction, return `progress` to its pre-inspection
+	 * reading before that work starts, so an expiry during stage-owned work reads level with the
+	 * coordinator's snapshot and is attributed to the instrument rather than to the claimant.
+	 */
 	readonly progress: number
 	/**
 	 * Inspects one case.

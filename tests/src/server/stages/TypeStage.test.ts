@@ -43,16 +43,16 @@ describe('type stage', () => {
 				files: [{ path: 'src/core/type-stage.ts', text: "export const VALUE: number = 'bad'\n" }],
 				test,
 			})
-			expect(clean.findings).toStrictEqual([])
-			expect(broken.findings.length).toBeGreaterThan(0)
-			expect(broken.findings).toEqual(
+			expect(clean.issues).toStrictEqual([])
+			expect(broken.issues.length).toBeGreaterThan(0)
+			expect(broken.issues).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({ origin: 'claimant', path: 'src/core/type-stage.ts' }),
 				]),
 			)
-			// A compiler diagnostic about the candidate is the candidate's fault, so every finding
+			// A compiler diagnostic about the candidate is the candidate's fault, so every issue
 			// this stage returns for one carries the origin that can disprove a claim.
-			expect(broken.findings.every((finding) => finding.origin === 'claimant')).toBe(true)
+			expect(broken.issues.every((issue) => issue.origin === 'claimant')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}
@@ -80,8 +80,8 @@ describe('type stage', () => {
 				await waitForDelay(20)
 				writeFileSync(dependencyFile, "export const SIGNAL = 'after'\n", 'utf8')
 				const after = await stage.inspect(subject)
-				expect(before.findings).toStrictEqual([])
-				expect(after.findings.length).toBeGreaterThan(0)
+				expect(before.issues).toStrictEqual([])
+				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
 				await stage.destroy()
 				rmSync(dependencyFile, { force: true })
@@ -106,9 +106,9 @@ describe('type stage', () => {
 			try {
 				const named = await stage.inspect(subject, 'tsconfig.json')
 				const inferred = await stage.inspect(subject)
-				expect(named.findings).toStrictEqual([])
-				expect(inferred.findings.length).toBeGreaterThan(0)
-				expect(inferred.findings[0]?.path).toBe('src/core/project-choice.ts')
+				expect(named.issues).toStrictEqual([])
+				expect(inferred.issues.length).toBeGreaterThan(0)
+				expect(inferred.issues[0]?.path).toBe('src/core/project-choice.ts')
 			} finally {
 				await stage.destroy()
 			}
@@ -145,7 +145,7 @@ describe('type stage', () => {
 					context: { stage: 'type', project: 'configs/src/tsconfig.core.json' },
 				})
 				const inferred = await stage.inspect(subject)
-				expect(inferred.findings).toEqual([
+				expect(inferred.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						path: 'configs/src/tsconfig.core.json',
@@ -189,8 +189,8 @@ describe('type stage', () => {
 					],
 					test,
 				})
-				expect(indirect.findings).toStrictEqual(direct.findings)
-				expect(direct.findings).toStrictEqual([])
+				expect(indirect.issues).toStrictEqual(direct.issues)
+				expect(direct.issues).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 			}
@@ -212,7 +212,7 @@ describe('type stage', () => {
 				},
 				'tsconfig.json',
 			)
-			expect(check.findings).toStrictEqual([])
+			expect(check.issues).toStrictEqual([])
 			// The candidate is text the agent supplied, so importing it must never put it on disk.
 			expect(existsSync(resolve(ROOT, candidate))).toBe(false)
 		} finally {
@@ -235,7 +235,7 @@ describe('type stage', () => {
 				},
 				'tsconfig.json',
 			)
-			expect(check.findings).toStrictEqual([])
+			expect(check.issues).toStrictEqual([])
 			expect(existsSync(resolve(ROOT, directory))).toBe(false)
 		} finally {
 			await stage.destroy()
@@ -264,7 +264,7 @@ describe('type stage', () => {
 					},
 					'tsconfig.json',
 				)
-				expect(check.findings).toStrictEqual([])
+				expect(check.issues).toStrictEqual([])
 				expect(readFileSync(candidateFile, 'utf8')).toBe(disk)
 			} finally {
 				await stage.destroy()
@@ -320,7 +320,7 @@ describe('type stage', () => {
 				expect(readFileSync(testFile, 'utf8')).toBe(diskTest)
 				expect(readFileSync(firstFile, 'utf8')).toBe(diskFirst)
 				expect(readFileSync(secondFile, 'utf8')).toBe(diskSecond)
-				expect(later.findings).toStrictEqual([])
+				expect(later.issues).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 				rmSync(testFile, { force: true })
@@ -361,8 +361,8 @@ describe('type stage', () => {
 					},
 				}
 				const released = await stage.inspect(subject)
-				expect(overlaid.findings).toStrictEqual([])
-				expect(released.findings).toStrictEqual([])
+				expect(overlaid.issues).toStrictEqual([])
+				expect(released.issues).toStrictEqual([])
 				await stage.destroy()
 				await expect(stage.inspect(subject)).rejects.toThrow('The type stage has been destroyed')
 			} finally {
@@ -415,11 +415,11 @@ describe('type stage', () => {
 			const recycled = await stage.inspect(subject, first)
 			// Each spelling of one resident project reaches one service and takes no recycled
 			// slot, so the first caller-named project survives them.
-			expect(named.findings.length).toBeGreaterThan(0)
-			expect(retained.findings.length).toBeGreaterThan(0)
+			expect(named.issues.length).toBeGreaterThan(0)
+			expect(retained.issues.length).toBeGreaterThan(0)
 			// A second caller-named project takes the one slot the first held, so the stage reads
 			// the rewritten configuration and cannot grow past that slot.
-			expect(recycled.findings).toStrictEqual([])
+			expect(recycled.issues).toStrictEqual([])
 		} finally {
 			await stage.destroy()
 			rmSync(firstFile, { force: true })

@@ -119,7 +119,7 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 }
 
 /**
- * Projects an absolute tool path into the workspace-relative form findings expose.
+ * Projects an absolute tool path into the workspace-relative form issues expose.
  *
  * @param workspace - The target workspace root
  * @param file - The path a tool reported

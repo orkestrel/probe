@@ -82,12 +82,12 @@ describe('runtime stage', () => {
 						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
 					},
 				})
-				expect(passing.findings).toStrictEqual([])
-				expect(failing.findings.length).toBeGreaterThan(0)
-				// Vitest reported the generated specification, at the frame inside it. The finding names
+				expect(passing.issues).toStrictEqual([])
+				expect(failing.issues.length).toBeGreaterThan(0)
+				// Vitest reported the generated specification, at the frame inside it. The issue names
 				// the test path the case declared and keeps that frame's line, so a runtime failure whose
 				// stack carries a frame arrives with `line` set.
-				expect(failing.findings[0]).toMatchObject({
+				expect(failing.issues[0]).toMatchObject({
 					origin: 'claimant',
 					path: 'tmp/probe/runtime-failing.test.ts',
 					line: expect.any(Number),
@@ -126,8 +126,8 @@ describe('runtime stage', () => {
 					},
 				})
 
-				expect(check.findings).toHaveLength(1)
-				expect(check.findings[0]).toMatchObject({
+				expect(check.issues).toHaveLength(1)
+				expect(check.issues[0]).toMatchObject({
 					origin: 'claimant',
 					path: 'tmp/probe/symlinked.test.ts',
 					line: expect.any(Number),
@@ -160,7 +160,7 @@ describe('runtime stage', () => {
 				},
 			})
 
-			expect(check.findings).toEqual([
+			expect(check.issues).toEqual([
 				expect.objectContaining({
 					origin: 'workspace',
 					path: 'tmp/probe/escape.test.ts',
@@ -175,7 +175,7 @@ describe('runtime stage', () => {
 		}
 	})
 
-	it('reports a finding when a test module executes nothing', { timeout: 60_000 }, async () => {
+	it('reports an issue when a test module executes nothing', { timeout: 60_000 }, async () => {
 		const stage = new RuntimeStage(ROOT)
 		try {
 			const check = await stage.inspect({
@@ -185,7 +185,7 @@ describe('runtime stage', () => {
 					text: "import { describe, expect, test } from 'vitest'\ntest.skip('skips', () => expect(1).toBe(2))\ntest.todo('defers')\ndescribe.skip('group', () => { test('skips with its group', () => expect(1).toBe(2)) })\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([
+			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
 					path: 'tmp/probe/runtime-skipped.test.ts',
@@ -214,7 +214,7 @@ describe('runtime stage', () => {
 					text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(1).toBe(2))\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([
+			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
 					path: 'tmp/probe/runtime-context-skip.test.ts',
@@ -222,8 +222,8 @@ describe('runtime stage', () => {
 				},
 			])
 			const clean: readonly Check[] = [
-				{ stage: 'type', elapsed: 0, findings: [] },
-				{ stage: 'lint', elapsed: 0, findings: [] },
+				{ stage: 'type', elapsed: 0, issues: [] },
+				{ stage: 'lint', elapsed: 0, issues: [] },
 			]
 			const verdict: Verdict = {
 				id: 'context-skip',
@@ -235,10 +235,10 @@ describe('runtime stage', () => {
 				elapsed: 0,
 			}
 			// Every other condition a receipt needs holds here, so the assertion turns on the skip
-			// finding alone: remove it and the same verdict earns one.
+			// issue alone: remove it and the same verdict earns one.
 			expect(computeReceipt(verdict, 'runtime')).toBeUndefined()
 			expect(
-				computeReceipt({ ...verdict, checks: [...clean, { ...check, findings: [] }] }, 'runtime'),
+				computeReceipt({ ...verdict, checks: [...clean, { ...check, issues: [] }] }, 'runtime'),
 			).toBe(
 				'probe:context-skip-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@context-skip-project',
 			)
@@ -248,7 +248,7 @@ describe('runtime stage', () => {
 	})
 
 	it(
-		'issues a receipt only for a control whose own code failed at the declared stage',
+		'mints a receipt only for a control whose own code failed at the declared stage',
 		{ timeout: 60_000 },
 		async () => {
 			const stage = new RuntimeStage(ROOT)
@@ -277,8 +277,8 @@ describe('runtime stage', () => {
 				// A verdict `prove` really produces names every stage in both phases, so the stages
 				// this test does not drive are recorded clean rather than omitted.
 				const clean: readonly Check[] = [
-					{ stage: 'type', elapsed: 0, findings: [] },
-					{ stage: 'lint', elapsed: 0, findings: [] },
+					{ stage: 'type', elapsed: 0, issues: [] },
+					{ stage: 'lint', elapsed: 0, issues: [] },
 				]
 				const base: Verdict = {
 					id: 'receipt-origin',
@@ -294,15 +294,15 @@ describe('runtime stage', () => {
 
 				// The stage marks a test it never ran as its own fault and a failed expectation as
 				// the candidate's, which is what the outcomes below are read from.
-				expect(skipped.findings).toStrictEqual([
+				expect(skipped.issues).toStrictEqual([
 					{
 						origin: 'instrument',
 						path: 'tmp/probe/runtime-receipt-skipped.test.ts',
 						message: 'Vitest did not run the test (skips)',
 					},
 				])
-				expect(failed.findings[0]?.origin).toBe('claimant')
-				expect(passed.findings).toStrictEqual([])
+				expect(failed.issues[0]?.origin).toBe('claimant')
+				expect(passed.issues).toStrictEqual([])
 
 				// The controls reach this assertion through the real stage and differ only in
 				// what it reported about them, so each verdict turns on that report alone.
@@ -330,7 +330,7 @@ describe('runtime stage', () => {
 				files: [],
 				test: { path: 'tmp/probe/empty.test.ts', text: '' },
 			})
-			expect(check.findings).toStrictEqual([
+			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
 					path: 'tmp/probe/empty.test.ts',
@@ -363,8 +363,8 @@ describe('runtime stage', () => {
 				const before = await stage.inspect(subject)
 				writeFileSync(dependency, "export const SIGNAL = 'after'\n", 'utf8')
 				const after = await stage.inspect(subject)
-				expect(before.findings).toStrictEqual([])
-				expect(after.findings.length).toBeGreaterThan(0)
+				expect(before.issues).toStrictEqual([])
+				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
 				await stage.destroy()
 				rmSync(dependency, { force: true })
@@ -402,8 +402,8 @@ describe('runtime stage', () => {
 				const after = await stage.inspect(subject)
 
 				expect(statSync(dependency).mtimeMs).toBe(stale)
-				expect(before.findings).toStrictEqual([])
-				expect(after.findings.length).toBeGreaterThan(0)
+				expect(before.issues).toStrictEqual([])
+				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
 				await stage.destroy()
 				rmSync(dependency, { force: true })
@@ -433,7 +433,7 @@ describe('runtime stage', () => {
 						text: `import { VALUE } from '../../src/value${extension}'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n`,
 					},
 				})
-				expect(check.findings).toStrictEqual([])
+				expect(check.issues).toStrictEqual([])
 				expect(existsSync(resolve(scratch.path, 'src/value.ts'))).toBe(false)
 			} finally {
 				await stage.destroy()
@@ -468,7 +468,7 @@ describe('runtime stage', () => {
 						text: "import { VALUE } from 'overlay-package'\nimport { expect, test } from 'vitest'\ntest('does not load the candidate', () => expect(VALUE).toBe('candidate'))\n",
 					},
 				})
-				expect(check.findings).toEqual([
+				expect(check.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						message: expect.stringContaining("Cannot find package 'overlay-package'"),
@@ -497,7 +497,7 @@ describe('runtime stage', () => {
 					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([])
+			expect(check.issues).toStrictEqual([])
 			// Both levels, because a single non-recursive `mkdir` serves only a parent that already
 			// exists, and the path a claim declares can be as deep as the claim likes.
 			expect(existsSync(resolve(directory, 'deep'))).toBe(true)
@@ -508,7 +508,7 @@ describe('runtime stage', () => {
 	})
 
 	it(
-		'reports a directory it cannot create as an instrument finding',
+		'reports a directory it cannot create as an instrument issue',
 		{ timeout: 60_000 },
 		async () => {
 			const marker = `runtime-blocked-${randomUUID()}`
@@ -528,7 +528,7 @@ describe('runtime stage', () => {
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				})
-				expect(check.findings).toEqual([
+				expect(check.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						path,
@@ -539,7 +539,7 @@ describe('runtime stage', () => {
 				])
 				// The host's own failure carries the operation that failed, which is what separates a
 				// directory this stage could not create from a file it could not write.
-				expect(check.findings[0]?.message).toContain('mkdir')
+				expect(check.issues[0]?.message).toContain('mkdir')
 			} finally {
 				await stage.destroy()
 				rmSync(blocker, { force: true })
@@ -600,8 +600,8 @@ describe('runtime stage', () => {
 						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads disk', () => expect(VALUE).toBe('disk'))\n",
 					},
 				})
-				expect(candidate.findings).toStrictEqual([])
-				expect(restored.findings).toStrictEqual([])
+				expect(candidate.issues).toStrictEqual([])
+				expect(restored.issues).toStrictEqual([])
 				expect(scratch.read('src/value.ts')).toBe(disk)
 			} finally {
 				await stage.destroy()
@@ -630,7 +630,7 @@ describe('runtime stage', () => {
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([])
+			expect(check.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
 			await stage.destroy()
@@ -661,9 +661,9 @@ describe('runtime stage', () => {
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([
+			expect(check.issues).toStrictEqual([
 				{
-					origin: 'instrument',
+					origin: 'workspace',
 					path: 'tmp/probe/string.test.ts',
 					message:
 						'The runtime stage cannot instrument the string-declared Vitest project probe because its configuration carries no runtime overlay plugin',
@@ -698,7 +698,7 @@ describe('runtime stage', () => {
 						text: "import RAW from '../../src/value.ts?raw'\nimport { VALUE } from '../../src/value.ts?v=123'\nimport { expect, test } from 'vitest'\ntest('preserves query semantics', () => { expect(RAW).toBe(\"export const VALUE = 'disk'\\n\"); expect(VALUE).toBe('candidate') })\n",
 					},
 				})
-				expect(check.findings).toStrictEqual([])
+				expect(check.issues).toStrictEqual([])
 			} finally {
 				await stage.destroy()
 				scratch.destroy()
@@ -728,7 +728,7 @@ describe('runtime stage', () => {
 					text: "import { VALUE } from '../../src/index.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate through the barrel', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
-			expect(check.findings).toStrictEqual([])
+			expect(check.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
 			await stage.destroy()
@@ -764,8 +764,8 @@ describe('runtime stage', () => {
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the second revision', () => expect(VALUE).toBe('second'))\n",
 				},
 			})
-			expect(first.findings).toStrictEqual([])
-			expect(second.findings).toStrictEqual([])
+			expect(first.issues).toStrictEqual([])
+			expect(second.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
 			await stage.destroy()
@@ -934,7 +934,7 @@ describe('runtime stage', () => {
 				},
 			}
 			try {
-				await expect(stage.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				await expect(stage.inspect(subject)).resolves.toMatchObject({ issues: [] })
 				const cacheRoot = resolve(scratch.path, '.probe-cache')
 				const result = readdirSync(cacheRoot, {
 					recursive: true,
@@ -960,7 +960,7 @@ describe('runtime stage', () => {
 
 				expect(claimant).toBeGreaterThan(baseline)
 				expect(cleanup).toBe(baseline)
-				await expect(running).resolves.toMatchObject({ findings: [] })
+				await expect(running).resolves.toMatchObject({ issues: [] })
 			} finally {
 				if (cache !== undefined) rmSync(cache, { force: true })
 				await stage.destroy()
@@ -1009,14 +1009,14 @@ describe('runtime stage', () => {
 				for (let index = 1; index <= 64; index += 1) {
 					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`
 					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
-						findings: [],
+						issues: [],
 					})
 				}
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual(['warm'])
 				const last = `import { expect, test } from 'vitest'\ntest('passes ${marker}-65', () => expect(1).toBe(1))\n`
 				await expect(
 					stage.inspect({ files: [], test: { path, text: last } }),
-				).resolves.toMatchObject({ findings: [] })
+				).resolves.toMatchObject({ issues: [] })
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual([
 					'warm',
 					'warm',
@@ -1060,14 +1060,14 @@ describe('runtime stage', () => {
 						text: "import { mkdirSync, rmSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('blocks deletion', () => { const file = fileURLToPath(import.meta.url); rmSync(file); mkdirSync(file) })\n",
 					},
 				})
-				expect(check.findings).toHaveLength(1)
-				expect(check.findings[0]?.origin).toBe('instrument')
+				expect(check.issues).toHaveLength(1)
+				expect(check.issues[0]?.origin).toBe('instrument')
 				// The generated specification is the file that could not be deleted. The caller's
 				// own path names a file the caller wrote and this stage never touched.
-				expect(check.findings[0]?.path).toMatch(
+				expect(check.issues[0]?.path).toMatch(
 					new RegExp(`^tmp/probe/${marker}\\.test\\.probe-[0-9a-f-]+\\.ts$`),
 				)
-				expect(check.findings[0]?.message).toContain(
+				expect(check.issues[0]?.message).toContain(
 					'The runtime stage could not delete the generated specification',
 				)
 			} finally {
@@ -1100,7 +1100,7 @@ describe('runtime stage', () => {
 						text: "import { rmSync, symlinkSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('replaces the specification', () => { const file = fileURLToPath(import.meta.url); rmSync(file); symlinkSync('.', file, 'dir') })\n",
 					},
 				})
-				expect(check.findings).toEqual([
+				expect(check.issues).toEqual([
 					expect.objectContaining({
 						origin: 'workspace',
 						message: expect.stringContaining(
@@ -1207,14 +1207,14 @@ describe('runtime stage', () => {
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				}
-				await expect(first.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				await expect(first.inspect(subject)).resolves.toMatchObject({ issues: [] })
 				expect({
 					SIGINT: process.listenerCount('SIGINT'),
 					SIGTERM: process.listenerCount('SIGTERM'),
 				}).toStrictEqual(before)
 				// A second warm is the recycle path in miniature: a strip performed once at boot
 				// stops working the moment the coordinator replaces a stage.
-				await expect(second.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				await expect(second.inspect(subject)).resolves.toMatchObject({ issues: [] })
 				expect({
 					SIGINT: process.listenerCount('SIGINT'),
 					SIGTERM: process.listenerCount('SIGTERM'),

@@ -1,4 +1,4 @@
-import type { Case, Check, Finding, Source, Stage } from '@src/core'
+import type { Case, Check, Issue, Source, Stage } from '@src/core'
 import type { StageInterface } from '../types.js'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { TimeoutInterface } from '@orkestrel/timeout'
@@ -52,7 +52,7 @@ export class LintStage implements StageInterface {
 	readonly #responses = new Map<number, (value: unknown) => void>()
 	readonly #failures = new Map<number, (error: Error) => void>()
 	readonly #documents = new Map<string, string>()
-	readonly #publishes = new Map<string, (findings: readonly Finding[]) => void>()
+	readonly #publishes = new Map<string, (issues: readonly Issue[]) => void>()
 	readonly #refusals = new Map<string, (error: Error) => void>()
 	#child: ChildProcessWithoutNullStreams | undefined
 	#buffer = Buffer.alloc(0)
@@ -88,14 +88,14 @@ export class LintStage implements StageInterface {
 		const started = performance.now()
 		await this.#warmth
 		if (this.#destroyed) throw createDestroyedError('lint stage')
-		const findings: Finding[] = []
+		const issues: Issue[] = []
 		for (const source of [...subject.files, subject.test]) {
-			findings.push(...(await this.#document(source)))
+			issues.push(...(await this.#document(source)))
 		}
 		return {
 			stage: this.stage,
 			elapsed: Math.round(performance.now() - started),
-			findings,
+			issues,
 		}
 	}
 
@@ -226,7 +226,7 @@ export class LintStage implements StageInterface {
 	// gate applies, and an override naming one exact file is reachable by nothing else. One URI
 	// carries one open document and one publication, so a caller driving two inspections of one path
 	// at once is refused rather than served an answer belonging to the other.
-	#document(source: Source): Promise<readonly Finding[]> {
+	#document(source: Source): Promise<readonly Issue[]> {
 		const uri = pathToFileURL(resolveWorkspaceFile(this.#workspace, source.path)).href
 		if (this.#publishes.has(uri)) {
 			return Promise.reject(
@@ -237,7 +237,7 @@ export class LintStage implements StageInterface {
 				}),
 			)
 		}
-		const diagnostics = new Promise<readonly Finding[]>((resolve, reject) => {
+		const diagnostics = new Promise<readonly Issue[]>((resolve, reject) => {
 			this.#documents.set(uri, normalizePath(source.path))
 			this.#publishes.set(uri, resolve)
 			this.#refusals.set(uri, reject)
@@ -397,16 +397,16 @@ export class LintStage implements StageInterface {
 		const publish = this.#publishes.get(params.uri)
 		if (publish === undefined) return
 		this.#progress += 1
-		publish(this.#findings(params.uri, params.diagnostics))
+		publish(this.#issues(params.uri, params.diagnostics))
 	}
 
-	// Every finding here is one diagnostic Oxlint published about the text the caller supplied, so
+	// Every issue here is one diagnostic Oxlint published about the text the caller supplied, so
 	// each one is that code failing. A server this stage cannot drive rejects the inspection
-	// instead, so no fault of its own reaches a caller as a finding.
-	#findings(uri: string, diagnostics: readonly unknown[]): readonly Finding[] {
+	// instead, so no fault of its own reaches a caller as an issue.
+	#issues(uri: string, diagnostics: readonly unknown[]): readonly Issue[] {
 		const path = this.#documents.get(uri)
 		if (path === undefined) return []
-		const findings: Finding[] = []
+		const issues: Issue[] = []
 		for (const diagnostic of diagnostics) {
 			if (typeof diagnostic !== 'object' || diagnostic === null) continue
 			if (!('message' in diagnostic) || typeof diagnostic.message !== 'string') continue
@@ -415,27 +415,27 @@ export class LintStage implements StageInterface {
 				typeof diagnostic.range !== 'object' ||
 				diagnostic.range === null
 			) {
-				findings.push({ origin: 'claimant', path, message: diagnostic.message })
+				issues.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
 			const range = diagnostic.range
 			if (!('start' in range) || typeof range.start !== 'object' || range.start === null) {
-				findings.push({ origin: 'claimant', path, message: diagnostic.message })
+				issues.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
 			const start = range.start
 			if (!('line' in start) || typeof start.line !== 'number') {
-				findings.push({ origin: 'claimant', path, message: diagnostic.message })
+				issues.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
-			findings.push({
+			issues.push({
 				origin: 'claimant',
 				path,
 				message: diagnostic.message,
 				line: start.line + 1,
 			})
 		}
-		return findings
+		return issues
 	}
 
 	#fail(error: Error): void {

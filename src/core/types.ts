@@ -83,7 +83,7 @@ export interface Case {
  * ```
  */
 export interface Control extends Case {
-	/** The stage this control must report findings at. */
+	/** The stage this control must report issues at. */
 	readonly stage: Stage
 	/** Why the control fails there, in the claimant's own words. */
 	readonly reason: string
@@ -98,7 +98,7 @@ export interface Control extends Case {
  * where the gate reports red. The test files remain on the root project for Vitest and Node globals.
  *
  * The control's candidate sources must differ from the case's. A control byte-identical to its case
- * cannot break, so it never produces the `origin: 'claimant'` finding a receipt requires, and the
+ * cannot break, so it never produces the `origin: 'claimant'` issue a receipt requires, and the
  * claim is unprovable however correct the case is.
  *
  * @example
@@ -134,7 +134,7 @@ export interface Claim {
 }
 
 /**
- * Names who must act on a finding or probe failure.
+ * Names who must act on an issue or probe failure.
  *
  * @remarks
  * `claimant` is the caller who wrote the claim: its input, selections, candidate source, and
@@ -151,10 +151,10 @@ export type Party = (typeof PARTIES)[number]
  * Carries one message a stage reported, where it reported it, and whose fault it names.
  *
  * @remarks
- * The stage is not repeated here. A finding always arrives inside the `Check` that names its
+ * The stage is not repeated here. An issue always arrives inside the `Check` that names its
  * stage, so a second copy could only drift from the first.
  *
- * A `claimant` finding is a tool's diagnostic about a candidate source, and nothing else. Every
+ * A `claimant` issue is a tool's diagnostic about a candidate source, and nothing else. Every
  * other claimant fault is thrown. Without this invariant, a bad test path could satisfy the
  * receipt condition even though the test never ran.
  *
@@ -169,7 +169,7 @@ export type Party = (typeof PARTIES)[number]
  *
  * @example
  * ```ts
- * const finding: Finding = {
+ * const issue: Issue = {
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
@@ -177,7 +177,7 @@ export type Party = (typeof PARTIES)[number]
  * }
  * ```
  */
-export interface Finding {
+export interface Issue {
 	/** The party that must act on this message. */
 	readonly origin: Party
 	/** Workspace-relative path this message is reported against. */
@@ -192,12 +192,12 @@ export interface Finding {
  * Carries one stage's outcome: what it cost and what it reported.
  *
  * @remarks
- * An empty `findings` list is the clean result. There is no separate pass flag, because passing is
- * exactly the absence of findings and a stored flag could disagree with the list beside it.
+ * An empty `issues` list is the clean result. There is no separate pass flag, because passing is
+ * exactly the absence of issues and a stored flag could disagree with the list beside it.
  *
  * @example
  * ```ts
- * const check: Check = { stage: 'lint', elapsed: 17, findings: [] }
+ * const check: Check = { stage: 'lint', elapsed: 17, issues: [] }
  * ```
  */
 export interface Check {
@@ -206,7 +206,7 @@ export interface Check {
 	/** Milliseconds the stage took. */
 	readonly elapsed: number
 	/** Every message the stage's tool reported, in the tool's own order. */
-	readonly findings: readonly Finding[]
+	readonly issues: readonly Issue[]
 }
 
 /**
@@ -263,9 +263,9 @@ export interface Project {
  * A verdict exists only when every stage ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when the case reported no
- * finding, the control reported an `origin: 'claimant'` finding at the stage it declared,
- * every other control stage reported no claimant finding, and neither phase reported an
- * `origin: 'instrument'` finding.
+ * issue, the control reported an `origin: 'claimant'` issue at the stage it declared,
+ * every other control stage reported no claimant issue, and neither phase reported an
+ * `origin: 'instrument'` issue.
  *
  * `id` identifies this call and `digest` identifies the claim it answered, so two calls over one
  * claim share a digest and differ in their identity. `digest` and `project` are required, because
@@ -285,7 +285,7 @@ export interface Project {
  *
  * @example
  * ```ts
- * const broke: Finding = {
+ * const broke: Issue = {
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
@@ -301,14 +301,14 @@ export interface Project {
  * 	},
  * 	reason: 'a string literal assigned to a number must not compile',
  * 	checks: [
- * 		{ stage: 'type', elapsed: 61, findings: [] },
- * 		{ stage: 'lint', elapsed: 17, findings: [] },
- * 		{ stage: 'runtime', elapsed: 259, findings: [] },
+ * 		{ stage: 'type', elapsed: 61, issues: [] },
+ * 		{ stage: 'lint', elapsed: 17, issues: [] },
+ * 		{ stage: 'runtime', elapsed: 259, issues: [] },
  * 	],
  * 	control: [
- * 		{ stage: 'type', elapsed: 58, findings: [broke] },
- * 		{ stage: 'lint', elapsed: 16, findings: [] },
- * 		{ stage: 'runtime', elapsed: 254, findings: [] },
+ * 		{ stage: 'type', elapsed: 58, issues: [broke] },
+ * 		{ stage: 'lint', elapsed: 16, issues: [] },
+ * 		{ stage: 'runtime', elapsed: 254, issues: [] },
  * 	],
  * 	elapsed: 549,
  * 	receipt:

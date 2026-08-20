@@ -1,4 +1,4 @@
-import type { Check, Finding, Stage, Verdict } from './types.js'
+import type { Check, Issue, Stage, Verdict } from './types.js'
 import { isRecord } from '@orkestrel/contract'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
 import { isSource } from './validators.js'
@@ -6,29 +6,29 @@ import { isSource } from './validators.js'
 /**
  * Renders one tool message as a single line an agent can classify and locate.
  *
- * @param finding - The message and location a stage reported
+ * @param issue - The message and location a stage reported
  * @returns The bracketed origin, location, and message, separated by spaces
  *
  * @example
  * ```ts
- * const located: Finding = {
+ * const located: Issue = {
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * 	line: 1,
  * }
- * const whole: Finding = {
+ * const whole: Issue = {
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * }
- * formatFinding(located) // '[claimant] src/core/greeting.ts:1 not assignable'
- * formatFinding(whole) // '[claimant] src/core/greeting.ts not assignable'
+ * formatIssue(located) // '[claimant] src/core/greeting.ts:1 not assignable'
+ * formatIssue(whole) // '[claimant] src/core/greeting.ts not assignable'
  * ```
  */
-export function formatFinding(finding: Finding): string {
-	const where = finding.line === undefined ? finding.path : `${finding.path}:${finding.line}`
-	return `[${finding.origin}] ${where} ${finding.message}`
+export function formatIssue(issue: Issue): string {
+	const where = issue.line === undefined ? issue.path : `${issue.path}:${issue.line}`
+	return `[${issue.origin}] ${where} ${issue.message}`
 }
 
 /**
@@ -39,19 +39,19 @@ export function formatFinding(finding: Finding): string {
  * what shows a reader the stage ran; a silent stage and a skipped stage read the same.
  *
  * @param check - The stage outcome to render
- * @returns The summary line, then one indented line per finding
+ * @returns The summary line, then one indented line per issue
  *
  * @example
  * ```ts
- * formatCheck({ stage: 'lint', elapsed: 17, findings: [] })
- * // 'lint: 0 findings (17 ms)'
+ * formatCheck({ stage: 'lint', elapsed: 17, issues: [] })
+ * // 'lint: 0 issues (17 ms)'
  * ```
  */
 export function formatCheck(check: Check): string {
-	const count = check.findings.length
-	const noun = count === 1 ? 'finding' : 'findings'
+	const count = check.issues.length
+	const noun = count === 1 ? 'issue' : 'issues'
 	const summary = `${check.stage}: ${count} ${noun} (${check.elapsed} ms)`
-	const lines = check.findings.map((finding) => `  ${formatFinding(finding)}`)
+	const lines = check.issues.map((issue) => `  ${formatIssue(issue)}`)
 	return [summary, ...lines].join('\n')
 }
 
@@ -100,11 +100,11 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is issued on these conditions together: both phases report one check per stage, the
- * case carries no finding, the control carries at least one `origin: 'claimant'` finding
- * at the stage it declared, and every other control stage carries no claimant finding. A control
+ * A receipt is minted on these conditions together: both phases report one check per stage, the
+ * case carries no issue, the control carries at least one `origin: 'claimant'` issue
+ * at the stage it declared, and every other control stage carries no claimant issue. A control
  * that fails somewhere else has falsified the instrument rather than the claim, so no receipt is
- * issued for it.
+ * minted for it.
  *
  * Both phases owe every stage, not the case alone. `strayed` reads the control entries a verdict
  * carries, so a control that omits a stage entirely would otherwise read as a stage that stayed
@@ -123,8 +123,8 @@ export function formatVerdict(verdict: Verdict): string {
  * read the project field; inside it the digest is everything after the final `@`. That rule stays
  * total for a workspace-relative project path containing either character.
  *
- * An `origin: 'instrument'` finding in either phase means the inspection did not complete and
- * refuses the receipt. A workspace finding in the control does not decide whether the claimant's
+ * An `origin: 'instrument'` issue in either phase means the inspection did not complete and
+ * refuses the receipt. A workspace issue in the control does not decide whether the claimant's
  * candidate broke, while one in the case still means that the case did not run clean.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
@@ -144,19 +144,14 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 			verdict.checks.some((check) => check.stage === name) &&
 			verdict.control.some((check) => check.stage === name),
 	)
-	const clean = verdict.checks.every((check) => check.findings.length === 0)
+	const clean = verdict.checks.every((check) => check.issues.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
-	const broke = declared?.findings.some((finding) => finding.origin === 'claimant') ?? false
+	const broke = declared?.issues.some((issue) => issue.origin === 'claimant') ?? false
 	const faulted =
-		verdict.checks.some((check) =>
-			check.findings.some((finding) => finding.origin === 'instrument'),
-		) ||
-		verdict.control.some((check) =>
-			check.findings.some((finding) => finding.origin === 'instrument'),
-		)
+		verdict.checks.some((check) => check.issues.some((issue) => issue.origin === 'instrument')) ||
+		verdict.control.some((check) => check.issues.some((issue) => issue.origin === 'instrument'))
 	const stayed = verdict.control.every(
-		(check) =>
-			check.stage === stage || check.findings.every((finding) => finding.origin !== 'claimant'),
+		(check) => check.stage === stage || check.issues.every((issue) => issue.origin !== 'claimant'),
 	)
 	if (!ran || !clean || !broke || faulted || !stayed) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain

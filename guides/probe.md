@@ -3,7 +3,7 @@
 > **The claim prover for the `@orkestrel` line.** `@orkestrel/probe` answers this question about a
 > proposed edit: does it compile, lint, and pass its test in this workspace? It holds resident
 > TypeScript, Oxlint, and Vitest engines, runs a claim's case and its negative control through all
-> of them, and returns a `Verdict` carrying every finding — and, when the case ran clean and the
+> of them, and returns a `Verdict` carrying every issue — and, when the case ran clean and the
 > control broke where it said it would, a `receipt`. Source: [`src/core`](../src/core),
 > [`src/server`](../src/server), [`src/bin`](../src/bin). Published through `@orkestrel/probe` and
 > `@orkestrel/probe/server`.
@@ -12,7 +12,7 @@
 > it costs more than asking, and the answer is a guess. A `Claim` states the edit and what would
 > falsify it; a `Verdict` answers with the tools the workspace's own gate runs.
 >
-> **Mechanism, not policy.** probe reports evidence and issues a receipt under stated conditions. It
+> **Mechanism, not policy.** probe reports evidence and mints a receipt under stated conditions. It
 > holds no key, signs nothing, and compels nothing. It also **executes caller-supplied test code
 > with the privileges of the process that hosts it**, so give a probe a workspace and a caller you
 > already trust with a shell.
@@ -24,23 +24,6 @@ verdict's one-line summary of the conditions it was reached under, and it exists
 proved itself.
 
 ## Surface
-
-### A name this package shares with `@orkestrel/scaffold`
-
-`@orkestrel/probe` and `@orkestrel/scaffold` each publish a `Finding` type and an `isFinding` guard,
-for different subjects: a probe finding is one message a stage reported about a candidate source,
-and a scaffold finding is one entry in a workspace audit. A module importing from each package
-needs an alias on one side, or TypeScript refuses it with `Duplicate identifier 'Finding'`. Alias
-probe's:
-
-```ts
-import type { Finding as ProbeFinding } from '@orkestrel/probe'
-import { isFinding as isProbeFinding } from '@orkestrel/probe'
-```
-
-The ownership axis carries no such collision: probe names it `Party` and scaffold's `Origin` names
-how an artifact's content is produced, so the packages share no spelling there. Measured on
-2026-08-20 against `@orkestrel/scaffold` 0.0.44.
 
 ### Contracts
 
@@ -54,9 +37,9 @@ optional field is absent rather than empty.
 | `Case`              | interface | `{ files, test }` — the candidate sources a claim asserts about and the test that exercises them.                                                     |
 | `Control`           | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                     |
 | `Claim`             | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                     |
-| `Party`             | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on a finding or a failure.                                                      |
-| `Finding`           | interface | `{ origin, path, message, line? }` — one message a stage reported and the party that must act on it. `line` is absent when the tool reported none.    |
-| `Check`             | interface | `{ stage, elapsed, findings }` — one stage's outcome. An empty `findings` list is the clean result; there is no separate pass flag.                   |
+| `Party`             | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on an issue or a failure.                                                       |
+| `Issue`             | interface | `{ origin, path, message, line? }` — one message a stage reported and the party that must act on it. `line` is absent when the tool reported none.    |
+| `Check`             | interface | `{ stage, elapsed, issues }` — one stage's outcome. An empty `issues` list is the clean result; there is no separate pass flag.                       |
 | `Toolchain`         | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                               |
 | `Project`           | interface | `{ path, digest }` — the resolved TypeScript project that judged the candidates, and the digest of its compiler options.                              |
 | `Verdict`           | interface | `{ id, digest, toolchain, project, reason?, checks, control, elapsed, receipt? }` — the full result. `Probe.prove` always carries the control reason. |
@@ -74,7 +57,7 @@ From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 | Name                | Kind  | Value / Purpose                                                                                       |
 | ------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
 | `PROBE_STAGES`      | const | `['type', 'lint', 'runtime']` — the stage order a verdict reports, shared by the guard and the token. |
-| `PARTIES`           | const | `['claimant', 'workspace', 'instrument']` — the parties a finding or a failure can name.              |
+| `PARTIES`           | const | `['claimant', 'workspace', 'instrument']` — the parties an issue or a failure can name.               |
 | `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                       |
 | `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                     |
 | `PROBE_ERROR_CODES` | const | `['refused', 'missing', 'malformed', 'destroyed', 'deadline']` — the conditions the guard admits.     |
@@ -117,8 +100,8 @@ and never throws.
 | `isCase`      | function | `(value: unknown) => value is Case`      | Admits a record whose `files` are sources and whose `test` is one source.                                                                                       |
 | `isControl`   | function | `(value: unknown) => value is Control`   | Admits a case that also carries a `stage` and a non-empty `reason`.                                                                                             |
 | `isClaim`     | function | `(value: unknown) => value is Claim`     | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. Narrower than `CLAIM_SHAPE` on `Source.path` alone. |
-| `isFinding`   | function | `(value: unknown) => value is Finding`   | Admits a record carrying an origin, a path, a message, and an optional line.                                                                                    |
-| `isCheck`     | function | `(value: unknown) => value is Check`     | Admits a record carrying a stage, an elapsed number, and findings.                                                                                              |
+| `isIssue`     | function | `(value: unknown) => value is Issue`     | Admits a record carrying an origin, a path, a message, and an optional line.                                                                                    |
+| `isCheck`     | function | `(value: unknown) => value is Check`     | Admits a record carrying a stage, an elapsed number, and issues.                                                                                                |
 | `isToolchain` | function | `(value: unknown) => value is Toolchain` | Admits a record carrying every resolved tool version.                                                                                                           |
 | `isProject`   | function | `(value: unknown) => value is Project`   | Admits a record carrying a non-empty path and a non-empty digest.                                                                                               |
 | `isVerdict`   | function | `(value: unknown) => value is Verdict`   | Admits a whole verdict, including the required `digest` and `project` members.                                                                                  |
@@ -129,9 +112,9 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
 | Name                   | Kind     | Signature                                                 | Behavior                                                                                                                                       |
 | ---------------------- | -------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `formatFinding`        | function | `(finding: Finding) => string`                            | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                                             |
-| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per finding.                                                                          |
-| `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each finding's origin and the receipt line.                     |
+| `formatIssue`          | function | `(issue: Issue) => string`                                | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                                             |
+| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per issue.                                                                            |
+| `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each issue's origin and the receipt line.                       |
 | `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise. |
 | `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                         |
 | `matchesSpecification` | function | `(text: string, revision: string) => boolean`             | Reports whether one file's text is the generated specification written for that revision.                                                      |
@@ -141,15 +124,25 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
 From [`types.ts`](../src/server/types.ts).
 
-| Name                   | Kind      | Shape / Purpose                                                                                                                                                                                                                           |
-| ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                                                                                                                         |
-| `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods).                                                                                               |
-| `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names the inspection it performs and its readonly `progress` reports claimant-owned progress for the coordinator to compare with its inspection snapshot. See [`## Methods`](#methods). |
-| `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                                                                                                                            |
-| `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                                                                                                                                             |
-| `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                                                                                                                                                    |
-| `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                                                                                                                                       |
+| Name                   | Kind      | Shape / Purpose                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                                                                                                                                                                                                                                          |
+| `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods).                                                                                                                                                                                                                |
+| `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names the inspection it performs, and its readonly `progress` rises when claimant-owned work begins and returns to its pre-inspection reading before the stage performs work of its own, so an expiry during stage-owned work reads level with the coordinator's snapshot. See [`## Methods`](#methods). |
+| `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                             |
+| `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                                                                                                                                                                                                                                                              |
+| `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                                     |
+| `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                                                                                                                                                                                                                                                        |
+
+`StageInterface.progress` is the seam a foreign coordinator reads to decide whose budget an expiry
+belongs to, and this is the proof behind it.
+[`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) proves the gauge boundary
+deterministically: it holds one inspection at the results cache with a FIFO, reads `progress`
+elevated while the caller's run is in flight, and reads it level with its pre-inspection value while
+the stage evicts. Claimant-side expiry is proven end to end through `Probe`, which rejects a claim
+that outran the budget with `origin: 'claimant'`, `code: 'deadline'`, and the expired stage in
+`context`. The composed instrument-side expiry — a real expiry during stage-owned work, attributed
+through `Probe` — has no executed proof, and the gauge is the seam a proof of it reads.
 
 ### The engine
 
@@ -177,26 +170,26 @@ answer as a fresh one. Each stage in this package mints its own for that reason.
 
 Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts).
 
-| Name                     | Kind     | Signature                                                                                   | Behavior                                                                                                                                                                                                                                                                      |
-| ------------------------ | -------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `normalizePath`          | function | `(path: string) => string`                                                                  | Rewrites a path into the forward-slash spelling this package compares and reports paths in.                                                                                                                                                                                   |
-| `resolveWorkspaceFile`   | function | `(workspace: string, target: string, mutate?: boolean) => string`                           | Resolves a workspace-relative path to an absolute one and throws when it escapes the workspace. Under `mutate` it refuses a symbolic link as `workspace`/`refused` and translates a native path-inspection fault to `workspace`/`malformed` with the native fault on `cause`. |
-| `relativeWorkspaceFile`  | function | `(workspace: string, file: string) => string`                                               | Projects an absolute path into the forward-slash workspace-relative form findings expose.                                                                                                                                                                                     |
-| `resolveWorkspaceModule` | function | `(workspace: string, specifier: string) => string`                                          | Resolves one installed module's entry path, or throws a `workspace` failure carrying the native fault as `cause`.                                                                                                                                                             |
-| `loadWorkspaceModule`    | function | `(workspace: string, specifier: 'typescript' \| 'vitest/node') => typeof import(specifier)` | Loads one installed tool module, or throws a `workspace` failure carrying the native fault as `cause`.                                                                                                                                                                        |
-| `readWorkspaceManifest`  | function | `(workspace: string, name: string) => WorkspaceManifest`                                    | Reads one installed package manifest and its absolute path, translating a native read or parse fault into a `workspace` failure.                                                                                                                                              |
-| `resolveWorkspaceBinary` | function | `(workspace: string, name: string) => string`                                               | Resolves a package's portable JavaScript entry from its `bin` field, never a `node_modules/.bin` shim.                                                                                                                                                                        |
-| `inferTypeProject`       | function | `(path: string) => string`                                                                  | Selects the scoped TypeScript project for one candidate path, and throws for a path outside `src` and `app`.                                                                                                                                                                  |
-| `inferTestProject`       | function | `(path: string) => string \| undefined`                                                     | Selects the Vitest project whose environment matches one test path, or `undefined` when none collects it.                                                                                                                                                                     |
-| `inferDocumentLanguage`  | function | `(path: string) => string`                                                                  | Selects the Language Server Protocol language identifier a path's extension names.                                                                                                                                                                                            |
-| `createRevisionFile`     | function | `(workspace: string, path: string, revision: string) => string`                             | Builds the fresh sibling path one runtime inspection writes its specification to.                                                                                                                                                                                             |
-| `matchesWorkspaceModule` | function | `(path: string) => boolean`                                                                 | Reports whether a path is a script, TypeScript, Vue, or JSON module Vitest can cache.                                                                                                                                                                                         |
-| `parseContentLength`     | function | `(header: string) => number \| undefined`                                                   | Reads a Language Server Protocol frame's declared byte length, or `undefined` for an invalid header.                                                                                                                                                                          |
-| `messageFromUnknown`     | function | `(value: unknown) => string`                                                                | Normalizes a caught or foreign error into readable text.                                                                                                                                                                                                                      |
-| `normalizeValue`         | function | `(workspace: string, value: unknown) => unknown`                                            | Rewrites every workspace-contained absolute path to its relative form and sorts every record's keys.                                                                                                                                                                          |
-| `computeDigest`          | function | `(workspace: string, value: unknown) => string`                                             | Digests the normalized value and returns 32 lowercase hex characters.                                                                                                                                                                                                         |
-| `captureListeners`       | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture`                     | Records the listeners one emitter carries for a set of events.                                                                                                                                                                                                                |
-| `releaseListeners`       | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`                                 | Removes every listener one emitter gained since its capture, across a window nothing else attaches in.                                                                                                                                                                        |
+| Name                     | Kind     | Signature                                                                                   | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `normalizePath`          | function | `(path: string) => string`                                                                  | Rewrites a path into the forward-slash spelling this package compares and reports paths in.                                                                                                                                                                                                                                                                                                                                             |
+| `resolveWorkspaceFile`   | function | `(workspace: string, target: string, mutate?: boolean) => string`                           | Resolves a workspace-relative path to an absolute one and throws when it escapes the workspace. Under `mutate` it refuses a symbolic link as `workspace`/`refused`, refuses a path the host will not inspect because the caller's own path is over the length limit or carries a NUL byte as `claimant`/`refused`, and translates every other native path-inspection fault to `workspace`/`malformed` with the native fault on `cause`. |
+| `relativeWorkspaceFile`  | function | `(workspace: string, file: string) => string`                                               | Projects an absolute path into the forward-slash workspace-relative form issues expose.                                                                                                                                                                                                                                                                                                                                                 |
+| `resolveWorkspaceModule` | function | `(workspace: string, specifier: string) => string`                                          | Resolves one installed module's entry path, or throws a `workspace` failure carrying the native fault as `cause`.                                                                                                                                                                                                                                                                                                                       |
+| `loadWorkspaceModule`    | function | `(workspace: string, specifier: 'typescript' \| 'vitest/node') => typeof import(specifier)` | Loads one installed tool module, or throws a `workspace` failure carrying the native fault as `cause`.                                                                                                                                                                                                                                                                                                                                  |
+| `readWorkspaceManifest`  | function | `(workspace: string, name: string) => WorkspaceManifest`                                    | Reads one installed package manifest and its absolute path, translating a native read or parse fault into a `workspace` failure.                                                                                                                                                                                                                                                                                                        |
+| `resolveWorkspaceBinary` | function | `(workspace: string, name: string) => string`                                               | Resolves a package's portable JavaScript entry from its `bin` field, never a `node_modules/.bin` shim.                                                                                                                                                                                                                                                                                                                                  |
+| `inferTypeProject`       | function | `(path: string) => string`                                                                  | Selects the scoped TypeScript project for one candidate path, and throws for a path outside `src` and `app`.                                                                                                                                                                                                                                                                                                                            |
+| `inferTestProject`       | function | `(path: string) => string \| undefined`                                                     | Selects the Vitest project whose environment matches one test path, or `undefined` when none collects it.                                                                                                                                                                                                                                                                                                                               |
+| `inferDocumentLanguage`  | function | `(path: string) => string`                                                                  | Selects the Language Server Protocol language identifier a path's extension names.                                                                                                                                                                                                                                                                                                                                                      |
+| `createRevisionFile`     | function | `(workspace: string, path: string, revision: string) => string`                             | Builds the fresh sibling path one runtime inspection writes its specification to.                                                                                                                                                                                                                                                                                                                                                       |
+| `matchesWorkspaceModule` | function | `(path: string) => boolean`                                                                 | Reports whether a path is a script, TypeScript, Vue, or JSON module Vitest can cache.                                                                                                                                                                                                                                                                                                                                                   |
+| `parseContentLength`     | function | `(header: string) => number \| undefined`                                                   | Reads a Language Server Protocol frame's declared byte length, or `undefined` for an invalid header.                                                                                                                                                                                                                                                                                                                                    |
+| `messageFromUnknown`     | function | `(value: unknown) => string`                                                                | Normalizes a caught or foreign error into readable text.                                                                                                                                                                                                                                                                                                                                                                                |
+| `normalizeValue`         | function | `(workspace: string, value: unknown) => unknown`                                            | Rewrites every workspace-contained absolute path to its relative form and sorts every record's keys.                                                                                                                                                                                                                                                                                                                                    |
+| `computeDigest`          | function | `(workspace: string, value: unknown) => string`                                             | Digests the normalized value and returns 32 lowercase hex characters.                                                                                                                                                                                                                                                                                                                                                                   |
+| `captureListeners`       | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture`                     | Records the listeners one emitter carries for a set of events.                                                                                                                                                                                                                                                                                                                                                                          |
+| `releaseListeners`       | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`                                 | Removes every listener one emitter gained since its capture, across a window nothing else attaches in.                                                                                                                                                                                                                                                                                                                                  |
 
 ## Methods
 
@@ -218,10 +211,10 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `TypeStageInterface`
 
-| Method    | Returns            | Behavior                                                                                                                                                                                                                 |
-| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `inspect` | `Promise<Check>`   | Inspects one case against a caller-named project, or against the project each candidate path infers. A diagnostic naming no file refuses a caller-named project and reports an `instrument` finding for an inferred one. |
-| `resolve` | `Promise<Project>` | Resolves one project to the resolved path and options digest the stage applies for it.                                                                                                                                   |
+| Method    | Returns            | Behavior                                                                                                                                                                                                               |
+| --------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inspect` | `Promise<Check>`   | Inspects one case against a caller-named project, or against the project each candidate path infers. A diagnostic naming no file refuses a caller-named project and reports an `instrument` issue for an inferred one. |
+| `resolve` | `Promise<Project>` | Resolves one project to the resolved path and options digest the stage applies for it.                                                                                                                                 |
 
 #### `OverlayInterface`
 
@@ -263,35 +256,36 @@ compare two such tokens only when both were minted against the same tree.
 per stage for each. A stage that cannot start throws rather than returning an empty check, so no
 verdict ever reports a stage that did not run.
 
-The receipt is issued on these conditions together:
+The receipt is minted on these conditions together:
 
 - both phases report one check per stage; and
-- the case produced no finding at any stage; and
-- the control produced an `origin: 'claimant'` finding at the stage it declared, and neither phase
-  produced an `origin: 'instrument'` finding; and
-- every other control stage produced no `origin: 'claimant'` finding.
+- the case produced no issue at any stage; and
+- the control produced an `origin: 'claimant'` issue at the stage it declared, and neither phase
+  produced an `origin: 'instrument'` issue; and
+- every other control stage produced no `origin: 'claimant'` issue.
 
 A control that also breaks somewhere else has falsified the instrument rather than the claim, so no
-receipt is issued for it. An `origin: 'instrument'` finding in either phase says the inspection did
-not complete, so nothing was learned about the code and no receipt is issued either. An
-`origin: 'workspace'` finding in the control decides neither break condition: it names the target
-tree rather than the candidate. A case carrying any finding did not run clean and earns no receipt.
+receipt is minted for it. An `origin: 'instrument'` issue in either phase says the inspection did
+not complete, so nothing was learned about the code and no receipt is minted either. An
+`origin: 'workspace'` issue in the control decides neither break condition: it names the target
+tree rather than the candidate. A case carrying any issue did not run clean and earns no receipt.
 The check-per-stage condition binds both phases, because the clean-elsewhere condition reads the
 control entries a verdict carries: a control that omits a stage would otherwise read as a stage
 that stayed clean. `prove` records every stage for both phases, so that condition refuses only a
 verdict you assembled by hand and passed to `computeReceipt` yourself.
 
-`Finding.origin` names the party that must act, and the receipt conditions read that value rather
-than the message beside it. **A `claimant` finding is a tool's diagnostic about a candidate source,
+`Issue.origin` names the party that must act, and the receipt conditions read that value rather
+than the message beside it. **A `claimant` issue is a tool's diagnostic about a candidate source,
 and nothing else. Every other claimant fault is a throw.** That invariant is what lets one union
-serve both a finding and a failure: without it, a caller's own mistake — a test path no project
+serve both an issue and a failure: without it, a caller's own mistake — a test path no project
 collects, a project the caller named and the compiler cannot parse — would arrive as a `claimant`
-finding and satisfy the condition that a test which never ran must never satisfy. A `workspace` finding carries the target tree's own defect, such as a symbolic link in a mutation
-path or a mutation path whose existing components cannot be inspected. An `instrument` finding
-carries this package's own message about an inspection that did not complete — a string-declared
-Vitest project into which the stage could install no overlay, a specification it could not write,
-or a module that ran no test.
-`formatFinding` renders the value first as `[claimant]`, `[workspace]`, or `[instrument]`, so the
+issue and satisfy the condition that a test which never ran must never satisfy. A `workspace` issue
+carries the target tree's own defect, such as a symbolic link in a mutation path, a mutation path
+whose existing components cannot be inspected, or a Vitest project the root configuration declares
+as a path string, into which the runtime stage can install no overlay. An `instrument` issue carries
+this package's own message about an inspection that did not complete — a specification it could not
+write, or a module that ran no test.
+`formatIssue` renders the value first as `[claimant]`, `[workspace]`, or `[instrument]`, so the
 ownership survives `formatVerdict`. A clean runtime check means every collected test passed, not
 that the module reported itself passed.
 
@@ -302,7 +296,7 @@ Every failure probe raises while serving a claim is a `ProbeError`. Narrow a cau
 the condition that ended the operation. Read `message` to print it and `context` for the detail
 behind it.
 
-`origin` carries the same values `Finding.origin` carries, and it answers the question a caller has
+`origin` carries the same values `Issue.origin` carries, and it answers the question a caller has
 to answer first — is this my fault, the target tree's, or the tool's — from a value rather than from
 the message. One branch routes every failure this package raises:
 
@@ -326,19 +320,19 @@ and does not match the contract it is read against, `destroyed` builds a replace
 teardown is permanent, and `deadline` changes the budget or the work it bounds. Neither axis is
 derivable from the other. These are the pairs this package raises:
 
-| Party        | Code        | Raised when                                                                                                                                                                                                                                                    |
-| ------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a claim the tool guard rejects, a candidate naming no scoped project, or a caller-named project whose diagnostic names no file.                                                                           |
-| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                |
-| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                     |
-| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began.                                                                                  |
-| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                    |
-| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                 |
-| `workspace`  | `malformed` | The target tree publishes something probe cannot read: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, or a mutation path whose existing components cannot be inspected. |
-| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                 |
-| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                |
+| Party        | Code        | Raised when                                                                                                                                                                                                                                                                                          |
+| ------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a path the host filesystem refuses to inspect because it exceeds the host's length limit or carries a NUL byte, a claim the tool guard rejects, a candidate naming no scoped project, or a caller-named project whose diagnostic names no file. |
+| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                                                      |
+| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                                                           |
+| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began.                                                                                                                        |
+| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                                                          |
+| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                                                       |
+| `workspace`  | `malformed` | The target tree publishes something probe cannot read: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, or a mutation path whose existing components cannot be inspected.                                       |
+| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                                                       |
+| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                                                      |
 
-An `instrument` failure carries the same meaning it carries on `Finding.origin`: the inspection did
+An `instrument` failure carries the same meaning it carries on `Issue.origin`: the inspection did
 not complete, so nothing was learned about the code. Do not read it as evidence about a candidate.
 
 **The pure leaves are total over a validated claim and not over every value.** `computeDigest`,
@@ -364,7 +358,7 @@ fails at construction rather than at `prove`.
 - **A Vitest project whose name the test's path infers.** A test under `tmp/probe/` names the
   `probe` project, and a test under `tests/src/<environment>/` names `src:<environment>`. Any other
   path infers no project, and the runtime stage throws `origin: 'claimant'`, `code: 'missing'`, and
-  the declared path in `context` rather than reporting a finding:
+  the declared path in `context` rather than reporting an issue:
   `The runtime stage found no configured Vitest project matching the test path`. A path that infers
   a name the root configuration does not define is refused the same way, with
   `The runtime stage found no configured Vitest project named <name>`. A test that never ran is not
@@ -373,7 +367,8 @@ fails at construction rather than at `prove`.
   runtime stage installs its own overlay plugin into each project's configuration so the candidate
   sources resolve from memory. A project the root configuration names by path carries no such
   plugin, so the stage installs no overlay and runs no test. The check reports an
-  `origin: 'instrument'` finding:
+  `origin: 'workspace'` issue, because the party that must act is the workspace owner editing
+  `vite.config.ts`:
   `The runtime stage cannot instrument the string-declared Vitest project <name> because its configuration carries no runtime overlay plugin`.
   The project's `include` pattern is not the mechanism: the stage builds an explicit specification
   for the file it wrote, so a project whose glob matches nothing still serves a claim.
@@ -488,13 +483,13 @@ These things in it are load-bearing:
 - **The candidate file lives under `src/`.** It is checked against `configs/src/tsconfig.core.json`,
   the same scoped project the workspace's own `check:src:core` script runs.
 - **The control's candidate text differs from the case's.** A control byte-identical to its case
-  cannot break, so it never produces the `origin: 'claimant'` finding a receipt requires.
+  cannot break, so it never produces the `origin: 'claimant'` issue a receipt requires.
 - **The test imports the candidate through a relative specifier.** The runtime stage serves the
   candidate's text at the path the claim declared, so `../../src/core/greeting.js` resolves to the
   supplied text rather than to a file on disk.
 - **The test imports `test` and `expect` from `vitest`, and asserts.** A bare `test(...)` fails at
   runtime with `test is not defined`, and at a version-controlled path a body that asserts nothing
-  adds the lint finding `Test has no assertions`. Both are charged to the claim.
+  adds the lint issue `Test has no assertions`. Both are charged to the claim.
 
 This claim carries no absolute string, so `verdict.digest` is the same in any workspace that runs
 it. Change the control's `reason` and the digest changes with it, because the reason is part of the
@@ -623,8 +618,8 @@ exactly as it does for a file on disk. The stage reports a clean check, not a sk
 This reaches the flagship claim stated earlier: its test lives at `tmp/probe/greeting.test.ts`, and `tmp` is
 ignored in this workspace, so the lint stage inspects the candidate `src/core/greeting.ts` and
 reports nothing about the test. Measured on 2026-08-20: the same three-line text carrying an unused
-binding and a `debugger` statement returns 0 findings at `tmp/probe/lint-ignored.test.ts` and 2
-findings at `tests/src/core/lint-tracked.test.ts`.
+binding and a `debugger` statement returns 0 issues at `tmp/probe/lint-ignored.test.ts` and 2
+issues at `tests/src/core/lint-tracked.test.ts`.
 
 `.gitignore` alone causes this: `tmp` appears there and in no other ignore file this workspace
 carries. Put every candidate source you want linted at a path version control tracks.
