@@ -22,7 +22,12 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
-import { createDestroyedError, formatSpecification, matchesSpecification } from '@src/core'
+import {
+	ProbeError,
+	createDestroyedError,
+	formatSpecification,
+	matchesSpecification,
+} from '@src/core'
 import {
 	captureListeners,
 	createRevisionFile,
@@ -43,8 +48,8 @@ import { Overlay } from '../Overlay.js'
  * @remarks
  * Construction starts Vitest with the threads pool and instruments each inline or function-declared
  * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
- * string-declared project reports an instrument finding because its project server carries no
- * runtime overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
+ * string-declared project reports a workspace finding because its project server carries no runtime
+ * overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
  * workspace module whose disk content or candidate revision changed, runs that specification,
  * evicts its result, and deletes the file. Clearing the overlay makes the next snapshot differ from
  * the candidate revision, so the next inspection invalidates that module and reads disk again.
@@ -58,11 +63,10 @@ import { Overlay } from '../Overlay.js'
  * inspections put that one at 480 ms and 269 ms against median inspections of 156 ms and 155 ms, so
  * budget one call in 64 at 110 ms to 330 ms above the rest.
  *
- * Only a failure Vitest reported about the candidate carries `origin: 'code'`. Everything the
- * stage raises about its own machinery — a project it could not select, a specification it could
- * not delete or evict, a module that ran no test — carries `origin: 'instrument'` and says so in
- * the stage's own voice, because a control whose test never ran disproved nothing and must not
- * earn a receipt.
+ * A failure Vitest reported about the candidate carries `origin: 'claimant'`. An unmapped caller
+ * test or a test whose named project is absent is also a claimant failure with `code: 'missing'`.
+ * Failures in the stage's own machinery carry `origin: 'instrument'`. A string-declared project
+ * that cannot install the overlay is a workspace finding.
  *
  * @example
  * ```ts
@@ -79,6 +83,7 @@ export class RuntimeStage implements StageInterface {
 	readonly #revisions = new Set<string>()
 	#specifications = 0
 	#closing: Promise<void> | undefined
+	#progress = 0
 	#destroyed = false
 
 	/**
@@ -98,6 +103,10 @@ export class RuntimeStage implements StageInterface {
 
 	get stage(): Stage {
 		return 'runtime'
+	}
+
+	get progress(): number {
+		return this.#progress
 	}
 
 	async inspect(subject: Case): Promise<Check> {
@@ -140,6 +149,7 @@ export class RuntimeStage implements StageInterface {
 			try {
 				const task = project.createSpecification(file, undefined, 'threads')
 				const result = await vitest.runTestSpecifications([task], false)
+				this.#progress += 1
 				findings = this.#findings(result, file, subject.test.path)
 			} finally {
 				process.exitCode = exitCode
@@ -381,25 +391,28 @@ export class RuntimeStage implements StageInterface {
 		// selected the root project before this resolved.
 		const name = inferTestProject(relative(this.#workspace, resolve(this.#workspace, path)))
 		if (name === undefined) {
-			return {
-				origin: 'instrument',
-				path,
-				message: 'The runtime stage found no configured Vitest project matching the test path',
-			}
+			throw new ProbeError(
+				'The runtime stage found no configured Vitest project matching the test path',
+				{
+					origin: 'claimant',
+					code: 'missing',
+					context: { stage: this.stage, path },
+				},
+			)
 		}
 		const project = vitest.projects.find((candidate) => candidate.name === name)
 		if (project === undefined) {
-			return {
-				origin: 'instrument',
-				path,
-				message: `The runtime stage found no configured Vitest project named ${name}`,
-			}
+			throw new ProbeError(`The runtime stage found no configured Vitest project named ${name}`, {
+				origin: 'claimant',
+				code: 'missing',
+				context: { stage: this.stage, path },
+			})
 		}
 		if (
 			!project.vite.config.plugins.some((plugin) => plugin.name === 'orkestrel-runtime-overlay')
 		) {
 			return {
-				origin: 'instrument',
+				origin: 'workspace',
 				path,
 				message: `The runtime stage cannot instrument the string-declared Vitest project ${name} because its configuration carries no runtime overlay plugin`,
 			}
@@ -624,7 +637,7 @@ export class RuntimeStage implements StageInterface {
 			if (state === 'failed') {
 				if (findings.length === before) {
 					findings.push({
-						origin: 'code',
+						origin: 'claimant',
 						path: original,
 						message: 'Vitest reported a failed test module',
 					})
@@ -674,10 +687,10 @@ export class RuntimeStage implements StageInterface {
 	#finding(error: unknown, specification: string, original: string): Finding {
 		const message = messageFromUnknown(error)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
-			return { origin: 'code', path: original, message }
+			return { origin: 'claimant', path: original, message }
 		}
 		const stacks = error.stacks
-		if (!Array.isArray(stacks)) return { origin: 'code', path: original, message }
+		if (!Array.isArray(stacks)) return { origin: 'claimant', path: original, message }
 		for (const stack of stacks) {
 			if (typeof stack !== 'object' || stack === null) continue
 			if (!('file' in stack) || typeof stack.file !== 'string') continue
@@ -692,10 +705,10 @@ export class RuntimeStage implements StageInterface {
 					? original
 					: relativeWorkspaceFile(this.#real(this.#workspace), reported)
 			if (!('line' in stack) || typeof stack.line !== 'number') {
-				return { origin: 'code', path, message }
+				return { origin: 'claimant', path, message }
 			}
-			return { origin: 'code', path, message, line: stack.line }
+			return { origin: 'claimant', path, message, line: stack.line }
 		}
-		return { origin: 'code', path: original, message }
+		return { origin: 'claimant', path: original, message }
 	}
 }

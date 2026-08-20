@@ -209,7 +209,7 @@ describe('lint stage', () => {
 			expect(check.findings).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path: 'tests/src/server/lint-candidate.test.ts',
 						message: expect.stringContaining('debugger'),
 					}),
@@ -217,7 +217,7 @@ describe('lint stage', () => {
 			)
 			// Oxlint publishes diagnostics about the supplied text and nothing else, so every
 			// finding this stage returns carries the origin that can disprove a claim.
-			expect(check.findings.every((finding) => finding.origin === 'code')).toBe(true)
+			expect(check.findings.every((finding) => finding.origin === 'claimant')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}
@@ -326,7 +326,7 @@ describe('lint stage', () => {
 				expect(reported.findings).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({
-							origin: 'code',
+							origin: 'claimant',
 							path: 'tests/src/server/lint-override.ts',
 							message: expect.stringContaining('named export'),
 						}),
@@ -361,7 +361,7 @@ describe('lint stage', () => {
 				})
 				expect(reported.findings).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path: 'lib/candidate.ts',
 						message: expect.stringContaining('debugger'),
 					}),
@@ -395,7 +395,7 @@ describe('lint stage', () => {
 				})
 				expect(reported.findings).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path: 'guides/other.ts',
 						message: expect.stringContaining('debugger'),
 					}),
@@ -429,7 +429,7 @@ describe('lint stage', () => {
 				})
 				expect(reported.findings).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path: 'lib/reported.ts',
 						message: expect.stringContaining('debugger'),
 					}),
@@ -470,7 +470,7 @@ describe('lint stage', () => {
 				const violating = await stage.inspect({ files: [], test: { path, text: violation } })
 				expect(violating.findings).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path,
 						message: expect.stringContaining('debugger'),
 					}),
@@ -750,7 +750,8 @@ describe('lint stage', () => {
 				).rejects.toMatchObject({
 					name: 'ProbeError',
 					message: 'The Oxlint language server exited with code 7',
-					code: 'instrument',
+					origin: 'instrument',
+					code: 'malformed',
 					context: { stage: 'lint' },
 				})
 				// The ending is what releases the document the dead server can no longer answer, so a

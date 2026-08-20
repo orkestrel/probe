@@ -181,15 +181,21 @@ describe.sequential('probe', () => {
 						reason: 'the source assigns a string to a number',
 					},
 				})
-				const admitted = await probe.prove({
-					project: 'configs/src/tsconfig.core.json',
-					case: { files: [clean], test: unmapped },
-					control: {
-						files: [broken],
-						test: unmapped,
-						stage: 'type',
-						reason: 'the source assigns a string to a number',
-					},
+				await expect(
+					probe.prove({
+						project: 'configs/src/tsconfig.core.json',
+						case: { files: [clean], test: unmapped },
+						control: {
+							files: [broken],
+							test: unmapped,
+							stage: 'type',
+							reason: 'the source assigns a string to a number',
+						},
+					}),
+				).rejects.toMatchObject({
+					origin: 'claimant',
+					code: 'missing',
+					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
 				expect(issued.receipt).toMatch(/^probe:/)
 				expect(issued.reason).toBe('the source assigns a string to a number')
@@ -199,13 +205,6 @@ describe.sequential('probe', () => {
 					expect.objectContaining({
 						origin: 'instrument',
 						message: 'Vitest ran no tests in the module',
-					}),
-				])
-				expect(admitted.receipt).toBeUndefined()
-				expect(admitted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
-					expect.objectContaining({
-						origin: 'instrument',
-						message: 'The runtime stage found no configured Vitest project matching the test path',
 					}),
 				])
 			} finally {
@@ -389,7 +388,8 @@ describe.sequential('probe', () => {
 			).rejects.toMatchObject({
 				name: 'ProbeError',
 				message: 'The supported TypeScript range is ^6.0.0; found 7.0.2',
-				code: 'workspace',
+				origin: 'workspace',
+				code: 'malformed',
 				context: { name: 'typescript', value: '7.0.2' },
 			})
 		} finally {
@@ -496,10 +496,13 @@ describe.sequential('probe', () => {
 				const outcomes = await Promise.allSettled([expired, served])
 				expect(outcomes[0]).toMatchObject({
 					status: 'rejected',
-					reason: expect.objectContaining({ message: 'The runtime stage exceeded 6000 ms' }),
+					reason: expect.objectContaining({
+						origin: 'instrument',
+						code: 'deadline',
+						message: 'The runtime stage exceeded 6000 ms',
+					}),
 				})
 				expect(expirations.calls).toStrictEqual([[hanging]])
-				expect(failures.count).toBe(1)
 				expect(
 					readdirSync(fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))).filter(
 						(name) => name.startsWith('expiry.test.probe-'),
@@ -509,6 +512,7 @@ describe.sequential('probe', () => {
 					status: 'fulfilled',
 					value: expect.objectContaining({ receipt: expect.any(String) }),
 				})
+				expect(failures.count).toBe(1)
 			} finally {
 				await probe.destroy()
 			}
@@ -549,6 +553,7 @@ describe.sequential('probe', () => {
 			await expect(probe.prove(heavy)).rejects.toMatchObject({
 				name: 'ProbeError',
 				message: 'The type stage exceeded 6000 ms',
+				origin: 'claimant',
 				code: 'deadline',
 				context: { stage: 'type', deadline: 6000 },
 			})
@@ -791,60 +796,75 @@ describe.sequential('probe', () => {
 		},
 	)
 
-	it('carries boot findings into one observed arming refusal', { timeout: 60_000 }, async () => {
-		const scratch = createScratch()
-		scratch.write('package.json', '{"type":"module"}\n')
-		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-		scratch.write(
-			'tsconfig.json',
-			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
-		)
-		scratch.write(
-			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
-		)
-		scratch.write('tmp/probe/.keep', '')
-		const failures = createRecorder<[unknown]>()
-		const probe = new Probe({
-			workspace: scratch.path,
-			deadline: 60_000,
-			on: { error: failures.handler },
-		})
-		try {
-			await expect(
-				probe.prove({
-					project: 'tsconfig.json',
-					case: {
-						files: [],
-						test: {
-							path: 'tmp/probe/refused.test.ts',
-							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-						},
-					},
-					control: {
-						files: [],
-						test: {
-							path: 'tmp/probe/refused.test.ts',
-							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-						},
-						stage: 'type',
-						reason: 'the probe did not arm',
-					},
-				}),
-			).rejects.toThrow('The probe boot control did not begin clean')
-			expect(failures.count).toBe(1)
-			expect(failures.calls[0]?.[0]).toEqual(
-				expect.objectContaining({
-					message: expect.stringMatching(
-						/probe boot control did not begin clean[\s\S]*runtime:[\s\S]*no configured Vitest project named probe/i,
-					),
-				}),
+	it(
+		'carries a boot stage failure into one observed arming refusal',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
 			)
-		} finally {
-			await probe.destroy()
-			scratch.destroy()
-		}
-	})
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const failures = createRecorder<[unknown]>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 60_000,
+				on: { error: failures.handler },
+			})
+			try {
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probe/refused.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+						},
+						control: {
+							files: [],
+							test: {
+								path: 'tmp/probe/refused.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+							stage: 'type',
+							reason: 'the probe did not arm',
+						},
+					}),
+				).rejects.toMatchObject({
+					origin: 'instrument',
+					code: 'malformed',
+					message:
+						'The probe could not arm: The runtime stage found no configured Vitest project named probe',
+					cause: expect.objectContaining({
+						origin: 'claimant',
+						code: 'missing',
+						context: { stage: 'runtime', path: expect.any(String) },
+					}),
+				})
+				expect(failures.count).toBe(1)
+				expect(failures.calls[0]?.[0]).toEqual(
+					expect.objectContaining({
+						origin: 'instrument',
+						code: 'malformed',
+						message:
+							'The probe could not arm: The runtime stage found no configured Vitest project named probe',
+					}),
+				)
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('emits one error for an ordinary stage failure', { timeout: 60_000 }, async () => {
 		const failures = createRecorder<[unknown]>()
@@ -1158,7 +1178,7 @@ describe.sequential('probe', () => {
 				expect(workspace.receipt).toBeUndefined()
 				expect(workspace.checks.flatMap((check) => check.findings)).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						path: `src/core/probe-forgery-${id}.ts`,
 						message: "'value' is possibly 'undefined'.",
 					}),

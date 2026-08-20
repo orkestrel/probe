@@ -15,9 +15,9 @@ import { spawnSync } from 'node:child_process'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { waitForDelay } from '@orkestrel/test'
+import { captureError, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { computeReceipt, formatSpecification } from '@src/core'
+import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
 import { RuntimeStage, createRevisionFile } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
@@ -48,7 +48,14 @@ describe('runtime stage', () => {
 		const scratch = createScratch({ prefix: 'probe-runtime-resolution-' })
 		try {
 			scratch.write('package.json', '{"name":"probe-runtime-resolution","private":true}\n')
-			expect(() => new RuntimeStage(scratch.path)).toThrow("Cannot find module 'vitest/node'")
+			const error = captureError(() => new RuntimeStage(scratch.path))
+			expect(isProbeError(error)).toBe(true)
+			expect(error).toMatchObject({
+				origin: 'workspace',
+				code: 'missing',
+				context: { name: 'vitest/node' },
+				cause: expect.any(Error),
+			})
 		} finally {
 			scratch.destroy()
 		}
@@ -80,7 +87,7 @@ describe('runtime stage', () => {
 				// the test path the case declared and keeps that frame's line, so a runtime failure whose
 				// stack carries a frame arrives with `line` set.
 				expect(failing.findings[0]).toMatchObject({
-					origin: 'code',
+					origin: 'claimant',
 					path: 'tmp/probe/runtime-failing.test.ts',
 					line: expect.any(Number),
 				})
@@ -120,7 +127,7 @@ describe('runtime stage', () => {
 
 				expect(check.findings).toHaveLength(1)
 				expect(check.findings[0]).toMatchObject({
-					origin: 'code',
+					origin: 'claimant',
 					path: 'tmp/probe/symlinked.test.ts',
 					line: expect.any(Number),
 				})
@@ -293,7 +300,7 @@ describe('runtime stage', () => {
 						message: 'Vitest did not run the test (skips)',
 					},
 				])
-				expect(failed.findings[0]?.origin).toBe('code')
+				expect(failed.findings[0]?.origin).toBe('claimant')
 				expect(passed.findings).toStrictEqual([])
 
 				// The controls reach this assertion through the real stage and differ only in
@@ -462,7 +469,7 @@ describe('runtime stage', () => {
 				})
 				expect(check.findings).toEqual([
 					expect.objectContaining({
-						origin: 'code',
+						origin: 'claimant',
 						message: expect.stringContaining("Cannot find package 'overlay-package'"),
 					}),
 				])
@@ -656,7 +663,7 @@ describe('runtime stage', () => {
 			})
 			expect(check.findings).toStrictEqual([
 				{
-					origin: 'instrument',
+					origin: 'workspace',
 					path: 'tmp/probe/string.test.ts',
 					message:
 						'The runtime stage cannot instrument the string-declared Vitest project probe because its configuration carries no runtime overlay plugin',
@@ -767,25 +774,24 @@ describe('runtime stage', () => {
 	})
 
 	it(
-		'reports a finding for a test path outside every real Vitest project',
+		'refuses a test path outside every configured Vitest project',
 		{ timeout: 60_000 },
 		async () => {
 			const stage = new RuntimeStage(ROOT)
 			try {
-				const check = await stage.inspect({
-					files: [],
-					test: {
-						path: 'tests/unmapped.test.ts',
-						text: "import { test } from 'vitest'\ntest('unmapped', () => {})\n",
-					},
+				await expect(
+					stage.inspect({
+						files: [],
+						test: {
+							path: 'tests/unmapped.test.ts',
+							text: "import { test } from 'vitest'\ntest('unmapped', () => {})\n",
+						},
+					}),
+				).rejects.toMatchObject({
+					origin: 'claimant',
+					code: 'missing',
+					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
-				expect(check.findings).toStrictEqual([
-					{
-						origin: 'instrument',
-						path: 'tests/unmapped.test.ts',
-						message: 'The runtime stage found no configured Vitest project matching the test path',
-					},
-				])
 			} finally {
 				await stage.destroy()
 			}
@@ -803,20 +809,19 @@ describe('runtime stage', () => {
 		scratch.write('tmp/probe/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
 		try {
-			const check = await stage.inspect({
-				files: [],
-				test: {
-					path: 'tmp/probe/missing-project.test.ts',
-					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-				},
+			await expect(
+				stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/missing-project.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				}),
+			).rejects.toMatchObject({
+				origin: 'claimant',
+				code: 'missing',
+				context: { stage: 'runtime', path: 'tmp/probe/missing-project.test.ts' },
 			})
-			expect(check.findings).toStrictEqual([
-				{
-					origin: 'instrument',
-					path: 'tmp/probe/missing-project.test.ts',
-					message: 'The runtime stage found no configured Vitest project named probe',
-				},
-			])
 		} finally {
 			await stage.destroy()
 			scratch.destroy()
@@ -931,15 +936,10 @@ describe('runtime stage', () => {
 							text: "import { test } from 'vitest'\ntest('unmapped', () => {})\n",
 						},
 					}),
-				).resolves.toMatchObject({
-					findings: [
-						{
-							origin: 'instrument',
-							path: 'tests/unmapped.test.ts',
-							message:
-								'The runtime stage found no configured Vitest project matching the test path',
-						},
-					],
+				).rejects.toMatchObject({
+					origin: 'claimant',
+					code: 'missing',
+					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
 				for (let index = 1; index <= 64; index += 1) {
 					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`

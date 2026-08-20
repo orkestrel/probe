@@ -54,7 +54,8 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 	const path = relative(root, file)
 	if (path === '' || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
 		throw new ProbeError(`Path escapes the workspace: ${target}`, {
-			code: 'invalid',
+			origin: 'claimant',
+			code: 'refused',
 			context: { path: target },
 		})
 	}
@@ -78,7 +79,8 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		}
 		if (outcome.value.isSymbolicLink()) {
 			throw new ProbeError(`Path crosses a symbolic link: ${target}`, {
-				code: 'invalid',
+				origin: 'claimant',
+				code: 'refused',
 				context: { path: target },
 			})
 		}
@@ -86,7 +88,8 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		const remainder = relative(canonical, resolved)
 		if (remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) {
 			throw new ProbeError(`Path escapes the workspace: ${target}`, {
-				code: 'invalid',
+				origin: 'claimant',
+				code: 'refused',
 				context: { path: target },
 			})
 		}
@@ -126,8 +129,22 @@ export function relativeWorkspaceFile(workspace: string, file: string): string {
  * ```
  */
 export function resolveWorkspaceModule(workspace: string, specifier: string): string {
-	const require = createRequire(resolve(workspace, 'package.json'))
-	return require.resolve(specifier)
+	const outcome = attempt(() =>
+		createRequire(resolve(workspace, 'package.json')).resolve(specifier),
+	)
+	if (outcome.success) return outcome.value
+	const error = outcome.error
+	const missing =
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		error.code === 'MODULE_NOT_FOUND'
+	throw new ProbeError(`The workspace cannot resolve ${specifier}`, {
+		origin: 'workspace',
+		code: missing ? 'missing' : 'malformed',
+		context: { name: specifier },
+		cause: error,
+	})
 }
 
 /**
@@ -150,8 +167,23 @@ export function loadWorkspaceModule(
 	workspace: string,
 	specifier: 'typescript' | 'vitest/node',
 ): typeof TypeScript | typeof VitestNode {
-	const require = createRequire(resolve(workspace, 'package.json'))
-	return specifier === 'typescript' ? require('typescript') : require('vitest/node')
+	const outcome = attempt(() => {
+		const require = createRequire(resolve(workspace, 'package.json'))
+		return specifier === 'typescript' ? require('typescript') : require('vitest/node')
+	})
+	if (outcome.success) return outcome.value
+	const error = outcome.error
+	const missing =
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		error.code === 'MODULE_NOT_FOUND'
+	throw new ProbeError(`The workspace cannot load ${specifier}`, {
+		origin: 'workspace',
+		code: missing ? 'missing' : 'malformed',
+		context: { name: specifier },
+		cause: error,
+	})
 }
 
 /**
@@ -169,11 +201,47 @@ export function loadWorkspaceModule(
  * ```
  */
 export function readWorkspaceManifest(workspace: string, name: string): WorkspaceManifest {
-	const path = resolveWorkspaceModule(workspace, `${name}/package.json`)
-	const contents: unknown = JSON.parse(readFileSync(path, 'utf8'))
+	let path: string
+	try {
+		path = resolveWorkspaceModule(workspace, `${name}/package.json`)
+	} catch (error) {
+		if (!(error instanceof ProbeError)) throw error
+		throw new ProbeError(`${name} does not publish a readable manifest`, {
+			origin: 'workspace',
+			code: error.code,
+			context: { name },
+			cause: error.cause,
+		})
+	}
+	const reading = attempt(() => readFileSync(path, 'utf8'))
+	if (!reading.success) {
+		const error = reading.error
+		const missing =
+			typeof error === 'object' &&
+			error !== null &&
+			'code' in error &&
+			(error.code === 'ENOENT' || error.code === 'ENOTDIR')
+		throw new ProbeError(`${name} does not publish a readable manifest`, {
+			origin: 'workspace',
+			code: missing ? 'missing' : 'malformed',
+			context: { name, path },
+			cause: error,
+		})
+	}
+	const parsing = attempt<unknown>(() => JSON.parse(reading.value))
+	if (!parsing.success) {
+		throw new ProbeError(`${name} does not publish a readable manifest`, {
+			origin: 'workspace',
+			code: 'malformed',
+			context: { name, path },
+			cause: parsing.error,
+		})
+	}
+	const contents = parsing.value
 	if (!isRecord(contents)) {
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
-			code: 'workspace',
+			origin: 'workspace',
+			code: 'malformed',
 			context: { name, path },
 		})
 	}
@@ -201,21 +269,24 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 	const bin = manifest.contents.bin
 	if (bin === undefined) {
 		throw new ProbeError(`${name} does not publish a bin field`, {
-			code: 'workspace',
+			origin: 'workspace',
+			code: 'missing',
 			context: { name },
 		})
 	}
 	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
 	if (!isRecord(bin) || !(name in bin)) {
 		throw new ProbeError(`${name} does not publish the ${name} binary`, {
-			code: 'workspace',
+			origin: 'workspace',
+			code: 'missing',
 			context: { name },
 		})
 	}
 	const entry = bin[name]
 	if (typeof entry !== 'string') {
 		throw new ProbeError(`${name} publishes an invalid ${name} binary`, {
-			code: 'workspace',
+			origin: 'workspace',
+			code: 'malformed',
 			context: { name, value: entry },
 		})
 	}
@@ -240,7 +311,8 @@ export function inferTypeProject(path: string): string {
 	const [axis, environment] = normalizePath(path).split('/')
 	if ((axis !== 'src' && axis !== 'app') || environment === undefined || environment === '') {
 		throw new ProbeError(`Cannot infer a scoped TypeScript project for ${path}`, {
-			code: 'invalid',
+			origin: 'claimant',
+			code: 'refused',
 			context: { path },
 		})
 	}
@@ -252,8 +324,8 @@ export function inferTypeProject(path: string): string {
  *
  * @remarks
  * There is no root-project fallback. A path no configured project collects returns `undefined`,
- * and the runtime stage reports that as an `origin: 'instrument'` finding rather than running the
- * test somewhere the workspace never configured.
+ * and the runtime stage refuses that claimant test with `code: 'missing'` rather than running it
+ * somewhere the workspace never configured.
  *
  * @param path - The workspace-relative test path
  * @returns The matching project's name, or `undefined` when no configured project collects the path

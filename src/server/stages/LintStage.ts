@@ -58,6 +58,7 @@ export class LintStage implements StageInterface {
 	#buffer = Buffer.alloc(0)
 	#sequence = 0
 	#closing: Promise<void> | undefined
+	#progress = 0
 	#destroyed = false
 
 	/**
@@ -76,6 +77,10 @@ export class LintStage implements StageInterface {
 
 	get stage(): Stage {
 		return 'lint'
+	}
+
+	get progress(): number {
+		return this.#progress
 	}
 
 	async inspect(subject: Case): Promise<Check> {
@@ -175,6 +180,7 @@ export class LintStage implements StageInterface {
 				() =>
 					reject(
 						new ProbeError(`The Oxlint language server did not exit within ${timeout.ms} ms`, {
+							origin: 'instrument',
 							code: 'deadline',
 							context: { stage: this.stage, deadline: timeout.ms },
 						}),
@@ -225,7 +231,8 @@ export class LintStage implements StageInterface {
 		if (this.#publishes.has(uri)) {
 			return Promise.reject(
 				new ProbeError(`The lint stage is already inspecting ${source.path}`, {
-					code: 'invalid',
+					origin: 'claimant',
+					code: 'refused',
 					context: { stage: this.stage, path: source.path },
 				}),
 			)
@@ -274,7 +281,8 @@ export class LintStage implements StageInterface {
 	// which is a different answer from a diagnostic about the candidate it supplied.
 	#fault(message: string, cause?: unknown, path?: string): ProbeError {
 		return new ProbeError(message, {
-			code: 'instrument',
+			origin: 'instrument',
+			code: 'malformed',
 			context: { stage: this.stage, ...(path === undefined ? {} : { path }) },
 			...(cause === undefined ? {} : { cause }),
 		})
@@ -388,6 +396,7 @@ export class LintStage implements StageInterface {
 		if (!('diagnostics' in params) || !Array.isArray(params.diagnostics)) return
 		const publish = this.#publishes.get(params.uri)
 		if (publish === undefined) return
+		this.#progress += 1
 		publish(this.#findings(params.uri, params.diagnostics))
 	}
 
@@ -406,20 +415,25 @@ export class LintStage implements StageInterface {
 				typeof diagnostic.range !== 'object' ||
 				diagnostic.range === null
 			) {
-				findings.push({ origin: 'code', path, message: diagnostic.message })
+				findings.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
 			const range = diagnostic.range
 			if (!('start' in range) || typeof range.start !== 'object' || range.start === null) {
-				findings.push({ origin: 'code', path, message: diagnostic.message })
+				findings.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
 			const start = range.start
 			if (!('line' in start) || typeof start.line !== 'number') {
-				findings.push({ origin: 'code', path, message: diagnostic.message })
+				findings.push({ origin: 'claimant', path, message: diagnostic.message })
 				continue
 			}
-			findings.push({ origin: 'code', path, message: diagnostic.message, line: start.line + 1 })
+			findings.push({
+				origin: 'claimant',
+				path,
+				message: diagnostic.message,
+				line: start.line + 1,
+			})
 		}
 		return findings
 	}

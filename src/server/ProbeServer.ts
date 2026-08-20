@@ -157,7 +157,8 @@ export class ProbeServer implements ProbeServerInterface {
 		const parameters = schemaToParameters(compileSchema(CLAIM_SHAPE))
 		if (parameters === undefined) {
 			throw new ProbeError('The claim schema cannot be advertised as tool parameters', {
-				code: 'instrument',
+				origin: 'instrument',
+				code: 'malformed',
 			})
 		}
 		const tools = createToolManager()
@@ -173,7 +174,11 @@ export class ProbeServer implements ProbeServerInterface {
 							refused.length === 0
 								? 'The prove tool requires a claim matching the advertised schema'
 								: `The prove tool refuses ${refused.join(', ')}: a source path must stay inside the workspace, which the advertised schema does not constrain`,
-							{ code: 'invalid', context: { value: input } },
+							{
+								origin: 'claimant',
+								code: 'refused',
+								context: { value: input },
+							},
 						)
 					}
 					return this.#probe.prove(input)
@@ -188,7 +193,8 @@ export class ProbeServer implements ProbeServerInterface {
 				if (!result.success) return result
 				if (!isVerdict(result.value)) {
 					throw new ProbeError('The prove tool returned an invalid verdict', {
-						code: 'instrument',
+						origin: 'instrument',
+						code: 'malformed',
 						context: { value: result.value },
 					})
 				}

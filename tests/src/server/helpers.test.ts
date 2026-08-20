@@ -236,9 +236,14 @@ describe('server path helpers', () => {
 
 	it('resolves installed modules and refuses absent ones', () => {
 		expect(resolveWorkspaceModule(ROOT, 'typescript')).toContain('node_modules/typescript/')
-		expect(() => resolveWorkspaceModule(ROOT, 'missing-probe-package')).toThrow(
-			'Cannot find module',
-		)
+		const absent = captureError(() => resolveWorkspaceModule(ROOT, 'missing-probe-package'))
+		expect(isProbeError(absent)).toBe(true)
+		expect(absent).toMatchObject({
+			origin: 'workspace',
+			code: 'missing',
+			context: { name: 'missing-probe-package' },
+			cause: expect.any(Error),
+		})
 	})
 
 	it('loads installed tool modules from the workspace', () => {
@@ -250,7 +255,14 @@ describe('server path helpers', () => {
 		const manifest = readWorkspaceManifest(ROOT, 'typescript')
 		expect(manifest.path).toContain('node_modules/typescript/package.json')
 		expect(manifest.contents).toMatchObject({ name: 'typescript', version: expect.any(String) })
-		expect(() => readWorkspaceManifest(ROOT, 'missing-probe-package')).toThrow('Cannot find module')
+		const absent = captureError(() => readWorkspaceManifest(ROOT, 'missing-probe-package'))
+		expect(isProbeError(absent)).toBe(true)
+		expect(absent).toMatchObject({
+			origin: 'workspace',
+			code: 'missing',
+			context: { name: 'missing-probe-package' },
+			cause: expect.any(Error),
+		})
 	})
 
 	it('resolves package binaries and refuses a package without the requested key', () => {
@@ -265,14 +277,23 @@ describe('server path helpers', () => {
 	it('refuses through a categorized failure that names what it refused', () => {
 		const escape = captureError(() => resolveWorkspaceFile(ROOT, '../secrets.env'))
 		expect(isProbeError(escape)).toBe(true)
-		expect(escape).toMatchObject({ code: 'invalid', context: { path: '../secrets.env' } })
+		expect(escape).toMatchObject({
+			origin: 'claimant',
+			code: 'refused',
+			context: { path: '../secrets.env' },
+		})
 		const inferred = captureError(() => inferTypeProject('tests/src/core/greeting.test.ts'))
 		expect(inferred).toMatchObject({
-			code: 'invalid',
+			origin: 'claimant',
+			code: 'refused',
 			context: { path: 'tests/src/core/greeting.test.ts' },
 		})
 		const binary = captureError(() => resolveWorkspaceBinary(ROOT, 'typescript'))
-		expect(binary).toMatchObject({ code: 'workspace', context: { name: 'typescript' } })
+		expect(binary).toMatchObject({
+			origin: 'workspace',
+			code: 'missing',
+			context: { name: 'typescript' },
+		})
 	})
 })
 

@@ -5,7 +5,6 @@ import type {
 	ProbeEventMap,
 	ProbeInterface,
 	ProbeOptions,
-	Stage,
 	Toolchain,
 	Verdict,
 } from '@src/core'
@@ -103,6 +102,7 @@ export class Probe implements ProbeInterface {
 			handler: (inspection) =>
 				this.#inspectStage(
 					this.#type,
+					this.#type.progress,
 					this.#type.inspect(inspection.subject, inspection.claim.project),
 					inspection.claim,
 				),
@@ -111,7 +111,12 @@ export class Probe implements ProbeInterface {
 			concurrency: 1,
 			retries: 0,
 			handler: (inspection) =>
-				this.#inspectStage(this.#lint, this.#lint.inspect(inspection.subject), inspection.claim),
+				this.#inspectStage(
+					this.#lint,
+					this.#lint.progress,
+					this.#lint.inspect(inspection.subject),
+					inspection.claim,
+				),
 		})
 		this.#runtimeQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
@@ -119,6 +124,7 @@ export class Probe implements ProbeInterface {
 			handler: (inspection) =>
 				this.#inspectStage(
 					this.#runtime,
+					this.#runtime.progress,
 					this.#runtime.inspect(inspection.subject),
 					inspection.claim,
 				),
@@ -212,7 +218,8 @@ export class Probe implements ProbeInterface {
 			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
 			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
 			throw new ProbeError(`The probe could not arm: ${messageFromUnknown(error)}`, {
-				code: 'instrument',
+				origin: 'instrument',
+				code: 'malformed',
 				cause: error,
 			})
 		}
@@ -291,7 +298,7 @@ export class Probe implements ProbeInterface {
 			if (before.some((check) => check.findings.length > 0)) {
 				throw new ProbeError(
 					`The probe boot control did not begin clean\n${before.map(formatCheck).join('\n')}`,
-					{ code: 'instrument' },
+					{ origin: 'instrument', code: 'malformed' },
 				)
 			}
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
@@ -306,13 +313,21 @@ export class Probe implements ProbeInterface {
 			if (type === undefined || type.findings.length === 0) {
 				throw new ProbeError(
 					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatCheck).join('\n')}`,
-					{ code: 'instrument', context: { stage: typeClaim.control.stage } },
+					{
+						origin: 'instrument',
+						code: 'malformed',
+						context: { stage: typeClaim.control.stage },
+					},
 				)
 			}
 			if (tolerant === undefined || tolerant.findings.length > 0) {
 				throw new ProbeError(
 					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatCheck).join('\n')}`,
-					{ code: 'instrument', context: { stage: 'runtime' } },
+					{
+						origin: 'instrument',
+						code: 'malformed',
+						context: { stage: 'runtime' },
+					},
 				)
 			}
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true)
@@ -326,7 +341,11 @@ export class Probe implements ProbeInterface {
 			if (runtime === undefined || runtime.findings.length === 0) {
 				throw new ProbeError(
 					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatCheck).join('\n')}`,
-					{ code: 'instrument', context: { stage: runtimeClaim.control.stage } },
+					{
+						origin: 'instrument',
+						code: 'malformed',
+						context: { stage: runtimeClaim.control.stage },
+					},
 				)
 			}
 		} finally {
@@ -361,6 +380,7 @@ export class Probe implements ProbeInterface {
 
 	async #inspectStage(
 		stage: StageInterface,
+		progress: number,
 		operation: Promise<Check>,
 		claim: Claim,
 	): Promise<Check> {
@@ -372,7 +392,8 @@ export class Probe implements ProbeInterface {
 				this.#expiry(
 					timeout,
 					`The ${stage.stage} stage exceeded ${this.#deadline} ms`,
-					stage.stage,
+					stage,
+					progress,
 				),
 			])
 		} catch (error) {
@@ -402,7 +423,8 @@ export class Probe implements ProbeInterface {
 				this.#expiry(
 					timeout,
 					`The ${stage.stage} stage recovery exceeded ${this.#deadline} ms`,
-					stage.stage,
+					stage,
+					stage.progress,
 				),
 			])
 		} catch {
@@ -432,15 +454,21 @@ export class Probe implements ProbeInterface {
 	// Rejects when the deadline fires, so a race against it settles even when the operation it
 	// races never returns. The stage travels beside the message because a caller catching this
 	// branches on the category and the budget, and reads the message only to print it.
-	#expiry(timeout: TimeoutInterface, message: string, stage: Stage): Promise<never> {
+	#expiry(
+		timeout: TimeoutInterface,
+		message: string,
+		stage: StageInterface,
+		progress: number,
+	): Promise<never> {
 		return new Promise<never>((_resolve, reject) => {
 			timeout.signal.addEventListener(
 				'abort',
 				() =>
 					reject(
 						new ProbeError(message, {
+							origin: stage.progress > progress ? 'claimant' : 'instrument',
 							code: 'deadline',
-							context: { stage, deadline: this.#deadline },
+							context: { stage: stage.stage, deadline: this.#deadline },
 						}),
 					),
 				{ once: true },
@@ -464,7 +492,8 @@ export class Probe implements ProbeInterface {
 		const version = manifest.contents.version
 		if (typeof version !== 'string') {
 			throw new ProbeError(`${name} publishes no readable version`, {
-				code: 'workspace',
+				origin: 'workspace',
+				code: 'malformed',
 				context: { name },
 			})
 		}
@@ -478,7 +507,8 @@ export class Probe implements ProbeInterface {
 		const found = /^(\d+)\./u.exec(version)?.[1]
 		if (supported === undefined || found !== supported) {
 			throw new ProbeError(`The supported TypeScript range is ${range}; found ${version}`, {
-				code: 'workspace',
+				origin: 'workspace',
+				code: 'malformed',
 				context: { name: 'typescript', value: version },
 			})
 		}

@@ -46,9 +46,11 @@ export class TypeStage implements TypeStageInterface {
 	readonly #resident = new Set<string>()
 	readonly #options = new Map<string, CompilerOptions>()
 	readonly #files = new Map<string, readonly string[]>()
+	readonly #diagnostics = new Map<string, readonly Diagnostic[]>()
 	#overlay: OverlayInterface = new Overlay()
 	#recycled: string | undefined
 	#closing: Promise<void> | undefined
+	#progress = 0
 	#destroyed = false
 
 	/**
@@ -70,6 +72,10 @@ export class TypeStage implements TypeStageInterface {
 		return 'type'
 	}
 
+	get progress(): number {
+		return this.#progress
+	}
+
 	/**
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
@@ -89,6 +95,18 @@ export class TypeStage implements TypeStageInterface {
 		const started = performance.now()
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw createDestroyedError('type stage')
+		const resolved = subject.files.map((source) => ({
+			source,
+			path: resolveWorkspaceFile(this.#workspace, source.path),
+		}))
+		const selections = resolved.map((candidate) => ({
+			source: candidate.source,
+			project: project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, candidate.path)),
+		}))
+		this.#configure(this.#service(typescript, 'tsconfig.json'), 'tsconfig.json')
+		for (const selection of selections) {
+			this.#configure(this.#service(typescript, selection.project), selection.project)
+		}
 		// Each inspection owns its candidate set and reads it through its own reference, so the
 		// clear below releases what this inspection recorded and nothing else. The resident
 		// services read whichever overlay is installed, so a caller admits one inspection at a
@@ -99,15 +117,26 @@ export class TypeStage implements TypeStageInterface {
 			this.#record(subject.test, overlay)
 			for (const source of subject.files) this.#record(source, overlay)
 			const findings: Finding[] = []
+			const projects = new Set<string>()
 			const root = this.#service(typescript, 'tsconfig.json')
-			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
+			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json', false, true))
+			projects.add('tsconfig.json')
 			await this.#unblock()
-			for (const source of subject.files) {
-				const resolved = resolveWorkspaceFile(this.#workspace, source.path)
-				const selected =
-					project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, resolved))
+			for (const selection of selections) {
+				const source = selection.source
+				const selected = selection.project
 				const service = this.#service(typescript, selected)
-				findings.push(...this.#findings(typescript, service, source, selected))
+				findings.push(
+					...this.#findings(
+						typescript,
+						service,
+						source,
+						selected,
+						project !== undefined,
+						!projects.has(selected),
+					),
+				)
+				projects.add(selected)
 				await this.#unblock()
 			}
 			return {
@@ -164,6 +193,7 @@ export class TypeStage implements TypeStageInterface {
 		this.#recycled = undefined
 		this.#options.clear()
 		this.#files.clear()
+		this.#diagnostics.clear()
 	}
 
 	async #warm(typescript: typeof TypeScript): Promise<typeof TypeScript> {
@@ -200,6 +230,7 @@ export class TypeStage implements TypeStageInterface {
 	// what stops an abandoned inspection reaching a disposed service and building a replacement
 	// this stage would then own past its own teardown.
 	async #unblock(): Promise<void> {
+		this.#progress += 1
 		await setImmediate()
 		if (this.#destroyed) throw createDestroyedError('type stage')
 	}
@@ -221,7 +252,11 @@ export class TypeStage implements TypeStageInterface {
 		if (config.error !== undefined) {
 			throw new ProbeError(
 				typescript.flattenDiagnosticMessageText(config.error.messageText, '\n'),
-				{ code: 'workspace', context: { stage: this.stage, project } },
+				{
+					origin: 'workspace',
+					code: 'malformed',
+					context: { stage: this.stage, project },
+				},
 			)
 		}
 		const parsed = typescript.parseJsonConfigFileContent(
@@ -234,7 +269,11 @@ export class TypeStage implements TypeStageInterface {
 		if (parsed.errors.length > 0) {
 			throw new ProbeError(
 				typescript.flattenDiagnosticMessageText(parsed.errors[0]?.messageText ?? '', '\n'),
-				{ code: 'workspace', context: { stage: this.stage, project } },
+				{
+					origin: 'workspace',
+					code: 'malformed',
+					context: { stage: this.stage, project },
+				},
 			)
 		}
 		this.#options.set(path, parsed.options)
@@ -264,6 +303,12 @@ export class TypeStage implements TypeStageInterface {
 		return service
 	}
 
+	#configure(service: LanguageService, project: string): void {
+		const path = resolveWorkspaceFile(this.#workspace, project)
+		if (this.#diagnostics.has(path)) return
+		this.#diagnostics.set(path, service.getCompilerOptionsDiagnostics())
+	}
+
 	// Holds one caller-named project beside the resident set warming created. `project` arrives
 	// from the wire validated only as a non-empty string, so keeping a language service per
 	// distinct string would let a caller grow this stage without bound for the life of the process.
@@ -275,6 +320,7 @@ export class TypeStage implements TypeStageInterface {
 		this.#services.delete(previous)
 		this.#options.delete(previous)
 		this.#files.delete(previous)
+		this.#diagnostics.delete(previous)
 	}
 
 	#version(file: string): string {
@@ -296,23 +342,39 @@ export class TypeStage implements TypeStageInterface {
 		service: LanguageService,
 		source: Source,
 		project: string,
+		selected: boolean,
+		configure: boolean,
 	): readonly Finding[] {
 		const path = resolveWorkspaceFile(this.#workspace, source.path)
+		const configuration = resolveWorkspaceFile(this.#workspace, project)
 		const diagnostics = [
+			...(configure ? (this.#diagnostics.get(configuration) ?? []) : []),
 			...service.getSyntacticDiagnostics(path),
 			...service.getSemanticDiagnostics(path),
 		]
-		return diagnostics.map((diagnostic) => this.#finding(typescript, diagnostic, project))
+		return diagnostics.map((diagnostic) => this.#finding(typescript, diagnostic, project, selected))
 	}
 
-	#finding(typescript: typeof TypeScript, diagnostic: Diagnostic, project: string): Finding {
+	#finding(
+		typescript: typeof TypeScript,
+		diagnostic: Diagnostic,
+		project: string,
+		selected: boolean,
+	): Finding {
 		const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
-		// A diagnostic naming no file is about the compilation this stage configured rather than
-		// about the candidate, so it reports against the project and disproves nothing.
-		if (diagnostic.file === undefined) return { origin: 'instrument', path: project, message }
+		if (diagnostic.file === undefined) {
+			if (selected) {
+				throw new ProbeError(message, {
+					origin: 'claimant',
+					code: 'refused',
+					context: { stage: this.stage, project },
+				})
+			}
+			return { origin: 'instrument', path: project, message }
+		}
 		const path = relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
-		if (diagnostic.start === undefined) return { origin: 'code', path, message }
+		if (diagnostic.start === undefined) return { origin: 'claimant', path, message }
 		const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
-		return { origin: 'code', path, message, line: position.line + 1 }
+		return { origin: 'claimant', path, message, line: position.line + 1 }
 	}
 }

@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { waitForDelay } from '@orkestrel/test'
+import { captureError, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { TypeStage } from '@src/server'
+import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -14,7 +15,14 @@ describe('type stage', () => {
 		const scratch = createScratch({ prefix: 'probe-type-resolution-' })
 		try {
 			scratch.write('package.json', '{"name":"probe-type-resolution","private":true}\n')
-			expect(() => new TypeStage(scratch.path)).toThrow("Cannot find module 'typescript'")
+			const error = captureError(() => new TypeStage(scratch.path))
+			expect(isProbeError(error)).toBe(true)
+			expect(error).toMatchObject({
+				origin: 'workspace',
+				code: 'missing',
+				context: { name: 'typescript' },
+				cause: expect.any(Error),
+			})
 		} finally {
 			scratch.destroy()
 		}
@@ -39,12 +47,12 @@ describe('type stage', () => {
 			expect(broken.findings.length).toBeGreaterThan(0)
 			expect(broken.findings).toEqual(
 				expect.arrayContaining([
-					expect.objectContaining({ origin: 'code', path: 'src/core/type-stage.ts' }),
+					expect.objectContaining({ origin: 'claimant', path: 'src/core/type-stage.ts' }),
 				]),
 			)
 			// A compiler diagnostic about the candidate is the candidate's fault, so every finding
 			// this stage returns for one carries the origin that can disprove a claim.
-			expect(broken.findings.every((finding) => finding.origin === 'code')).toBe(true)
+			expect(broken.findings.every((finding) => finding.origin === 'claimant')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}
@@ -103,6 +111,52 @@ describe('type stage', () => {
 				expect(inferred.findings[0]?.path).toBe('src/core/project-choice.ts')
 			} finally {
 				await stage.destroy()
+			}
+		},
+	)
+
+	it(
+		'splits a fileless project diagnostic by who selected the project',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-type-fileless-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[]},"files":["src/core/value.ts"]}\n',
+			)
+			scratch.write(
+				'configs/src/tsconfig.core.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["definitely-missing"]},"files":["../../src/core/value.ts"]}\n',
+			)
+			scratch.write('src/core/value.ts', 'export const VALUE = 1\n')
+			const stage = new TypeStage(scratch.path)
+			const subject = {
+				files: [{ path: 'src/core/value.ts', text: 'export const VALUE = 1\n' }],
+				test: { path: 'tmp/probe/value.test.ts', text: 'export {}\n' },
+			}
+			try {
+				await expect(
+					stage.inspect(subject, 'configs/src/tsconfig.core.json'),
+				).rejects.toMatchObject({
+					origin: 'claimant',
+					code: 'refused',
+					context: { stage: 'type', project: 'configs/src/tsconfig.core.json' },
+				})
+				const inferred = await stage.inspect(subject)
+				expect(inferred.findings).toEqual([
+					expect.objectContaining({
+						origin: 'instrument',
+						path: 'configs/src/tsconfig.core.json',
+						message: expect.stringContaining(
+							"Cannot find type definition file for 'definitely-missing'",
+						),
+					}),
+				])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
 			}
 		},
 	)
