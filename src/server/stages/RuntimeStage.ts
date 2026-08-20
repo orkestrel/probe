@@ -70,8 +70,8 @@ import { Overlay } from '../Overlay.js'
  * crosses a symbolic link, whose existing components this host cannot inspect, or whose directory
  * the target tree blocks probe from creating. An `origin: 'instrument'` issue names this package's
  * own machinery: a specification it could not write after its directory exists, or one it could
- * not run, evict, or delete for a reason the target tree does not own, and a run that reported no
- * test. An unmapped caller test and a test whose named project is absent are claimant failures with
+ * not run, evict, or delete, in each case for a reason the target tree does not own, and a run
+ * that reported no test. An unmapped caller test and a test whose named project is absent are claimant failures with
  * `code: 'missing'`, thrown rather than reported, because a test that never ran is no evidence
  * about the candidate.
  *

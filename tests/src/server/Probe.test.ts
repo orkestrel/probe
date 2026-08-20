@@ -379,7 +379,7 @@ describe.sequential('probe', () => {
 				}),
 			).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: expect.stringContaining('The probe could not write the boot workbench'),
+				message: expect.stringContaining('The probe could not create the boot workbench'),
 				origin: 'workspace',
 				code: 'malformed',
 				context: { path: 'tmp/probe' },

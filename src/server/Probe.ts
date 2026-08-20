@@ -232,6 +232,8 @@ export class Probe implements ProbeInterface {
 	#workbench(): boolean {
 		const path = 'tmp/probe'
 		const directory = resolveWorkspaceFile(this.#workspace, path)
+		// A returned `true` means this directory was absent before this call, so the boot teardown
+		// that follows owns removing it again.
 		const created = !existsSync(directory)
 		try {
 			mkdirSync(resolveWorkspaceFile(this.#workspace, path, true), { recursive: true })
@@ -239,7 +241,7 @@ export class Probe implements ProbeInterface {
 			const code =
 				error instanceof ProbeError && error.origin === 'workspace' ? error.code : 'malformed'
 			throw new ProbeError(
-				`The probe could not write the boot workbench (${describeUnknown(error)})`,
+				`The probe could not create the boot workbench (${describeUnknown(error)})`,
 				{
 					origin: 'workspace',
 					code,

@@ -2,37 +2,37 @@
 
 ## Carrier rulings
 
-- **BR5 prose A.** The guide now assigns a blocked specification directory to the workspace and
+- **BR5 prose A.** The guide assigns a blocked specification directory to the workspace and
   limits the instrument-owned write case to a write after the directory exists
   (`guides/probe.md:282-288`).
-- **BR5 prose B.** The `RuntimeStage` class contract now names post-directory-creation write,
+- **BR5 prose B.** The `RuntimeStage` class contract names post-directory-creation write,
   run, eviction, and deletion failures as instrument issues when the target tree does not own the
   reason (`src/server/stages/RuntimeStage.ts:66-75`).
-- **F1.** `findRefusedPaths` is now a server leaf (`src/server/helpers.ts:493-509`).
+- **F1.** `findRefusedPaths` is a server leaf (`src/server/helpers.ts:493-509`).
   `ProbeServer` imports that server leaf (`src/server/ProbeServer.ts:17,174`). Its behavioral
   coverage moved to the server helpers suite (`tests/src/server/helpers.test.ts:447-493`). The
-  public guide row and test index now name the server surface (`guides/probe.md:168-190,768-778`).
+  public guide row and test index name the server surface (`guides/probe.md:168-190,768-778`).
   The core tree has no remaining `findRefusedPaths` reference.
-- **F2.** `ProbeServerInterface.start` now declares the post-teardown throw in TSDoc
+- **F2.** `ProbeServerInterface.start` declares the post-teardown throw in TSDoc
   (`src/server/types.ts:224-227`).
 - **R2.** `Probe.#arm` creates the boot workbench through `#workbench` before its general boot
   wrapper (`src/server/Probe.ts:213-254`). The helper preserves a workspace `ProbeError` code,
   classifies a native creation fault as `workspace`/`malformed`, records
   `{ path: 'tmp/probe' }`, retains the cause, and uses the stage-door message shape. The regression
   occupies `tmp/probe` with a file and checks the complete failure contract
-  (`tests/src/server/Probe.test.ts:345-390`). The failures table now includes this boot condition
+  (`tests/src/server/Probe.test.ts:345-390`). The failures table includes this boot condition
   (`guides/probe.md:324-334`).
-- **R3.** The construction-refusal proof now requires status 1, empty stdout, containment of the
+- **R3.** The construction-refusal proof requires status 1, empty stdout, containment of the
   formatted stderr line, and absence of a `ProbeError:` stack. It no longer requires stderr to
   equal only that line (`tests/src/bin/main.test.ts:93-114`).
 - **Accepted recommendations.** The receipt summary says each phase owes one check per stage
-  (`guides/probe.md:255-265`). Runtime write classification uses one workspace condition
+  (`guides/probe.md:22`). Runtime write classification uses one workspace condition
   (`src/server/stages/RuntimeStage.ts:417-424`). The lint fixture states that `PROBE_SILENT`
   writes the URI to `admitted` (`tests/src/server/stages/LintStage.test.ts:20-21`). The containment
   sentence uses the agreed claim-input and inspected-target-tree boundary
   (`guides/probe.md:609-618`). The server registration section documents the one-line failure
   format and exit status (`guides/probe.md:412-417`).
-- **PBFIX13 terminology.** The receipt explanation now uses `stayed` consistently with the local
+- **PBFIX13 terminology.** The receipt explanation uses `stayed` consistently with the local
   binding (`src/core/helpers.ts:101-108,151-154`).
 
 ## R2 red and green
@@ -68,7 +68,7 @@ The same command after the fix exited 0: 1 passed, 21 skipped, 22 collected.
 
 - The F1 tests stay in the existing server helpers test file instead of gaining another suite.
 - Own claim: placing `#workbench` before the general boot wrapper makes only workbench creation use
-  the new workspace classification. Later boot faults retain the existing instrument-owned arming
+  the workspace classification. Later boot faults retain the existing instrument-owned arming
   contract (`src/server/Probe.ts:213-226`).
 
 ## Verification

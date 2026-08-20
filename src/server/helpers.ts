@@ -484,6 +484,10 @@ export function describeUnknown(value: unknown): string {
  * copy of its rule. Reports nothing for a value carrying no draft member, including one refused for
  * a member this contract does not declare.
  *
+ * This function lives in the server helpers rather than in core: core's leaf pair, `helpers.ts` and
+ * `validators.ts`, may not consume the shapes module this function reads `CLAIM_SHAPE` from, and
+ * `ProbeServer` is the sole consumer of the result it returns.
+ *
  * @param value - The rejected tool input
  * @returns The dotted member names, in `case` then `control` order, or an empty list
  *
