@@ -1,5 +1,5 @@
 /**
- * The stages a claim passes through, in the order a verdict reports them.
+ * Lists the stages a claim passes through, in the order a verdict reports them.
  *
  * @remarks
  * One list feeds the `Stage` type, the wire shape, the stage guard, and the receipt computation, so
@@ -14,7 +14,7 @@
 export const PROBE_STAGES = Object.freeze(['type', 'lint', 'runtime'] as const)
 
 /**
- * The parties that can own action on an issue or probe failure.
+ * Lists the parties that can own action on an issue or probe failure.
  *
  * @remarks
  * One list feeds the `Party` type and its guard, so a party cannot be admitted by one and refused
@@ -28,7 +28,7 @@ export const PROBE_STAGES = Object.freeze(['type', 'lint', 'runtime'] as const)
 export const PROBE_PARTIES = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
 
 /**
- * The conditions that can end a probe operation.
+ * Lists the conditions that can end a probe operation.
  *
  * @remarks
  * One list feeds the code union and the error guard, so a condition cannot be constructed by one
@@ -49,7 +49,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
 ] as const)
 
 /**
- * The leading token every receipt carries.
+ * Names the leading token every receipt carries.
  *
  * @remarks
  * A receipt travels away from the verdict that minted it — an agent pastes it into the promotion
@@ -65,7 +65,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
 export const RECEIPT_PREFIX = 'probe'
 
 /**
- * The character joining a receipt's tokens.
+ * Names the character joining a receipt's tokens.
  *
  * @remarks
  * A project path can contain this character, so the project field goes last and a reader rejoins

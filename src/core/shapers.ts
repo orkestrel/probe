@@ -2,7 +2,7 @@ import { arrayShape, literalShape, objectShape, stringShape } from '@orkestrel/c
 import { PROBE_STAGES } from './constants.js'
 
 /**
- * Blueprint for one proposed file a claim carries.
+ * Describes one proposed file a claim carries.
  *
  * @remarks
  * `path` is constrained to a non-empty string because every stage resolves a file by it, so an
@@ -26,7 +26,7 @@ export const DRAFT_SHAPE = objectShape(
 )
 
 /**
- * Blueprint for the drafts a claim asserts about and the test that exercises them.
+ * Describes the drafts a claim asserts about and the test that exercises them.
  *
  * @example
  * ```ts
@@ -43,7 +43,7 @@ export const CASE_SHAPE = objectShape(
 )
 
 /**
- * Blueprint for the negative control, which is a case plus where and why it must break.
+ * Describes the negative control, which is a case plus where and why it must break.
  *
  * @remarks
  * Built from `CASE_SHAPE`'s own properties rather than a second copy of them, so the control and
@@ -65,7 +65,7 @@ export const CONTROL_SHAPE = objectShape(
 )
 
 /**
- * Blueprint for one claim, and the sole source of both the published tool schema and the guard
+ * Describes one claim and is the sole source of both the published tool schema and the guard
  * applied to an arriving claim.
  *
  * @remarks
