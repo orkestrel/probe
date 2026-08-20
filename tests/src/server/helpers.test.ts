@@ -225,9 +225,10 @@ describe('server path helpers', () => {
 			const translated = captureError(() => resolveWorkspaceFile(scratch.path, target, true))
 
 			expect(native).toBeInstanceOf(TypeError)
+			expect(native).toMatchObject({ code: 'ERR_INVALID_ARG_VALUE' })
 			expect(translated).toMatchObject({
-				origin: 'workspace',
-				code: 'malformed',
+				origin: 'claimant',
+				code: 'refused',
 				context: { path: target },
 				cause: native,
 			})

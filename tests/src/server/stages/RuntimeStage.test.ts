@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { open } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
@@ -546,32 +547,27 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it(
-		'reports a target path inspection failure as a workspace finding',
-		{ timeout: 60_000 },
-		async () => {
-			const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
-			const stage = new RuntimeStage(ROOT)
-			try {
-				const check = await stage.inspect({
+	it("refuses a caller's unacceptable target path", { timeout: 60_000 }, async () => {
+		const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
+		const stage = new RuntimeStage(ROOT)
+		try {
+			await expect(
+				stage.inspect({
 					files: [],
 					test: {
 						path,
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
-				})
-				expect(check.findings).toEqual([
-					expect.objectContaining({
-						origin: 'workspace',
-						path,
-						message: expect.stringContaining('The workspace path cannot be inspected'),
-					}),
-				])
-			} finally {
-				await stage.destroy()
-			}
-		},
-	)
+				}),
+			).rejects.toMatchObject({
+				origin: 'claimant',
+				code: 'refused',
+				context: { path },
+			})
+		} finally {
+			await stage.destroy()
+		}
+	})
 
 	it(
 		'runs a directly imported candidate without changing its disk file',
@@ -909,6 +905,71 @@ describe('runtime stage', () => {
 	)
 
 	it(
+		"raises progress for the caller's run and lowers it before the stage's cleanup",
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["vitest/globals"]},"include":["src/**/*.ts","tmp/**/*.ts"]}\n',
+			)
+			scratch.write(
+				'configs/src/tsconfig.core.json',
+				'{"extends":"../../tsconfig.json","compilerOptions":{"types":[]},"include":["../../src/core/**/*.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nconst project = { test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ cacheDir: '.probe-cache', test: { projects: [project] } })\n",
+			)
+			const stage = new RuntimeStage(scratch.path)
+			let cache: string | undefined
+			const subject = {
+				files: [],
+				test: {
+					path: 'tmp/probe/progress.test.ts',
+					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+				},
+			}
+			try {
+				await expect(stage.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				const cacheRoot = resolve(scratch.path, '.probe-cache')
+				const result = readdirSync(cacheRoot, {
+					recursive: true,
+					encoding: 'utf8',
+				}).find((entry) => entry.endsWith('results.json'))
+				if (result === undefined) throw new Error('Vitest wrote no results cache')
+				cache = resolve(cacheRoot, result)
+				rmSync(cache, { force: true })
+				const fifo = spawnSync('mkfifo', [cache])
+				if (fifo.status !== 0) throw new Error('The host cannot create a FIFO for the cache gate')
+
+				const baseline = stage.progress
+				const running = stage.inspect(subject)
+				const buffer = Buffer.alloc(65_536)
+				const claimantReader = await open(cache, 'r')
+				const claimant = stage.progress
+				await claimantReader.read(buffer, 0, buffer.length, null)
+				await claimantReader.close()
+				const cleanupReader = await open(cache, 'r')
+				const cleanup = stage.progress
+				await cleanupReader.readFile()
+				await cleanupReader.close()
+
+				expect(claimant).toBeGreaterThan(baseline)
+				expect(cleanup).toBe(baseline)
+				await expect(running).resolves.toMatchObject({ findings: [] })
+			} finally {
+				if (cache !== undefined) rmSync(cache, { force: true })
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
 		"recycles the resident runner after 64 written specifications, evicts disk caches, and strips the replacement warm's termination listeners",
 		{ timeout: 60_000 },
 		async () => {
@@ -1013,6 +1074,42 @@ describe('runtime stage', () => {
 				await stage.destroy()
 				// A fresh clone has no `tmp/probe`, and an unguarded read throws there and replaces
 				// whatever the inspection actually reported.
+				const directory = resolve(ROOT, 'tmp/probe')
+				if (existsSync(directory)) {
+					for (const file of readdirSync(directory)) {
+						if (file.includes(marker)) {
+							rmSync(resolve(directory, file), { force: true, recursive: true })
+						}
+					}
+				}
+			}
+		},
+	)
+
+	it(
+		'preserves workspace classification when cleanup crosses a symbolic link',
+		{ timeout: 60_000 },
+		async () => {
+			const marker = `runtime-cleanup-link-${randomUUID()}`
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path: `tmp/probe/${marker}.test.ts`,
+						text: "import { rmSync, symlinkSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('replaces the specification', () => { const file = fileURLToPath(import.meta.url); rmSync(file); symlinkSync('.', file, 'dir') })\n",
+					},
+				})
+				expect(check.findings).toEqual([
+					expect.objectContaining({
+						origin: 'workspace',
+						message: expect.stringContaining(
+							'The runtime stage could not delete the generated specification',
+						),
+					}),
+				])
+			} finally {
+				await stage.destroy()
 				const directory = resolve(ROOT, 'tmp/probe')
 				if (existsSync(directory)) {
 					for (const file of readdirSync(directory)) {
@@ -1197,6 +1294,16 @@ describe('runtime stage', () => {
 			relative(scratch.path, boot),
 			formatSpecification("export const SIGNAL = 'before'\n", specificationRevision),
 		)
+		const adjacentRevision = `${departed.pid}-${randomUUID()}`
+		const adjacent = createRevisionFile(
+			scratch.path,
+			`tmp/probe/adjacent.probe-${dependencyRevision}.ts`,
+			adjacentRevision,
+		)
+		scratch.write(
+			relative(scratch.path, adjacent),
+			formatSpecification("export const SIGNAL = 'before'\n", adjacentRevision),
+		)
 		const serving = createRevisionFile(
 			scratch.path,
 			'tmp/probe/arm-runtime.ts',
@@ -1209,6 +1316,9 @@ describe('runtime stage', () => {
 			expect(existsSync(live), "a live neighbour's specification").toBe(true)
 			expect(existsSync(arming), "a caller's unmarked file at a boot path").toBe(true)
 			expect(existsSync(boot), 'a marked boot-derived specification whose writer is gone').toBe(
+				false,
+			)
+			expect(existsSync(adjacent), 'a marked specification beside a caller-declared marker').toBe(
 				false,
 			)
 			expect(existsSync(serving), "a live neighbour's boot dependency").toBe(true)

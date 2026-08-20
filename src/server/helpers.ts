@@ -33,6 +33,11 @@ export function normalizePath(path: string): string {
 /**
  * Resolves a path inside a target workspace and rejects traversal outside it.
  *
+ * @remarks
+ * A native `ENAMETOOLONG` or NUL-byte `ERR_INVALID_ARG_VALUE` fault is a claimant refusal. This
+ * classifies the fault, not the author: a workspace nested deeply enough that this package's short
+ * generated names overflow the host limit also reads as a claimant refusal.
+ *
  * @param workspace - The target workspace root
  * @param target - A workspace-relative path
  * @param mutate - If `true`, refuses a symbolic link in an existing descendant; if `false`,
@@ -98,9 +103,14 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		}
 	} catch (error) {
 		if (error instanceof ProbeError) throw error
+		const claimant =
+			typeof error === 'object' &&
+			error !== null &&
+			'code' in error &&
+			(error.code === 'ENAMETOOLONG' || error.code === 'ERR_INVALID_ARG_VALUE')
 		throw new ProbeError(`The workspace path cannot be inspected: ${target}`, {
-			origin: 'workspace',
-			code: 'malformed',
+			origin: claimant ? 'claimant' : 'workspace',
+			code: claimant ? 'refused' : 'malformed',
 			context: { path: target },
 			cause: error,
 		})

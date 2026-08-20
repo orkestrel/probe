@@ -149,8 +149,21 @@ export class RuntimeStage implements StageInterface {
 			const task = project.createSpecification(file, undefined, 'threads')
 			this.#progress += 1
 			try {
-				const result = await vitest.runTestSpecifications([task], false)
-				findings = this.#findings(result, file, subject.test.path)
+				try {
+					const result = await vitest.runTestSpecifications([task], false)
+					findings = this.#findings(result, file, subject.test.path)
+				} catch (error) {
+					if (error instanceof ProbeError) throw error
+					throw new ProbeError(
+						`The runtime stage could not run the generated specification (${messageFromUnknown(error)})`,
+						{
+							origin: 'instrument',
+							code: 'malformed',
+							context: { stage: this.stage, path: subject.test.path },
+							cause: error,
+						},
+					)
+				}
 			} finally {
 				this.#progress -= 1
 				process.exitCode = exitCode
@@ -167,7 +180,10 @@ export class RuntimeStage implements StageInterface {
 					cleanup = [
 						...cleanup,
 						{
-							origin: 'instrument',
+							origin:
+								error instanceof ProbeError && error.origin === 'workspace'
+									? 'workspace'
+									: 'instrument',
 							path: relativeWorkspaceFile(this.#workspace, file),
 							message: `The runtime stage could not delete the generated specification (${messageFromUnknown(error)})`,
 						},
@@ -376,6 +392,14 @@ export class RuntimeStage implements StageInterface {
 			return file
 		})
 		if (outcome.success) return outcome.value
+		if (outcome.error instanceof ProbeError && outcome.error.origin === 'claimant') {
+			throw new ProbeError(outcome.error.message, {
+				origin: outcome.error.origin,
+				code: outcome.error.code,
+				context: { ...outcome.error.context, path: test.path },
+				cause: outcome.error.cause,
+			})
+		}
 		return {
 			origin:
 				outcome.error instanceof ProbeError && outcome.error.origin === 'workspace'
@@ -535,7 +559,7 @@ export class RuntimeStage implements StageInterface {
 		for (const path of this.#walk()) {
 			const matches = [
 				...basename(path).matchAll(
-					/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.|$)/gu,
+					/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.|$)/gu,
 				),
 			]
 			const match = matches.at(-1)
