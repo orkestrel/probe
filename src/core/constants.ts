@@ -29,6 +29,27 @@ export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'ru
 export const FINDING_ORIGINS: readonly FindingOrigin[] = Object.freeze(['code', 'instrument'])
 
 /**
+ * The categories a probe failure carries, naming the party that must act on it.
+ *
+ * @remarks
+ * One list feeds the code union and the error guard, so a category cannot be constructed by one and
+ * refused by the other. The guard reads this list rather than the class, which is what lets it
+ * refuse a lookalike carrying a category this package never declared.
+ *
+ * @example
+ * ```ts
+ * PROBE_ERROR_CODES // ['invalid', 'destroyed', 'deadline', 'workspace', 'instrument']
+ * ```
+ */
+export const PROBE_ERROR_CODES = Object.freeze([
+	'invalid',
+	'destroyed',
+	'deadline',
+	'workspace',
+	'instrument',
+] as const)
+
+/**
  * The leading token every receipt carries.
  *
  * @remarks

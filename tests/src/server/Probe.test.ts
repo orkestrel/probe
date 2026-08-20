@@ -378,7 +378,12 @@ describe.sequential('probe', () => {
 						reason: 'the test throws',
 					},
 				}),
-			).rejects.toThrow('The supported TypeScript range is ^6.0.0; found 7.0.2')
+			).rejects.toMatchObject({
+				name: 'ProbeError',
+				message: 'The supported TypeScript range is ^6.0.0; found 7.0.2',
+				code: 'workspace',
+				context: { name: 'typescript', value: '7.0.2' },
+			})
 		} finally {
 			await probe.destroy()
 			scratch.destroy()
@@ -533,7 +538,12 @@ describe.sequential('probe', () => {
 		const clean = { path: 'src/core/after-type-expiry.ts', text: "export const VALUE = 'ok'\n" }
 		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
 		try {
-			await expect(probe.prove(heavy)).rejects.toThrow('The type stage exceeded 6000 ms')
+			await expect(probe.prove(heavy)).rejects.toMatchObject({
+				name: 'ProbeError',
+				message: 'The type stage exceeded 6000 ms',
+				code: 'deadline',
+				context: { stage: 'type', deadline: 6000 },
+			})
 			expect(expirations.calls).toStrictEqual([[heavy]])
 			// The claim that follows is the point: a stage the expiry only destroyed refuses it, and
 			// the refusal names a stage this caller never asked about.
@@ -896,7 +906,11 @@ describe.sequential('probe', () => {
 						reason: 'the probe is destroyed',
 					},
 				}),
-			).rejects.toThrow('The probe has been destroyed')
+			).rejects.toMatchObject({
+				name: 'ProbeError',
+				message: 'The probe has been destroyed',
+				code: 'destroyed',
+			})
 			expect(failures.count).toBe(1)
 			expect(
 				readdirSync(directory).filter((name) => name.startsWith('after-destroy.test.probe-')),

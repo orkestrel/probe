@@ -21,6 +21,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
+import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	captureListeners,
 	createRevisionFile,
@@ -99,14 +100,14 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	async inspect(subject: Case): Promise<Check> {
-		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('runtime stage')
 		const started = performance.now()
 		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
 		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
 		// rather than assigning zero over a code the host set for itself.
 		const exitCode = process.exitCode
 		const vitest = await this.#runner()
-		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('runtime stage')
 		const project = this.#project(vitest, subject.test.path)
 		if ('message' in project) {
 			return {
@@ -332,7 +333,10 @@ export class RuntimeStage implements StageInterface {
 			// alone deletes a neighbour's specification out from under its run.
 			const file = createRevisionFile(this.#workspace, test.path, `${process.pid}-${randomUUID()}`)
 			if (!existsSync(dirname(file))) {
-				throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
+				throw new ProbeError(`The runtime test directory does not exist: ${dirname(file)}`, {
+					code: 'invalid',
+					context: { stage: this.stage, path: test.path },
+				})
 			}
 			writeFileSync(file, test.text, { encoding: 'utf8', flag: 'wx' })
 			return file
@@ -439,7 +443,7 @@ export class RuntimeStage implements StageInterface {
 	async #replace(current: Promise<Vitest>): Promise<Vitest> {
 		const vitest = await current
 		await vitest.close()
-		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('runtime stage')
 		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
 		return this.#warm(runner.createVitest)
 	}

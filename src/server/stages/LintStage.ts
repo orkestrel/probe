@@ -5,6 +5,7 @@ import type { TimeoutInterface } from '@orkestrel/timeout'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { createTimeout } from '@orkestrel/timeout'
+import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	inferDocumentLanguage,
 	messageFromUnknown,
@@ -70,10 +71,10 @@ export class LintStage implements StageInterface {
 	}
 
 	async inspect(subject: Case): Promise<Check> {
-		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('lint stage')
 		const started = performance.now()
 		await this.#warmth
-		if (this.#destroyed) throw new Error('The lint stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('lint stage')
 		const findings: Finding[] = []
 		for (const source of [...subject.files, subject.test]) {
 			findings.push(...(await this.#document(source)))
@@ -98,7 +99,7 @@ export class LintStage implements StageInterface {
 		const child = await this.#warmth.catch(() => this.#child)
 		// Abandon every document in flight rather than waiting for it: a server that never publishes
 		// its diagnostics would otherwise hold teardown open for the life of the process.
-		this.#fail(new Error('The lint stage has been destroyed'))
+		this.#fail(createDestroyedError('lint stage'))
 		if (child === undefined || this.#ending !== undefined) return
 		const released = new Promise<void>((resolve) => {
 			child.once('exit', () => resolve())
@@ -144,7 +145,13 @@ export class LintStage implements StageInterface {
 		return new Promise<never>((_resolve, reject) => {
 			timeout.signal.addEventListener(
 				'abort',
-				() => reject(new Error(`The Oxlint language server did not exit within ${timeout.ms} ms`)),
+				() =>
+					reject(
+						new ProbeError(`The Oxlint language server did not exit within ${timeout.ms} ms`, {
+							code: 'deadline',
+							context: { stage: this.stage, deadline: timeout.ms },
+						}),
+					),
 				{ once: true },
 			)
 		})
@@ -189,7 +196,12 @@ export class LintStage implements StageInterface {
 	#document(source: Source): Promise<readonly Finding[]> {
 		const uri = pathToFileURL(resolveWorkspaceFile(this.#workspace, source.path)).href
 		if (this.#publishes.has(uri)) {
-			return Promise.reject(new Error(`The lint stage is already inspecting ${source.path}`))
+			return Promise.reject(
+				new ProbeError(`The lint stage is already inspecting ${source.path}`, {
+					code: 'invalid',
+					context: { stage: this.stage, path: source.path },
+				}),
+			)
 		}
 		const diagnostics = new Promise<readonly Finding[]>((resolve, reject) => {
 			this.#documents.set(uri, normalizePath(source.path))
@@ -209,7 +221,7 @@ export class LintStage implements StageInterface {
 				},
 			})
 		} catch (error) {
-			this.#refusals.get(uri)?.(new Error(messageFromUnknown(error)))
+			this.#refusals.get(uri)?.(this.#fault(messageFromUnknown(error), error, source.path))
 		}
 		return inspected
 	}
@@ -228,6 +240,17 @@ export class LintStage implements StageInterface {
 	// Names one ending for a message. Node announces an exit with exactly one non-null argument.
 	#describe(code: number | null, signal: NodeJS.Signals | null): string {
 		return signal === null ? `code ${code}` : `signal ${signal}`
+	}
+
+	// Every fault this stage reports about its own language server, under one category and naming
+	// the stage that produced it. A caller catching one is told the inspection did not complete,
+	// which is a different answer from a diagnostic about the candidate it supplied.
+	#fault(message: string, cause?: unknown, path?: string): ProbeError {
+		return new ProbeError(message, {
+			code: 'instrument',
+			context: { stage: this.stage, ...(path === undefined ? {} : { path }) },
+			...(cause === undefined ? {} : { cause }),
+		})
 	}
 
 	// Whether the language server can still receive a message. A server that ended, and one that
@@ -262,7 +285,7 @@ export class LintStage implements StageInterface {
 			const reject = this.#failures.get(id)
 			this.#responses.delete(id)
 			this.#failures.delete(id)
-			reject?.(new Error(messageFromUnknown(error)))
+			reject?.(this.#fault(messageFromUnknown(error), error))
 		}
 		return response
 	}
@@ -275,12 +298,12 @@ export class LintStage implements StageInterface {
 	#send(message: unknown): void {
 		const child = this.#child
 		if (this.#ending !== undefined) {
-			throw new Error(`The Oxlint language server exited with ${this.#ending}`)
+			throw this.#fault(`The Oxlint language server exited with ${this.#ending}`)
 		}
-		if (child === undefined) throw new Error('The Oxlint language server is not running')
+		if (child === undefined) throw this.#fault('The Oxlint language server is not running')
 		// A server that closed its input is unreachable while its process still lives, so a write
 		// here would neither fail nor ever be answered.
-		if (!child.stdin.writable) throw new Error('The Oxlint language server closed its input')
+		if (!child.stdin.writable) throw this.#fault('The Oxlint language server closed its input')
 		const content = JSON.stringify(message)
 		const header = `Content-Length: ${Buffer.byteLength(content)}\r\n\r\n`
 		child.stdin.write(header + content)
@@ -297,7 +320,7 @@ export class LintStage implements StageInterface {
 		const header = this.#buffer.subarray(0, boundary).toString('ascii')
 		const length = parseContentLength(header)
 		if (length === undefined) {
-			this.#fail(new Error('Oxlint sent an invalid JSON-RPC frame header'))
+			this.#fail(this.#fault('Oxlint sent an invalid JSON-RPC frame header'))
 			return false
 		}
 		const start = boundary + 4
@@ -309,7 +332,7 @@ export class LintStage implements StageInterface {
 			const message: unknown = JSON.parse(content)
 			this.#receive(message)
 		} catch (error) {
-			this.#fail(new Error(`Oxlint sent invalid JSON: ${messageFromUnknown(error)}`))
+			this.#fail(this.#fault(`Oxlint sent invalid JSON: ${messageFromUnknown(error)}`, error))
 		}
 		return true
 	}
@@ -323,7 +346,7 @@ export class LintStage implements StageInterface {
 			this.#responses.delete(id)
 			this.#failures.delete(id)
 			if ('error' in message && message.error !== undefined) {
-				reject?.(new Error(messageFromUnknown(message.error)))
+				reject?.(this.#fault(messageFromUnknown(message.error)))
 			} else {
 				resolve?.('result' in message ? message.result : undefined)
 			}
@@ -387,6 +410,8 @@ export class LintStage implements StageInterface {
 	// here too: its own `shutdown` request is the last thing outstanding, and a server that exits
 	// without replying leaves teardown waiting on it unless this refuses it.
 	#exit(code: number | null, signal: NodeJS.Signals | null): void {
-		this.#fail(new Error(`The Oxlint language server exited with ${this.#describe(code, signal)}`))
+		this.#fail(
+			this.#fault(`The Oxlint language server exited with ${this.#describe(code, signal)}`),
+		)
 	}
 }

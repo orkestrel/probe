@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { captureError } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
 	captureListeners,
@@ -22,6 +23,7 @@ import {
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
 } from '@src/server'
+import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -239,6 +241,21 @@ describe('server path helpers', () => {
 		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
 			'typescript does not publish the typescript binary',
 		)
+	})
+
+	// Each leaf's refusal is caught as a value rather than matched on its message, because the
+	// category and the context are what a caller branches on and a message is what it prints.
+	it('refuses through a categorized failure that names what it refused', () => {
+		const escape = captureError(() => resolveWorkspaceFile(ROOT, '../secrets.env'))
+		expect(isProbeError(escape)).toBe(true)
+		expect(escape).toMatchObject({ code: 'invalid', context: { path: '../secrets.env' } })
+		const inferred = captureError(() => inferTypeProject('tests/src/core/greeting.test.ts'))
+		expect(inferred).toMatchObject({
+			code: 'invalid',
+			context: { path: 'tests/src/core/greeting.test.ts' },
+		})
+		const binary = captureError(() => resolveWorkspaceBinary(ROOT, 'typescript'))
+		expect(binary).toMatchObject({ code: 'workspace', context: { name: 'typescript' } })
 	})
 })
 

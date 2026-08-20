@@ -86,15 +86,22 @@ const HOST = [
 	"import { readFileSync } from 'node:fs'",
 	"import { registerHooks } from 'node:module'",
 	"import { pathToFileURL } from 'node:url'",
+	'const [, , stage, workspace] = process.argv',
+	// The stage is loaded as source in a bare host, so this hook stands in for what the workspace's
+	// own resolver and the published build each do for it: the extension the source writes, and the
+	// core entry the server bundle externalizes `@src/core` to.
+	"const root = new URL('../../../', pathToFileURL(stage))",
 	'registerHooks({',
 	'\tresolve(specifier, context, next) {',
 	"\t\tif (specifier.startsWith('.') && specifier.endsWith('.js')) {",
 	"\t\t\treturn next(specifier.slice(0, -3) + '.ts', context)",
 	'\t\t}',
+	"\t\tif (specifier === '@src/core') {",
+	"\t\t\treturn next(new URL('src/core/index.ts', root).href, context)",
+	'\t\t}',
 	'\t\treturn next(specifier, context)',
 	'\t},',
 	'})',
-	'const [, , stage, workspace] = process.argv',
 	'const { LintStage } = await import(pathToFileURL(stage).href)',
 	"const text = \"import { test } from 'vitest'\\ntest('passes', () => {})\\n\"",
 	'const dead = new LintStage(workspace)',
@@ -705,7 +712,12 @@ describe('lint stage', () => {
 						files: [],
 						test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
 					}),
-				).rejects.toThrow('The Oxlint language server exited with code 7')
+				).rejects.toMatchObject({
+					name: 'ProbeError',
+					message: 'The Oxlint language server exited with code 7',
+					code: 'instrument',
+					context: { stage: 'lint' },
+				})
 				// The ending is what releases the document the dead server can no longer answer, so a
 				// later inspection of that same path is admitted and refused on its own terms rather
 				// than colliding with one still registered.

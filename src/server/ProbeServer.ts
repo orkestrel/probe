@@ -4,7 +4,7 @@ import { compileSchema, schemaToParameters } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { CLAIM_SHAPE, formatVerdict, isClaim, isVerdict } from '@src/core'
+import { CLAIM_SHAPE, ProbeError, formatVerdict, isClaim, isVerdict } from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
 import { captureListeners, releaseListeners } from './helpers.js'
 import { Probe } from './Probe.js'
@@ -93,7 +93,9 @@ export class ProbeServer implements ProbeServerInterface {
 	#publish(): ReturnType<typeof createMCPServer> {
 		const parameters = schemaToParameters(compileSchema(CLAIM_SHAPE))
 		if (parameters === undefined) {
-			throw new Error('The claim schema cannot be advertised as tool parameters')
+			throw new ProbeError('The claim schema cannot be advertised as tool parameters', {
+				code: 'instrument',
+			})
 		}
 		const tools = createToolManager()
 		tools.add(
@@ -102,7 +104,12 @@ export class ProbeServer implements ProbeServerInterface {
 				description: 'Proves a claim with type, lint, and runtime evidence.',
 				parameters,
 				execute: async (input) => {
-					if (!isClaim(input)) throw new Error('The prove tool requires a valid claim')
+					if (!isClaim(input)) {
+						throw new ProbeError('The prove tool requires a valid claim', {
+							code: 'invalid',
+							context: { value: input },
+						})
+					}
 					return this.#probe.prove(input)
 				},
 			}),
@@ -113,7 +120,12 @@ export class ProbeServer implements ProbeServerInterface {
 			execution: async ({ call }) => {
 				const result = await tools.execute(call)
 				if (!result.success) return result
-				if (!isVerdict(result.value)) throw new Error('The prove tool returned an invalid verdict')
+				if (!isVerdict(result.value)) {
+					throw new ProbeError('The prove tool returned an invalid verdict', {
+						code: 'instrument',
+						context: { value: result.value },
+					})
+				}
 				return {
 					resultType: 'complete',
 					content: [{ type: 'text', text: formatVerdict(result.value) }],

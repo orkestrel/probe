@@ -1,20 +1,21 @@
 import type { Claim } from '@src/core'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as core from '@src/core'
 import * as server from '@src/server'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from '@src/core'
-import { Probe, readWorkspaceManifest } from '@src/server'
+import { normalizePath, Probe, readWorkspaceManifest } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import { isConstructor } from '@orkestrel/contract'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 
-// Names this package publishes from a source file and deliberately keeps out of its barrels. A
-// class reaches this list when no published signature accepts it, so a consumer can construct one
-// and hand it to nothing. `Overlay` is interned because each inspection mints its own to force a
-// resident tool to re-read the paths it holds; one supplied from outside would be reused across
-// inspections and report a stale answer as a fresh one.
-const INTERNAL: readonly string[] = ['Overlay', 'OverlayInterface']
+// Names this package declares in a source file and deliberately keeps out of its barrels. Interning
+// is for a declaration a consumer cannot construct from values they already hold, and this package
+// has none: every class here takes either nothing or a workspace path. The empty list is the
+// healthy state, and the sweep below refuses both a stranded declaration missing from it and a name
+// in it that the barrels already publish.
+const INTERNAL: readonly string[] = Object.freeze([])
 
 // The claim the guide tells a reader to run verbatim. The same literal appears in
 // `guides/probe.md`, in the `Claim` contract's own `@example`, and here; the parity test below
@@ -80,6 +81,17 @@ function extractComment(source: string, symbol: string): string {
 	return block === undefined ? '' : stripComment(block)
 }
 
+// Reads every TypeScript file one source directory carries, barrels excluded, in the same
+// workspace-relative spelling a barrel row resolves to.
+function extractSources(directory: string): readonly string[] {
+	const entries = readdirSync(new URL(directory, new URL('../', import.meta.url)), {
+		recursive: true,
+	})
+	return entries
+		.map((entry) => `${directory}/${normalizePath(String(entry))}`)
+		.filter((path) => path.endsWith('.ts') && !path.endsWith('/index.ts'))
+}
+
 // Reads the module paths one barrel re-exports, so a new source file joins the documentation
 // sweeps below by being exported rather than by being listed here.
 function extractModules(barrel: string, directory: string): readonly string[] {
@@ -99,23 +111,39 @@ function extractDocumented(source: string): ReadonlyMap<string, string> {
 	return documented
 }
 
-// Reads the names one contract file exports, in declaration order.
-function extractTypes(source: string): readonly string[] {
-	return [...source.matchAll(/^export (?:interface|type) ([A-Za-z_][A-Za-z0-9_]*)/gm)].map(
-		(match) => match[1] ?? '',
-	)
+// Reads every symbol one source file exports at the left margin, documented or not. Both parity
+// directions draw their population from here rather than from a barrel's runtime keys, because a
+// type-only export never appears among those keys and an undocumented export of any kind never
+// appears among the documented ones.
+function extractExports(source: string): readonly string[] {
+	const declarations =
+		/^export (?:declare )?(?:abstract )?(?:async )?(?:function|const|class|interface|type) ([A-Za-z_][A-Za-z0-9_]*)/gm
+	return [...source.matchAll(declarations)].map((match) => match[1] ?? '')
 }
 
-// Reads the call-signature members one interface declares in its own body, ignoring the members it
-// inherits and the readonly data properties that belong in the guide's surface tables.
-function extractMembers(source: string, symbol: string): readonly string[] {
+// Reads the readonly data properties one interface declares in its own body. These belong in the
+// guide's surface row rather than in its method table, and they still reach a class prototype as
+// getters, so the implementation sweep counts them.
+function extractProperties(source: string, symbol: string): readonly string[] {
+	return extractBody(source, symbol)
+		.map((line) => /^\treadonly ([A-Za-z_][A-Za-z0-9_]*)[?]?:/.exec(line)?.[1])
+		.filter((name): name is string => name !== undefined)
+}
+
+// Takes the lines of one interface's own body, from its opening line to its closing brace.
+function extractBody(source: string, symbol: string): readonly string[] {
 	const opening = new RegExp(`^export interface ${symbol}\\b[^\\n]*\\{$`, 'm')
 	const start = opening.exec(source)
 	if (start?.index === undefined) return []
 	const body = source.slice(start.index).split('\n')
 	const end = body.findIndex((line, index) => index > 0 && line === '}')
-	return body
-		.slice(1, end === -1 ? undefined : end)
+	return body.slice(1, end === -1 ? undefined : end)
+}
+
+// Reads the call-signature members one interface declares in its own body, ignoring the members it
+// inherits and the readonly data properties that belong in the guide's surface tables.
+function extractMembers(source: string, symbol: string): readonly string[] {
+	return extractBody(source, symbol)
 		.map((line) => /^\t([A-Za-z_][A-Za-z0-9_]*)\(/.exec(line)?.[1])
 		.filter((name): name is string => name !== undefined)
 }
@@ -140,53 +168,121 @@ const CORE_TYPES = readWorkspaceText('src/core/types.ts')
 const SERVER_TYPES = readWorkspaceText('src/server/types.ts')
 const MANIFEST: unknown = JSON.parse(readWorkspaceText('package.json'))
 
+// Returns whichever contract file declares one interface. The package splits its contracts across
+// the two environments, and a lookup that guessed would compare a class against an empty body.
+function readContract(symbol: string): string {
+	return extractBody(CORE_TYPES, symbol).length > 0 ? CORE_TYPES : SERVER_TYPES
+}
+
+// Every source module the two barrels re-export, so a new file joins the sweeps below by being
+// barrelled rather than by being listed here.
+const MODULES: readonly string[] = [
+	...extractModules(readWorkspaceText('src/core/index.ts'), 'src/core'),
+	...extractModules(readWorkspaceText('src/server/index.ts'), 'src/server'),
+]
+
+// Each published class beside the contracts it declares it implements, inherited ones included,
+// because an interface body carries only its own members.
+const IMPLEMENTATIONS: ReadonlyArray<readonly [string, readonly string[]]> = [
+	['Probe', ['ProbeInterface']],
+	['ProbeServer', ['ProbeServerInterface']],
+	['TypeStage', ['StageInterface', 'TypeStageInterface']],
+	['LintStage', ['StageInterface']],
+	['RuntimeStage', ['StageInterface']],
+	['Overlay', ['OverlayInterface']],
+]
+
+// Every source file the two published environments carry, discovered rather than listed, so the
+// sweep below compares the barrels against what the tree holds instead of against a memory of it.
+const SOURCES: readonly string[] = [...extractSources('src/core'), ...extractSources('src/server')]
+
 describe('guides parity', () => {
 	it('documents every public export, and publishes every documented name', () => {
-		const published = [
-			...Object.keys(core),
-			...Object.keys(server),
-			...extractTypes(CORE_TYPES),
-			...extractTypes(SERVER_TYPES),
-		].filter((name) => !INTERNAL.includes(name))
+		expect(MODULES.length).toBeGreaterThan(0)
+		const published = MODULES.flatMap((path) => extractExports(readWorkspaceText(path))).filter(
+			(name) => !INTERNAL.includes(name),
+		)
+		expect(published.length).toBeGreaterThan(0)
 		const documented = extractRows(extractSection(GUIDE, '## Surface'))
 		expect([...new Set(documented)].sort()).toStrictEqual([...new Set(published)].sort())
+	})
+
+	// The scan above is the population of record, and these are the values behind it. Every name a
+	// barrel resolves at runtime is one the scan found, and every one of them resolves to a value,
+	// so a barrel row that names a module the scan never read fails here rather than shipping.
+	it('resolves every value the barrels publish', () => {
+		const published = MODULES.flatMap((path) => extractExports(readWorkspaceText(path)))
+		for (const entry of [core, server]) {
+			for (const [name, value] of Object.entries(entry)) {
+				expect(value, `${name} resolved to undefined`).toBeDefined()
+				expect(published, `${name} is published by no scanned module`).toContain(name)
+			}
+		}
 	})
 
 	it('documents exactly the members each behavioral interface declares', () => {
 		const interfaces = [
 			'ProbeInterface',
+			'OverlayInterface',
 			'StageInterface',
 			'TypeStageInterface',
 			'ProbeServerInterface',
 		]
 		const methods = extractSection(GUIDE, '## Methods')
 		for (const name of interfaces) {
-			const source = name === 'ProbeInterface' ? CORE_TYPES : SERVER_TYPES
+			const source = readContract(name)
 			expect([...extractRows(extractSection(methods, `#### \`${name}\``))].sort()).toStrictEqual(
 				[...extractMembers(source, name)].sort(),
 			)
 		}
 	})
 
-	it('keeps every interned symbol out of the barrels and out of the guide', () => {
-		for (const name of INTERNAL) {
-			expect(Object.keys(core)).not.toContain(name)
-			expect(Object.keys(server)).not.toContain(name)
-			expect(GUIDE).not.toContain(`\`${name}\``)
+	// The compiler agrees a class is at least its interface, and nothing in the language says it is
+	// no more than that. This reads the prototype the barrel resolves and compares it against the
+	// interfaces the class declares it implements, so public behavior no contract declares — and no
+	// guide row therefore documents — fails here rather than shipping.
+	it('publishes exactly the members each implementation declares it implements', () => {
+		const resolved = new Map<string, unknown>([...Object.entries(core), ...Object.entries(server)])
+		expect(IMPLEMENTATIONS.length).toBeGreaterThan(0)
+		for (const [name, contracts] of IMPLEMENTATIONS) {
+			const implementation = resolved.get(name)
+			expect(isConstructor(implementation), `${name} did not resolve to a class`).toBe(true)
+			if (!isConstructor(implementation)) continue
+			const declared = contracts.flatMap((contract) => {
+				const source = readContract(contract)
+				return [...extractMembers(source, contract), ...extractProperties(source, contract)]
+			})
+			expect(declared.length, `${name} declares no members`).toBeGreaterThan(0)
+			expect(
+				Object.getOwnPropertyNames(implementation.prototype)
+					.filter((member) => member !== 'constructor')
+					.sort(),
+			).toStrictEqual([...new Set(declared)].sort())
 		}
 	})
 
+	// Both directions, because either alone rots. A declaration in a file no barrel row names is
+	// stranded and must be named interned; a name declared interned that the barrels already reach
+	// is a false claim, and the parity population above drops it on that false premise.
+	it('strands no declaration outside a barrel, and interns nothing the barrels publish', () => {
+		expect(SOURCES.length).toBeGreaterThan(0)
+		expect(MODULES.filter((path) => !SOURCES.includes(path))).toStrictEqual([])
+		const stranded = SOURCES.filter((path) => !MODULES.includes(path)).flatMap((path) =>
+			extractExports(readWorkspaceText(path)),
+		)
+		expect(stranded.filter((name) => !INTERNAL.includes(name))).toStrictEqual([])
+		expect(INTERNAL.filter((name) => !stranded.includes(name))).toStrictEqual([])
+	})
+
 	it('carries a documented example for every barrelled export', () => {
-		const modules = [
-			...extractModules(readWorkspaceText('src/core/index.ts'), 'src/core'),
-			...extractModules(readWorkspaceText('src/server/index.ts'), 'src/server'),
-		]
-		expect(modules.length).toBeGreaterThan(0)
+		expect(MODULES.length).toBeGreaterThan(0)
 		const missing: string[] = []
-		for (const path of modules) {
-			for (const [name, comment] of extractDocumented(readWorkspaceText(path))) {
+		for (const path of MODULES) {
+			const source = readWorkspaceText(path)
+			const documented = extractDocumented(source)
+			for (const name of new Set(extractExports(source))) {
 				if (INTERNAL.includes(name)) continue
-				if (!comment.includes('@example')) missing.push(`${path} ${name}`)
+				if (!(documented.get(name) ?? '').includes('@example')) missing.push(`${path} ${name}`)
 			}
 		}
 		expect(missing).toStrictEqual([])

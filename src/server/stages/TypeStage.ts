@@ -5,6 +5,7 @@ import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } fr
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
+import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	computeDigest,
 	inferTypeProject,
@@ -96,10 +97,10 @@ export class TypeStage implements TypeStageInterface {
 	 * @throws When the resident compiler cannot start or the stage has already been destroyed
 	 */
 	async inspect(subject: Case, project?: string): Promise<Check> {
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('type stage')
 		const started = performance.now()
 		const typescript = await this.#typescript
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('type stage')
 		// Each inspection owns its candidate set and reads it through its own reference, so the
 		// clear below releases what this inspection recorded and nothing else. The resident
 		// services read whichever overlay is installed, so a caller admits one inspection at a
@@ -146,9 +147,9 @@ export class TypeStage implements TypeStageInterface {
 	 * been destroyed
 	 */
 	async resolve(project: string): Promise<Project> {
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('type stage')
 		const typescript = await this.#typescript
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('type stage')
 		const resolved = resolveWorkspaceFile(this.#workspace, project)
 		this.#service(typescript, project)
 		return {
@@ -213,7 +214,7 @@ export class TypeStage implements TypeStageInterface {
 	// this stage would then own past its own teardown.
 	async #unblock(): Promise<void> {
 		await setImmediate()
-		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		if (this.#destroyed) throw createDestroyedError('type stage')
 	}
 
 	// Resolution happens here rather than in the overlay, because the workspace a candidate's
@@ -231,7 +232,10 @@ export class TypeStage implements TypeStageInterface {
 		if (existing !== undefined) return existing
 		const config = typescript.readConfigFile(path, typescript.sys.readFile)
 		if (config.error !== undefined) {
-			throw new Error(typescript.flattenDiagnosticMessageText(config.error.messageText, '\n'))
+			throw new ProbeError(
+				typescript.flattenDiagnosticMessageText(config.error.messageText, '\n'),
+				{ code: 'workspace', context: { stage: this.stage, project } },
+			)
 		}
 		const parsed = typescript.parseJsonConfigFileContent(
 			config.config,
@@ -241,8 +245,9 @@ export class TypeStage implements TypeStageInterface {
 			path,
 		)
 		if (parsed.errors.length > 0) {
-			throw new Error(
+			throw new ProbeError(
 				typescript.flattenDiagnosticMessageText(parsed.errors[0]?.messageText ?? '', '\n'),
+				{ code: 'workspace', context: { stage: this.stage, project } },
 			)
 		}
 		this.#options.set(path, parsed.options)

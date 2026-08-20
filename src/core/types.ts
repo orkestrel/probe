@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { PROBE_ERROR_CODES } from './constants.js'
 
 /**
  * Names one of the three inspections a claim passes through.
@@ -422,4 +423,78 @@ export interface ProbeInterface {
 	 * @returns A promise that settles when every engine has released its resources
 	 */
 	destroy(): Promise<void>
+}
+
+/**
+ * Names the category one probe failure belongs to, derived from {@link PROBE_ERROR_CODES}.
+ *
+ * @remarks
+ * The five are irreducible modes rather than labels, because each one names a different party as
+ * the one that must act. `invalid` is the caller's input. `destroyed` is an instrument the caller
+ * already tore down. `deadline` is the coordinator's budget, and the stage behind it was replaced.
+ * `workspace` is the target tree: a tool it does not install, a manifest it does not publish, a
+ * project its compiler cannot parse. `instrument` is this package's own tooling reporting that it
+ * could not serve, and it carries the same meaning here as it does on {@link FindingOrigin}.
+ *
+ * @example
+ * ```ts
+ * const code: ProbeErrorCode = 'workspace'
+ * ```
+ */
+export type ProbeErrorCode = (typeof PROBE_ERROR_CODES)[number]
+
+/**
+ * Carries the structured detail one probe failure reports beside its message.
+ *
+ * @remarks
+ * Every member is absent unless the failure has that value to report, so a reader branches on
+ * presence rather than on a sentinel. `value` is the rejected input itself, carried unchanged, so
+ * treat it as untrusted when rendering it.
+ *
+ * @example
+ * ```ts
+ * const context: ProbeErrorContext = { stage: 'runtime', deadline: 30_000 }
+ * ```
+ */
+export interface ProbeErrorContext {
+	/** The stage the failure belongs to, when one stage owns it. */
+	readonly stage?: Stage
+	/**
+	 * The path involved, spelled as the refusing operation named it: workspace-relative for an
+	 * input a caller supplied, absolute for a file this package resolved.
+	 */
+	readonly path?: string
+	/** The workspace-relative TypeScript project involved, for a project failure. */
+	readonly project?: string
+	/** The installed package name involved, for a workspace toolchain failure. */
+	readonly name?: string
+	/** Milliseconds the expired budget allowed, for a deadline failure. */
+	readonly deadline?: number
+	/** The rejected value, for an input the guards refused. */
+	readonly value?: unknown
+}
+
+/**
+ * Configures one probe failure at construction.
+ *
+ * @remarks
+ * `code` is required, because a failure a consumer cannot branch on is the failure this type
+ * exists to replace. `cause` carries the underlying fault where one ended the operation, and
+ * reaches the native `Error` option of the same name.
+ *
+ * @example
+ * ```ts
+ * const options: ProbeErrorOptions = {
+ * 	code: 'invalid',
+ * 	context: { path: '../secrets.env' },
+ * }
+ * ```
+ */
+export interface ProbeErrorOptions {
+	/** The machine-readable category this failure belongs to. */
+	readonly code: ProbeErrorCode
+	/** Structured detail about the failure. */
+	readonly context?: ProbeErrorContext
+	/** The underlying fault, when one ended the operation. */
+	readonly cause?: unknown
 }

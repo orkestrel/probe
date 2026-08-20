@@ -5,6 +5,7 @@ import type {
 	ProbeEventMap,
 	ProbeInterface,
 	ProbeOptions,
+	Stage,
 	Toolchain,
 	Verdict,
 } from '@src/core'
@@ -18,7 +19,7 @@ import { basename } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
-import { computeReceipt, formatCheck } from '@src/core'
+import { ProbeError, computeReceipt, createDestroyedError, formatCheck } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	computeDigest,
@@ -135,7 +136,7 @@ export class Probe implements ProbeInterface {
 		try {
 			this.#support()
 			await this.#ready()
-			if (this.#destroyed) throw new Error('The probe has been destroyed')
+			if (this.#destroyed) throw createDestroyedError('probe')
 			const started = performance.now()
 			const id = randomUUID()
 			// Resolve the project before any inspection runs, so a project this workspace cannot parse
@@ -204,7 +205,10 @@ export class Probe implements ProbeInterface {
 			// A boot failure and a claim's own stage failure are otherwise one message: the controls
 			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
 			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
-			throw new Error(`The probe could not arm: ${messageFromUnknown(error)}`, { cause: error })
+			throw new ProbeError(`The probe could not arm: ${messageFromUnknown(error)}`, {
+				code: 'instrument',
+				cause: error,
+			})
 		}
 		// The boot control's own files are gone before this line, so a listener is told the
 		// instrument serves only after the workspace holds nothing the control wrote.
@@ -269,8 +273,9 @@ export class Probe implements ProbeInterface {
 			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
 			const before = [...beforeType, ...beforeRuntime]
 			if (before.some((check) => check.findings.length > 0)) {
-				throw new Error(
+				throw new ProbeError(
 					`The probe boot control did not begin clean\n${before.map(formatCheck).join('\n')}`,
+					{ code: 'instrument' },
 				)
 			}
 			writeFileSync(typeDependency, 'export type Signal = number\n', 'utf8')
@@ -278,21 +283,24 @@ export class Probe implements ProbeInterface {
 			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
 			const tolerant = afterType.find((check) => check.stage === 'runtime')
 			if (type === undefined || type.findings.length === 0) {
-				throw new Error(
+				throw new ProbeError(
 					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatCheck).join('\n')}`,
+					{ code: 'instrument', context: { stage: typeClaim.control.stage } },
 				)
 			}
 			if (tolerant === undefined || tolerant.findings.length > 0) {
-				throw new Error(
+				throw new ProbeError(
 					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatCheck).join('\n')}`,
+					{ code: 'instrument', context: { stage: 'runtime' } },
 				)
 			}
 			writeFileSync(runtimeDependency, "export const SIGNAL = 'after'\n", 'utf8')
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
 			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
 			if (runtime === undefined || runtime.findings.length === 0) {
-				throw new Error(
+				throw new ProbeError(
 					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatCheck).join('\n')}`,
+					{ code: 'instrument', context: { stage: runtimeClaim.control.stage } },
 				)
 			}
 		} finally {
@@ -329,7 +337,11 @@ export class Probe implements ProbeInterface {
 		try {
 			return await Promise.race([
 				operation,
-				this.#expiry(timeout, `The ${stage.stage} stage exceeded ${this.#deadline} ms`),
+				this.#expiry(
+					timeout,
+					`The ${stage.stage} stage exceeded ${this.#deadline} ms`,
+					stage.stage,
+				),
 			])
 		} catch (error) {
 			if (!timeout.expired) throw error
@@ -355,7 +367,11 @@ export class Probe implements ProbeInterface {
 			// process and every later claim reports that instead of its own evidence.
 			await Promise.race([
 				stage.destroy(),
-				this.#expiry(timeout, `The ${stage.stage} stage recovery exceeded ${this.#deadline} ms`),
+				this.#expiry(
+					timeout,
+					`The ${stage.stage} stage recovery exceeded ${this.#deadline} ms`,
+					stage.stage,
+				),
 			])
 		} catch {
 			// The failure belongs to the stage being replaced, and the replacement below is the
@@ -382,10 +398,21 @@ export class Probe implements ProbeInterface {
 	}
 
 	// Rejects when the deadline fires, so a race against it settles even when the operation it
-	// races never returns.
-	#expiry(timeout: TimeoutInterface, message: string): Promise<never> {
+	// races never returns. The stage travels beside the message because a caller catching this
+	// branches on the category and the budget, and reads the message only to print it.
+	#expiry(timeout: TimeoutInterface, message: string, stage: Stage): Promise<never> {
 		return new Promise<never>((_resolve, reject) => {
-			timeout.signal.addEventListener('abort', () => reject(new Error(message)), { once: true })
+			timeout.signal.addEventListener(
+				'abort',
+				() =>
+					reject(
+						new ProbeError(message, {
+							code: 'deadline',
+							context: { stage, deadline: this.#deadline },
+						}),
+					),
+				{ once: true },
+			)
 		})
 	}
 
@@ -404,7 +431,10 @@ export class Probe implements ProbeInterface {
 		const manifest = readWorkspaceManifest(this.#workspace, name)
 		const version = manifest.contents.version
 		if (typeof version !== 'string') {
-			throw new Error(`${name} publishes no readable version`)
+			throw new ProbeError(`${name} publishes no readable version`, {
+				code: 'workspace',
+				context: { name },
+			})
 		}
 		return version
 	}
@@ -415,7 +445,10 @@ export class Probe implements ProbeInterface {
 		const supported = /^\^(\d+)\./u.exec(range)?.[1]
 		const found = /^(\d+)\./u.exec(version)?.[1]
 		if (supported === undefined || found !== supported) {
-			throw new Error(`The supported TypeScript range is ${range}; found ${version}`)
+			throw new ProbeError(`The supported TypeScript range is ${range}; found ${version}`, {
+				code: 'workspace',
+				context: { name: 'typescript', value: version },
+			})
 		}
 	}
 }

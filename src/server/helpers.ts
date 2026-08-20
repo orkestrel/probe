@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isArray, isRecord } from '@orkestrel/contract'
+import { ProbeError } from '@src/core'
 
 /**
  * Rewrites one path into the forward-slash spelling this package compares and reports paths in.
@@ -50,7 +51,10 @@ export function resolveWorkspaceFile(workspace: string, target: string): string 
 	const file = resolve(root, target)
 	const path = relative(root, file)
 	if (path === '' || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
-		throw new Error(`Path escapes the workspace: ${target}`)
+		throw new ProbeError(`Path escapes the workspace: ${target}`, {
+			code: 'invalid',
+			context: { path: target },
+		})
 	}
 	return file
 }
@@ -133,7 +137,10 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 	const path = resolveWorkspaceModule(workspace, `${name}/package.json`)
 	const contents: unknown = JSON.parse(readFileSync(path, 'utf8'))
 	if (!isRecord(contents)) {
-		throw new Error(`${name} does not publish a readable manifest`)
+		throw new ProbeError(`${name} does not publish a readable manifest`, {
+			code: 'workspace',
+			context: { name, path },
+		})
 	}
 	return { path, contents }
 }
@@ -158,15 +165,24 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 	const manifest = readWorkspaceManifest(workspace, name)
 	const bin = manifest.contents.bin
 	if (bin === undefined) {
-		throw new Error(`${name} does not publish a bin field`)
+		throw new ProbeError(`${name} does not publish a bin field`, {
+			code: 'workspace',
+			context: { name },
+		})
 	}
 	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
 	if (!isRecord(bin) || !(name in bin)) {
-		throw new Error(`${name} does not publish the ${name} binary`)
+		throw new ProbeError(`${name} does not publish the ${name} binary`, {
+			code: 'workspace',
+			context: { name },
+		})
 	}
 	const entry = bin[name]
 	if (typeof entry !== 'string') {
-		throw new Error(`${name} publishes an invalid ${name} binary`)
+		throw new ProbeError(`${name} publishes an invalid ${name} binary`, {
+			code: 'workspace',
+			context: { name, value: entry },
+		})
 	}
 	return resolve(manifest.path, '..', entry)
 }
@@ -188,7 +204,10 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 export function inferTypeProject(path: string): string {
 	const [axis, environment] = normalizePath(path).split('/')
 	if ((axis !== 'src' && axis !== 'app') || environment === undefined || environment === '') {
-		throw new Error(`Cannot infer a scoped TypeScript project for ${path}`)
+		throw new ProbeError(`Cannot infer a scoped TypeScript project for ${path}`, {
+			code: 'invalid',
+			context: { path },
+		})
 	}
 	return `configs/${axis}/tsconfig.${environment}.json`
 }

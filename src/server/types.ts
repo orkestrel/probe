@@ -32,9 +32,17 @@ export interface Inspection {
  * resident tool that caches by version reads fresh text for a path this overlay holds and reads
  * disk again after `clear`.
  *
- * `Overlay` implements this contract and stays out of the server barrel, because no published
- * signature accepts an overlay and each inspection mints its own. There is no example here for the
- * same reason: a consumer cannot construct one and has nothing to hand it to.
+ * Mint one overlay per inspection and release it when that inspection ends. An instance shared
+ * across inspections keeps the identity a resident tool caches against, so the second inspection
+ * reads the first one's answer as a fresh one. `Overlay` implements this contract.
+ *
+ * @example
+ * ```ts
+ * const overlay: OverlayInterface = new Overlay()
+ * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+ * overlay.covers('/srv/checkout/src/core') // true
+ * overlay.clear()
+ * ```
  */
 export interface OverlayInterface {
 	/** Identity of the candidate set this overlay holds. */
