@@ -84,9 +84,13 @@ describe('core guards', () => {
 		expect(isVerdict({ ...verdict, receipt: 1 })).toBe(false)
 	})
 
-	it('admits a contained relative source path and refuses workspace escape', () => {
+	it('admits a contained relative source path and refuses an absolute or escaping one', () => {
 		expect(isSource({ path: 'src/../tests/greeting.test.ts', text: '' })).toBe(true)
 		expect(isSource({ path: '../../etc/hosts', text: '' })).toBe(false)
+		// Both absolute forms, on every host. The rule reads the string rather than the filesystem,
+		// so a Windows drive letter is refused on Linux and a POSIX root is refused on Windows.
+		expect(isSource({ path: '/etc/hosts', text: '' })).toBe(false)
+		expect(isSource({ path: 'C:\\Windows\\System32\\drivers\\etc\\hosts', text: '' })).toBe(false)
 	})
 
 	it('admits a finding that names its origin and refuses one that does not', () => {
@@ -181,6 +185,34 @@ describe('core guards', () => {
 		expect(isClaim(nullPrototype), 'null-prototype object').toBe(compiled(nullPrototype))
 		for (const [index, value] of hostileValues.entries()) {
 			expect(isClaim(value), `hostile value ${index}`).toBe(compiled(value))
+		}
+	})
+
+	it('refuses a source path the published claim schema admits', () => {
+		const source: Source = { path: 'src/core/greeting.ts', text: '' }
+		const control: Control = {
+			files: [],
+			test: source,
+			stage: 'type',
+			reason: 'must not compile',
+		}
+		const escaping: Claim = {
+			project: 'configs/src/tsconfig.core.json',
+			case: { files: [{ path: '../../etc/hosts', text: '' }], test: source },
+			control,
+		}
+		const absolute: Claim = {
+			project: 'configs/src/tsconfig.core.json',
+			case: { files: [{ path: '/etc/hosts', text: '' }], test: source },
+			control,
+		}
+		const compiled = compileGuard(CLAIM_SHAPE)
+
+		// The one place the guard is narrower than the advertised schema. Every other member the
+		// preceding population covers, and the two agree on all of it.
+		for (const claim of [escaping, absolute]) {
+			expect(compiled(claim), `schema admits ${claim.case.files[0]?.path ?? ''}`).toBe(true)
+			expect(isClaim(claim), `guard refuses ${claim.case.files[0]?.path ?? ''}`).toBe(false)
 		}
 	})
 

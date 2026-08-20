@@ -115,8 +115,14 @@ export const isControl: Guard<Control> = recordOf({
  * @remarks
  * Exact rather than open: a claim is this package's own record, so an unknown member is a caller
  * sending a contract this service does not implement rather than a wider caller it must tolerate.
- * Admits and refuses exactly what `compileGuard(CLAIM_SHAPE)` does, so the in-process guard and
- * the guard the tool applies at the wire cannot disagree about one claim.
+ *
+ * `CLAIM_SHAPE` is the wire contract's shape and this is the admission rule the tool enforces, and
+ * the rule is strictly narrower than the shape. They agree on every member but one: the shape
+ * constrains `Source.path` to a non-empty string, while `isSource` also refuses an absolute path
+ * and one that traverses out of the workspace, so `../../etc/hosts` satisfies
+ * `compileGuard(CLAIM_SHAPE)` and is refused here. `ProbeServer` advertises the shape and enforces
+ * this rule, so it names the refused member with `findRefusedPaths` rather than reporting only that
+ * the claim was invalid.
  *
  * @param value - The value to check
  * @returns True if the value is a claim; false otherwise

@@ -1,5 +1,7 @@
 import type { Check, Finding, Stage, Verdict } from './types.js'
+import { isRecord } from '@orkestrel/contract'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
+import { isSource } from './validators.js'
 
 /**
  * Renders one tool message as a single line an agent can classify and locate.
@@ -98,10 +100,15 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is issued on three conditions together: every stage ran clean on the case, the control
- * produced at least one `origin: 'code'` finding at the stage it declared, and every other control
- * stage stayed clean. A control that fails somewhere else has falsified the instrument rather than
- * the claim, so no receipt is issued for it.
+ * A receipt is issued on four conditions together: both phases report one check per stage, every
+ * stage ran clean on the case, the control produced at least one `origin: 'code'` finding at the
+ * stage it declared, and every other control stage stayed clean. A control that fails somewhere
+ * else has falsified the instrument rather than the claim, so no receipt is issued for it.
+ *
+ * Both phases owe every stage, not the case alone. `strayed` reads the control entries a verdict
+ * carries, so a control that omits a stage entirely would otherwise read as a stage that stayed
+ * clean, and the receipt would certify an inspection that never ran. `prove` records every stage
+ * for both phases, so this condition refuses only a verdict a caller assembled by hand.
  *
  * The token names every condition the verdict was reached under, so a receipt read away from its
  * verdict still says what was judged and what judged it: the claim's digest, the stage the control
@@ -135,7 +142,11 @@ export function formatVerdict(verdict: Verdict): string {
  * ```
  */
 export function computeReceipt(verdict: Verdict, stage: Stage): string | undefined {
-	const ran = PROBE_STAGES.every((name) => verdict.checks.some((check) => check.stage === name))
+	const ran = PROBE_STAGES.every(
+		(name) =>
+			verdict.checks.some((check) => check.stage === name) &&
+			verdict.control.some((check) => check.stage === name),
+	)
 	const clean = verdict.checks.every((check) => check.findings.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
 	const broke = declared?.findings.some((finding) => finding.origin === 'code') ?? false
@@ -153,4 +164,96 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 		`vitest@${vitest}`,
 		`${verdict.project.path}@${verdict.project.digest}`,
 	].join(RECEIPT_SEPARATOR)
+}
+
+/**
+ * Renders one generated specification: the caller's own test text, then the marker naming the
+ * revision that wrote it.
+ *
+ * @remarks
+ * The marker is what makes a file in a target workspace attributable to this package. A generated
+ * specification carries text the caller supplied, so its name alone cannot separate it from a
+ * developer's own file, and a sweep reading the name alone deletes that file. The marker goes last
+ * so every line of the caller's text keeps the number a reported stack frame gives it, and the text
+ * gains a terminating newline first so the marker is never appended to a line of the test.
+ *
+ * @param text - The caller's own test text
+ * @param revision - The writing host's process id and a fresh UUID, joined by `-`
+ * @returns The bytes the runtime stage writes for that revision
+ *
+ * @example
+ * ```ts
+ * formatSpecification("test('greets', () => {})\n", '4821-9f0c')
+ * // "test('greets', () => {})\n// @orkestrel/probe generated specification 4821-9f0c\n"
+ * ```
+ */
+export function formatSpecification(text: string, revision: string): string {
+	const body = text === '' || text.endsWith('\n') ? text : `${text}\n`
+	return `${body}// @orkestrel/probe generated specification ${revision}\n`
+}
+
+/**
+ * Checks whether one file's text is the generated specification written for one revision.
+ *
+ * @remarks
+ * Reads the marker `formatSpecification` writes, taken from that function rather than restated, so
+ * the writer and the reader cannot drift apart. An empty body renders the marker alone, which is
+ * why the comparison is built from a call rather than from a second copy of the text.
+ *
+ * @param text - The file's full contents
+ * @param revision - The revision the file's name declares
+ * @returns True if the text ends with this package's marker for that revision; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesSpecification(formatSpecification('', '4821-9f0c'), '4821-9f0c') // true
+ * matchesSpecification('export const NOTE = 1\n', '4821-9f0c') // false
+ * ```
+ */
+export function matchesSpecification(text: string, revision: string): boolean {
+	return text.endsWith(formatSpecification('', revision))
+}
+
+/**
+ * Names every source member of a claim-shaped value whose `path` this package's guard refuses.
+ *
+ * @remarks
+ * The published claim schema constrains `Source.path` to a non-empty string and nothing else, while
+ * `isSource` also refuses an absolute path and one that escapes the workspace. That one member is
+ * the whole of the difference between the advertised contract and the enforced one, so a caller
+ * refused after satisfying the schema is refused here and nowhere else. Each member is tested with
+ * `isSource` itself rather than with a second copy of its rule, and each is tested against a
+ * placeholder text so a missing or non-string `text` is reported by the schema instead of blamed on
+ * the path. Reports nothing for a value carrying no source member, including one refused for a
+ * member this contract does not declare.
+ *
+ * @param value - The rejected tool input
+ * @returns The dotted member names, in `case` then `control` order, or an empty list
+ *
+ * @example
+ * ```ts
+ * const test = { path: 'tmp/probe/greeting.test.ts', text: '' }
+ * findRefusedPaths({
+ * 	project: 'tsconfig.json',
+ * 	case: { files: [{ path: '../../etc/hosts', text: '' }], test },
+ * 	control: { files: [], test, stage: 'type', reason: 'must not compile' },
+ * })
+ * // ['case.files.0.path']
+ * ```
+ */
+export function findRefusedPaths(value: unknown): readonly string[] {
+	if (!isRecord(value)) return []
+	const members: string[] = []
+	for (const phase of ['case', 'control']) {
+		const subject = value[phase]
+		if (!isRecord(subject)) continue
+		const sources = new Map<string, unknown>([[`${phase}.test`, subject.test]])
+		const files: readonly unknown[] = Array.isArray(subject.files) ? subject.files : []
+		for (const [index, file] of files.entries()) sources.set(`${phase}.files.${index}`, file)
+		for (const [member, source] of sources) {
+			if (!isRecord(source) || isSource({ path: source.path, text: '' })) continue
+			members.push(`${member}.path`)
+		}
+	}
+	return members
 }

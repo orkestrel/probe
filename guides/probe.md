@@ -74,7 +74,9 @@ Every failure this package raises, from [`errors.ts`](../src/core/errors.ts).
 ### Shapes
 
 The blueprints behind both the published tool schema and the guard applied to an arriving call, from
-[`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON Schema.
+[`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON Schema. The
+schema is the wire contract's shape and `isClaim` is the admission rule, and the rule is narrower on
+one member: see [The advertised schema is wider than the admission rule](#registering-the-server).
 
 | Name            | Kind  | Describes                                                                      |
 | --------------- | ----- | ------------------------------------------------------------------------------ |
@@ -88,30 +90,33 @@ The blueprints behind both the published tool schema and the guard applied to an
 Total guards, from [`validators.ts`](../src/core/validators.ts). Each returns a boolean for any input
 and never throws.
 
-| Name          | Kind     | Signature                                    | Behavior                                                                                                    |
-| ------------- | -------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `isStage`     | function | `(value: unknown) => value is Stage`         | Admits one of the three stage names.                                                                        |
-| `isOrigin`    | function | `(value: unknown) => value is FindingOrigin` | Admits `'code'` or `'instrument'`.                                                                          |
-| `isSource`    | function | `(value: unknown) => value is Source`        | Admits a record with a contained relative `path` and string `text`; refuses absolute and escaping paths.    |
-| `isCase`      | function | `(value: unknown) => value is Case`          | Admits a record whose `files` are sources and whose `test` is one source.                                   |
-| `isControl`   | function | `(value: unknown) => value is Control`       | Admits a case that also carries a `stage` and a non-empty `reason`.                                         |
-| `isClaim`     | function | `(value: unknown) => value is Claim`         | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. |
-| `isFinding`   | function | `(value: unknown) => value is Finding`       | Admits a record carrying an origin, a path, a message, and an optional line.                                |
-| `isCheck`     | function | `(value: unknown) => value is Check`         | Admits a record carrying a stage, an elapsed number, and findings.                                          |
-| `isToolchain` | function | `(value: unknown) => value is Toolchain`     | Admits a record carrying the three tool versions.                                                           |
-| `isProject`   | function | `(value: unknown) => value is Project`       | Admits a record carrying a non-empty path and a non-empty digest.                                           |
-| `isVerdict`   | function | `(value: unknown) => value is Verdict`       | Admits a whole verdict, including the required `digest` and `project` members.                              |
+| Name          | Kind     | Signature                                    | Behavior                                                                                                                                                        |
+| ------------- | -------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isStage`     | function | `(value: unknown) => value is Stage`         | Admits one of the three stage names.                                                                                                                            |
+| `isOrigin`    | function | `(value: unknown) => value is FindingOrigin` | Admits `'code'` or `'instrument'`.                                                                                                                              |
+| `isSource`    | function | `(value: unknown) => value is Source`        | Admits a record with a contained relative `path` and string `text`; refuses absolute and escaping paths.                                                        |
+| `isCase`      | function | `(value: unknown) => value is Case`          | Admits a record whose `files` are sources and whose `test` is one source.                                                                                       |
+| `isControl`   | function | `(value: unknown) => value is Control`       | Admits a case that also carries a `stage` and a non-empty `reason`.                                                                                             |
+| `isClaim`     | function | `(value: unknown) => value is Claim`         | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. Narrower than `CLAIM_SHAPE` on `Source.path` alone. |
+| `isFinding`   | function | `(value: unknown) => value is Finding`       | Admits a record carrying an origin, a path, a message, and an optional line.                                                                                    |
+| `isCheck`     | function | `(value: unknown) => value is Check`         | Admits a record carrying a stage, an elapsed number, and findings.                                                                                              |
+| `isToolchain` | function | `(value: unknown) => value is Toolchain`     | Admits a record carrying the three tool versions.                                                                                                               |
+| `isProject`   | function | `(value: unknown) => value is Project`       | Admits a record carrying a non-empty path and a non-empty digest.                                                                                               |
+| `isVerdict`   | function | `(value: unknown) => value is Verdict`       | Admits a whole verdict, including the required `digest` and `project` members.                                                                                  |
 
 ### Formatters and the token
 
 Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
-| Name             | Kind     | Signature                                                 | Behavior                                                                                                                   |
-| ---------------- | -------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `formatFinding`  | function | `(finding: Finding) => string`                            | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                         |
-| `formatCheck`    | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per finding.                                                      |
-| `formatVerdict`  | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each finding's origin and the receipt line. |
-| `computeReceipt` | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when the case ran clean and the control broke only at `stage`; returns `undefined` otherwise.            |
+| Name                   | Kind     | Signature                                                 | Behavior                                                                                                                                       |
+| ---------------------- | -------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `formatFinding`        | function | `(finding: Finding) => string`                            | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                                             |
+| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per finding.                                                                          |
+| `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each finding's origin and the receipt line.                     |
+| `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise. |
+| `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                         |
+| `matchesSpecification` | function | `(text: string, revision: string) => boolean`             | Reports whether one file's text is the generated specification written for that revision.                                                      |
+| `findRefusedPaths`     | function | `(value: unknown) => readonly string[]`                   | Names every source member of a rejected claim whose `path` the guard refuses and the advertised schema admits.                                 |
 
 ### Server contracts
 
@@ -196,10 +201,10 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `StageInterface`
 
-| Method    | Returns          | Behavior                                                                                           |
-| --------- | ---------------- | -------------------------------------------------------------------------------------------------- |
-| `inspect` | `Promise<Check>` | Inspects one case and returns this stage's outcome. Throws when the resident tool cannot start.    |
-| `destroy` | `Promise<void>`  | Tears down the resident tool, abandoning every inspection it holds rather than waiting behind one. |
+| Method    | Returns          | Behavior                                                                                                                       |
+| --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `inspect` | `Promise<Check>` | Inspects one case and returns this stage's outcome. Throws when the resident tool cannot start.                                |
+| `destroy` | `Promise<void>`  | Tears down the resident tool under the stage's own bound, abandoning every inspection it holds rather than waiting behind one. |
 
 #### `TypeStageInterface`
 
@@ -232,22 +237,36 @@ and the `reason` in your own words. Both are judged under the TypeScript project
 `project` member names.
 
 Every verdict returned by `prove` carries that explanation unchanged as `Verdict.reason`. The
-member reports why the claimant chose the control. It does not change receipt eligibility or enter
-the token.
+member reports why the claimant chose the control. No receipt condition reads it, and it still
+reaches the token: the reason is part of the control, so it enters `verdict.digest`, and the digest
+is the token's second field. Two claims that differ only in the reason's prose are two
+claims, and they digest differently.
+
+`verdict.digest` covers three things and nothing else: the case bytes, the control bytes including
+the reason, and the workspace those bytes were read against. The workspace enters because probe
+rewrites every absolute string in a claim relative to the workspace before hashing, which is what
+keeps one commit checked out at two paths reading as one claim. A claim carrying no absolute string
+therefore digests the same in every workspace; a claim that carries one digests per workspace, so
+compare two such tokens only when both were minted against the same tree.
 
 `prove` runs all three stages over the case, then all three over the control, and returns one
 `Check` per stage for each. A stage that cannot start throws rather than returning an empty check,
 so no verdict ever reports a stage that did not run.
 
-The receipt is issued on three conditions together:
+The receipt is issued on four conditions together:
 
+- both phases report one check per stage; and
 - every stage ran clean on the case — no findings of either origin; and
 - the control produced at least one `origin: 'code'` finding at the stage it declared; and
 - every other control stage stayed clean.
 
 A control that also breaks somewhere else has falsified the instrument rather than the claim, so no
 receipt is issued for it. A case the stage could not inspect end to end is not a clean case, which
-is why the case's condition counts `origin: 'instrument'` findings too.
+is why the case's condition counts `origin: 'instrument'` findings too. The first condition binds
+both phases, because the last one reads the control entries a verdict carries: a control that omits
+a stage would otherwise read as a stage that stayed clean. `prove` records every stage for both
+phases, so that condition refuses only a verdict you assembled by hand and passed to
+`computeReceipt` yourself.
 
 `Finding.origin` is the member that separates the two. A `code` finding carries the tool's own
 message about the candidate's source. An `instrument` finding carries the stage's own message about
@@ -367,6 +386,15 @@ takes every `ProbeOptions` member for it, because `start()` seizes this process'
 output: a host that starts one has given the process to it. `destroy()` gives the process back and
 tears the probe down with it.
 
+**The advertised schema is wider than the admission rule, in one place.** The `prove` tool publishes
+`compileSchema(CLAIM_SHAPE)` and admits a call with `isClaim`, and the two agree on every member but
+`Source.path`: the schema constrains it to a non-empty string, while the guard also refuses an
+absolute path and one that traverses out of the workspace. No JSON Schema keyword expresses that
+rule, so a claim naming `../../etc/hosts` satisfies the advertised parameters and is refused. The
+refusal names the members it read — `The prove tool refuses case.files.0.path: a source path must
+stay inside the workspace, which the advertised schema does not constrain` — so a client that
+satisfied the schema is told which path to change rather than that its claim was invalid.
+
 ## The claim that earns a receipt
 
 This claim earns a receipt in this workspace. Run it verbatim.
@@ -415,8 +443,9 @@ Four things in it are load-bearing:
   runtime with `test is not defined`, and at a version-controlled path a body that asserts nothing
   adds the lint finding `Test has no assertions`. Both are charged to the claim.
 
-`verdict.digest` is a function of the case and control bytes alone, so it is the same in any
-workspace that runs this claim. The tool versions and the project digest in the receipt are this
+This claim carries no absolute string, so `verdict.digest` is the same in any workspace that runs
+it. Change the control's `reason` and the digest changes with it, because the reason is part of the
+control the digest covers. The tool versions and the project digest in the receipt are this
 workspace's, taken on 2026-08-20.
 
 ## Reading a receipt
@@ -424,7 +453,7 @@ workspace's, taken on 2026-08-20.
 A receipt is a `:`-separated token whose fields are, in order:
 
 1. `probe`, the value of `RECEIPT_PREFIX`;
-2. the claim digest — the case and control the verdict answered;
+2. the claim digest — the case and control the verdict answered, read against this workspace;
 3. the stage the control declared and broke at;
 4. `typescript@<version>`;
 5. `oxlint@<version>`;
@@ -525,9 +554,18 @@ than the probe's — it decides which process reads the stdio, not when the engi
   One inspection in every 64 also replaces the resident runner, and that inspection costs more than
   the other 63 — budget `deadline` against that one rather than the common one.
 - **Teardown.** `destroy()` releases every resident process and is idempotent. `ProbeServer.destroy`
-  adds the process itself: it detaches the transport's standard-input listeners, pauses the stream,
-  and hands back the signal handlers `start` registered, so the event loop drains and the process
-  exits 0 with no explicit exit call.
+  adds the process itself: it detaches the transport's standard-input listeners, hands back the
+  signal handlers `start` registered, and pauses the stream unless `start` found it already
+  flowing, so the event loop drains and the process exits 0 with no explicit exit call. A stream
+  nobody has read yet is neither flowing nor paused, and this server is what sets it flowing, so it
+  is paused. A host already reading its own standard input keeps reading it after the server it
+  embedded is destroyed.
+- **Stage teardown is bounded.** A resident stage abandons every inspection it holds rather than
+  waiting behind one, and it waits no longer for the tool's own answers. The lint stage bounds both
+  exchanges the Language Server Protocol leaves to the server — the `initialize` reply that warming
+  waits for and the `shutdown` reply that ending waits for — at 2 s each, then signals the child.
+  A server that accepts the connection and answers nothing is therefore released rather than
+  deadlocking `destroy()`.
 - **Termination.** `ProbeServer.start` answers `SIGINT` and `SIGTERM` by destroying the server, and
   the two are the whole set: no evidence names a harness that ends a stdio child any other way, and
   a configurable set would be a supported way to spell the leak this closes. A second signal during
@@ -543,11 +581,17 @@ than the probe's — it decides which process reads the stdio, not when the engi
   returns and before anything is awaited, so no window exists for a signal to arrive in. Without
   that, a graceful teardown reads as fixed, passes a manual test, and still leaves its files in the
   consumer's tree.
-- **What a killed host leaves.** Nothing this package can sweep is left where a sweep can miss it. A
-  host killed without `destroy` — `SIGKILL`, a power loss, a harness that never signals — can leave
-  a generated specification or a boot dependency behind. Every file this package writes into a
-  target carries `probe-<pid>-<uuid>` between its stem and its extension, and the runtime stage
-  deletes the ones whose writing process is gone at its next warm, leaving a live neighbour's alone.
+- **What a killed host leaves.** A host killed without `destroy` — `SIGKILL`, a power loss, a
+  harness that never signals — can leave a generated specification or a boot dependency behind.
+  Every file this package writes into a target carries `probe-<pid>-<uuid>` between its stem and its
+  extension, and the runtime stage deletes such a file at its next warm when the process id leads a
+  process that is gone **and** the file is one this package can attribute. Attribution is what stops
+  the sweep reaching your tree: a generated specification carries your own test text, so probe
+  appends `// @orkestrel/probe generated specification <pid>-<uuid>` as its last line and the sweep
+  requires that marker to name the same revision the file name does; the two boot dependencies carry
+  text probe authored, at the fixed paths `tmp/probe/arm-type.ts` and `tmp/probe/arm-runtime.ts`, so
+  their own path attributes them. A file of yours that happens to carry the same name shape is left
+  where it is, wherever it sits, and so is a live neighbour's specification.
 
 ## Cost
 
@@ -573,10 +617,12 @@ inspection rather than the common one.
 ## Tests
 
 - [`guides.test.ts`](../tests/guides.test.ts) — this guide's two parity directions, the claim
-  literal shared with the `Claim` contract, and the flagship claim run for its receipt.
-- [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — the formatters and the receipt token's
-  two conditions.
-- [`validators.test.ts`](../tests/src/core/validators.test.ts) — every guard against hostile shapes.
+  literal shared with the `Claim` contract, what `verdict.digest` covers, and the flagship claim run
+  for its receipt.
+- [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — the formatters, the receipt token's
+  conditions, the generated specification's marker, and the members a refused claim names.
+- [`validators.test.ts`](../tests/src/core/validators.test.ts) — every guard against hostile shapes,
+  including the source path the advertised schema admits and the guard refuses.
 - [`errors.test.ts`](../tests/src/core/errors.test.ts) — the failure guard against lookalikes and a
   second copy of the package, and the sweep that keeps every failure path categorized.
 - [`Probe.test.ts`](../tests/src/server/Probe.test.ts) — arming, admission, deadline expiry and
@@ -588,7 +634,7 @@ inspection rather than the common one.
   [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the three resident
   stages against their real tools.
 - [`ProbeServer.test.ts`](../tests/src/server/ProbeServer.test.ts) — what `start` seizes and what
-  `destroy` gives back.
+  `destroy` gives back, standard input's flow included.
 - [`Overlay.test.ts`](../tests/src/server/Overlay.test.ts) — the candidate set's identity,
   containment, and release.
 - [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by a foreign client,

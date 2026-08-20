@@ -23,6 +23,10 @@ import {
  * mode. Each inspection opens the supplied text by URI, waits for published diagnostics, and
  * closes the document without writing it to disk.
  *
+ * Teardown is bounded at both ends. Warming waits for the server's `initialize` response and the
+ * ending waits for its `shutdown` reply, and the protocol leaves both answers to the server, so
+ * `destroy` bounds each exchange and takes the ending back with a signal when the bound passes.
+ *
  * The URI is the path the candidate declared, so the candidate receives exactly the rule set the
  * workspace's own lint gate applies to that path, including an override anchored to one directory,
  * one file name, or one exact file. A path the workspace's version-control ignore files exclude is
@@ -40,6 +44,10 @@ import {
  */
 export class LintStage implements StageInterface {
 	readonly #workspace: string
+	// The bound on every exchange teardown has with the language server, warming included. The
+	// protocol leaves both the warming answer and the ending to the server, so each one is a wait
+	// this stage takes back rather than a wait it can rely on.
+	readonly #deadline = 2_000
 	readonly #warmth: Promise<ChildProcessWithoutNullStreams>
 	readonly #responses = new Map<number, (value: unknown) => void>()
 	readonly #failures = new Map<number, (error: Error) => void>()
@@ -96,7 +104,7 @@ export class LintStage implements StageInterface {
 	async #destroy(): Promise<void> {
 		// A server that failed to warm still leaves a child to release, so read the spawned child
 		// rather than the warming result.
-		const child = await this.#warmth.catch(() => this.#child)
+		const child = await this.#warmed()
 		// Abandon every document in flight rather than waiting for it: a server that never publishes
 		// its diagnostics would otherwise hold teardown open for the life of the process.
 		this.#fail(createDestroyedError('lint stage'))
@@ -108,6 +116,25 @@ export class LintStage implements StageInterface {
 		await this.#release(child, released)
 	}
 
+	// Reads the warmed language server, or the spawned child when warming failed or outran the
+	// deadline. Warming waits for the `initialize` response, and the protocol leaves that answer to
+	// the server: one that accepts the connection and answers nothing has broken no rule, and
+	// waiting on it holds teardown open for the life of the host. Teardown needs the child rather
+	// than the warming result, and `#warm` has the child before it sends anything, so the bound
+	// costs the answer and nothing else. The abandoned warming promise keeps its constructor's
+	// observer, so nothing rejects into the host.
+	async #warmed(): Promise<ChildProcessWithoutNullStreams | undefined> {
+		const timeout = createTimeout({ ms: this.#deadline })
+		timeout.start()
+		try {
+			return await Promise.race([this.#warmth, this.#expiry(timeout)])
+		} catch {
+			return this.#child
+		} finally {
+			timeout.clear()
+		}
+	}
+
 	// Ends the conversation under a deadline and signals the child when that deadline passes. The
 	// protocol leaves the ending to the server: a server that answers `shutdown` and then ignores
 	// `exit` has broken no rule, and one that answers neither is unreachable rather than dead. Both
@@ -115,7 +142,7 @@ export class LintStage implements StageInterface {
 	// the whole exchange at two seconds and then takes the ending back. `SIGKILL` cannot be
 	// handled, so the child ends and its own `exit` event settles the wait.
 	async #release(child: ChildProcessWithoutNullStreams, released: Promise<void>): Promise<void> {
-		const timeout = createTimeout({ ms: 2_000 })
+		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
 			await Promise.race([this.#retire(child).then(() => released), this.#expiry(timeout)])

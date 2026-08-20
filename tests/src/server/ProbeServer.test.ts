@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
@@ -22,6 +23,50 @@ function readSignals() {
 }
 
 describe('probe server', () => {
+	// A stream nobody has read reports `readableFlowing` as `null` and `isPaused()` as false, so a
+	// teardown rule that reads `isPaused()` alone cannot tell it from a stream the host is already
+	// reading, and leaves a fresh one flowing on a handle that keeps the process alive. This worker
+	// begins with exactly that stream, and the state is unrecoverable once anything reads it, which
+	// is why this case runs first in the file and asserts the premise it needs.
+	it('pauses a standard input stream nobody had read', { timeout: 180_000 }, async () => {
+		expect(
+			process.stdin.readableFlowing,
+			'a case before this one already read the standard input of this worker',
+		).toBeNull()
+		const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+		server.start()
+		await server.destroy()
+		expect(process.stdin.isPaused()).toBe(true)
+	})
+
+	// A host reading its own standard input is the other side of the same decision, and the flow it
+	// keeps is worth more than the flag behind it: this asserts the bytes, not the state. The
+	// delivery is real, because `push` puts bytes through the same read queue the pipe feeds and a
+	// paused stream holds them back.
+	it(
+		'keeps delivering to a reader that was reading before it started',
+		{ timeout: 180_000 },
+		async () => {
+			const initial = process.stdin.isPaused()
+			const reader = createRecorder<[Buffer]>()
+			process.stdin.resume()
+			process.stdin.on('data', reader.handler)
+			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			try {
+				server.start()
+				await server.destroy()
+				expect(process.stdin.isPaused()).toBe(false)
+				process.stdin.push('probe')
+				await waitForDelay(20)
+				expect(reader.calls.map((call) => String(call[0]))).toStrictEqual(['probe'])
+			} finally {
+				process.stdin.removeListener('data', reader.handler)
+				if (initial) process.stdin.pause()
+				else process.stdin.resume()
+			}
+		},
+	)
+
 	it('returns the process it seized, and settles once', { timeout: 180_000 }, async () => {
 		const input = readInput()
 		const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
@@ -60,6 +105,28 @@ describe('probe server', () => {
 		await expect(server.destroy()).resolves.toBeUndefined()
 		expect(readInput()).toStrictEqual(input)
 		expect(readSignals()).toStrictEqual(signals)
+	})
+
+	// Standard input's flow is process-wide state this server borrows rather than owns. Both
+	// directions run against a real server, because what teardown must restore is what `start`
+	// found: a host already reading its own input keeps reading it, and a host that was not gets
+	// its paused stream back.
+	it('restores the standard input flow it found', { timeout: 180_000 }, async () => {
+		const initial = process.stdin.isPaused()
+		try {
+			for (const flowing of [true, false]) {
+				if (flowing) process.stdin.resume()
+				else process.stdin.pause()
+				expect(process.stdin.isPaused(), 'the test could not set the flow it needs').toBe(!flowing)
+				const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+				server.start()
+				await server.destroy()
+				expect(process.stdin.isPaused(), `flowing before start: ${String(flowing)}`).toBe(!flowing)
+			}
+		} finally {
+			if (initial) process.stdin.pause()
+			else process.stdin.resume()
+		}
 	})
 
 	it('destroys a server that never started', { timeout: 180_000 }, async () => {

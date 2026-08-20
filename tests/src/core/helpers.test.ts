@@ -1,12 +1,15 @@
-import type { Check, Finding, Project, Toolchain, Verdict } from '@src/core'
+import type { Check, Finding, Project, Source, Stage, Toolchain, Verdict } from '@src/core'
 import {
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
 	RECEIPT_SEPARATOR,
 	computeReceipt,
+	findRefusedPaths,
 	formatCheck,
 	formatFinding,
+	formatSpecification,
 	formatVerdict,
+	matchesSpecification,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
@@ -20,6 +23,18 @@ const PROJECT: Project = {
 // whatever `computeReceipt` returned.
 const TOKEN =
 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+
+// The control shape `prove` really produces: one check per stage, in the order a verdict reports
+// them, with the findings under test at the one stage that carries them. A shorter array is a
+// verdict this package never returns, and a receipt decided from one certifies a stage that never
+// reported.
+function buildControl(stage: Stage, findings: readonly Finding[]): readonly Check[] {
+	return PROBE_STAGES.map((name) => ({
+		stage: name,
+		elapsed: 1,
+		findings: name === stage ? findings : [],
+	}))
+}
 
 describe('core formatting helpers', () => {
 	// The two findings `formatFinding` documents, transcribed as the typed literals the contract
@@ -154,13 +169,9 @@ describe('core receipt helper', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
-			control: [
-				{
-					stage: 'type',
-					elapsed: 1,
-					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' }],
-				},
-			],
+			control: buildControl('type', [
+				{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' },
+			]),
 			elapsed: 7,
 		}
 
@@ -182,13 +193,9 @@ describe('core receipt helper', () => {
 			toolchain: TOOLCHAIN,
 			project,
 			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
-			control: [
-				{
-					stage: 'type',
-					elapsed: 1,
-					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' }],
-				},
-			],
+			control: buildControl('type', [
+				{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' },
+			]),
 			elapsed: 7,
 		}
 		const receipt = computeReceipt(verdict, 'type')
@@ -228,7 +235,7 @@ describe('core receipt helper', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			checks,
-			control: [{ stage: 'type', elapsed: 1, findings: [finding] }],
+			control: buildControl('type', [finding]),
 			elapsed: 7,
 		}
 
@@ -245,14 +252,9 @@ describe('core receipt helper', () => {
 			),
 		).toBeUndefined()
 		expect(
-			computeReceipt(
-				{ ...base, control: [{ stage: 'lint', elapsed: 1, findings: [finding] }] },
-				'type',
-			),
+			computeReceipt({ ...base, control: buildControl('lint', [finding]) }, 'type'),
 		).toBeUndefined()
-		expect(
-			computeReceipt({ ...base, control: [{ stage: 'type', elapsed: 1, findings: [] }] }, 'type'),
-		).toBeUndefined()
+		expect(computeReceipt({ ...base, control: buildControl('type', []) }, 'type')).toBeUndefined()
 	})
 
 	it('decides a receipt on the control code findings and ignores its instrument ones', () => {
@@ -272,7 +274,7 @@ describe('core receipt helper', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
-			control: [{ stage: 'runtime', elapsed: 1, findings: [broke] }],
+			control: buildControl('runtime', [broke]),
 			elapsed: 7,
 		}
 		const token =
@@ -282,24 +284,47 @@ describe('core receipt helper', () => {
 		// the origin is the only thing deciding the outcome.
 		expect(computeReceipt(base, 'runtime')).toBe(token)
 		expect(
-			computeReceipt(
-				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [unrun] }] },
-				'runtime',
-			),
+			computeReceipt({ ...base, control: buildControl('runtime', [unrun]) }, 'runtime'),
 		).toBeUndefined()
 		expect(
-			computeReceipt(
-				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [] }] },
-				'runtime',
-			),
+			computeReceipt({ ...base, control: buildControl('runtime', []) }, 'runtime'),
 		).toBeUndefined()
 		// A control that broke and whose stage also faulted still broke where it said it would.
 		expect(
-			computeReceipt(
-				{ ...base, control: [{ stage: 'runtime', elapsed: 1, findings: [unrun, broke] }] },
-				'runtime',
-			),
+			computeReceipt({ ...base, control: buildControl('runtime', [unrun, broke]) }, 'runtime'),
 		).toBe(token)
+	})
+
+	it('refuses a receipt when the control does not name every stage', () => {
+		// `prove` runs the control through every stage, so a verdict whose control omits one was
+		// assembled by hand. The omitted stage never reported, and reading its absence as clean
+		// certifies an inspection that did not happen.
+		const broke: Finding = {
+			origin: 'code',
+			path: 'src/core/control.ts',
+			message: 'not assignable',
+		}
+		const control = buildControl('type', [broke])
+		const base: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
+			control,
+			elapsed: 7,
+		}
+
+		expect(computeReceipt(base, 'type')).toBe(TOKEN)
+		for (const missing of PROBE_STAGES) {
+			expect(
+				computeReceipt(
+					{ ...base, control: control.filter((check) => check.stage !== missing) },
+					'type',
+				),
+				`a control missing ${missing} earned a receipt`,
+			).toBeUndefined()
+		}
 	})
 
 	it('refuses a receipt when the control also breaks at an undeclared stage', () => {
@@ -351,19 +376,9 @@ describe('core receipt helper', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			checks: faulted,
-			control: [
-				{
-					stage: 'runtime',
-					elapsed: 1,
-					findings: [
-						{
-							origin: 'code',
-							path: 'tests/src/core/greeting.test.ts',
-							message: 'expected 4 to be 5',
-						},
-					],
-				},
-			],
+			control: buildControl('runtime', [
+				{ origin: 'code', path: 'tests/src/core/greeting.test.ts', message: 'expected 4 to be 5' },
+			]),
 			elapsed: 7,
 		}
 
@@ -371,5 +386,88 @@ describe('core receipt helper', () => {
 		expect(computeReceipt({ ...base, checks: clean }, 'runtime')).toBe(
 			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
 		)
+	})
+})
+
+describe('core specification marker', () => {
+	// The marker text, written here as a literal rather than rebuilt from the helper: a comparison
+	// assembled the way `formatSpecification` assembles it would match whatever it returned.
+	const MARKER = '// @orkestrel/probe generated specification 4821-9f0c\n'
+
+	it('appends the marker without moving a line of the text it follows', () => {
+		const text = "import { test } from 'vitest'\ntest('greets', () => {})\n"
+
+		expect(formatSpecification(text, '4821-9f0c')).toBe(`${text}${MARKER}`)
+		// A reported stack frame names a line of the caller's own test, so every line it can name
+		// keeps the number it had.
+		expect(formatSpecification(text, '4821-9f0c').split('\n').slice(0, 2)).toStrictEqual(
+			text.split('\n').slice(0, 2),
+		)
+		// A text with no terminating newline gains one, so the marker is never appended to a line
+		// of the test.
+		expect(formatSpecification('const value = 1', '4821-9f0c')).toBe(`const value = 1\n${MARKER}`)
+		expect(formatSpecification('', '4821-9f0c')).toBe(MARKER)
+	})
+
+	it('attributes a file only to the revision its own marker names', () => {
+		const text = "import { test } from 'vitest'\ntest('greets', () => {})\n"
+		const marked = formatSpecification(text, '4821-9f0c')
+
+		expect(matchesSpecification(marked, '4821-9f0c')).toBe(true)
+		// A different revision, an unmarked file, and a file that carries the marker somewhere other
+		// than at its end are all files this package did not write for that revision.
+		expect(matchesSpecification(marked, '4821-0000')).toBe(false)
+		expect(matchesSpecification(text, '4821-9f0c')).toBe(false)
+		expect(matchesSpecification(`${marked}export const NOTE = 1\n`, '4821-9f0c')).toBe(false)
+		expect(matchesSpecification('', '4821-9f0c')).toBe(false)
+	})
+})
+
+describe('core claim refusal', () => {
+	const source: Source = { path: 'src/core/greeting.ts', text: '' }
+	const control = { files: [], test: source, stage: 'type', reason: 'must not compile' }
+
+	it('names every source member whose path the guard refuses', () => {
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [source], test: source },
+				control,
+			}),
+		).toStrictEqual([])
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: {
+					files: [source, { path: '../../etc/hosts', text: '' }],
+					test: { path: '/etc/hosts', text: '' },
+				},
+				control: { ...control, files: [{ path: 'C:\\Windows\\hosts', text: '' }] },
+			}),
+		).toStrictEqual(['case.test.path', 'case.files.1.path', 'control.files.0.path'])
+	})
+
+	it('reports nothing for a refusal the advertised schema already explains', () => {
+		// A missing text, a member this contract does not declare, and a value that is no claim at
+		// all are all refusals the schema itself reports, so blaming a path for one would name the
+		// wrong member.
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [{ path: 'src/core/greeting.ts' }], test: source },
+				control,
+			}),
+		).toStrictEqual([])
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [], test: source },
+				control,
+				surplus: true,
+			}),
+		).toStrictEqual([])
+		expect(findRefusedPaths(undefined)).toStrictEqual([])
+		expect(findRefusedPaths([source])).toStrictEqual([])
+		expect(findRefusedPaths({ case: 17, control: 'control' })).toStrictEqual([])
 	})
 })

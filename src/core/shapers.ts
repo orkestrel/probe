@@ -6,7 +6,11 @@ import { PROBE_STAGES } from './constants.js'
  *
  * @remarks
  * `path` is constrained to a non-empty string because every stage resolves a file by it, so an
- * empty path names no file. `isSource` enforces the same minimum.
+ * empty path names no file. That minimum is the whole of the constraint here, and it is the one
+ * place the wire contract is wider than what this package admits: `isSource` enforces the same
+ * minimum and also refuses an absolute path and one that traverses out of the workspace, which no
+ * JSON Schema keyword can express. A caller that satisfies this shape can still be refused, and
+ * `ProbeServer` names the member when it is.
  *
  * @example
  * ```ts
@@ -66,10 +70,10 @@ export const CONTROL_SHAPE = objectShape(
  *
  * @remarks
  * The Model Context Protocol tool publishes `compileSchema(CLAIM_SHAPE)` and admits a call with
- * `isClaim`, which `validators.ts` holds to admitting and refusing exactly what
- * `compileGuard(CLAIM_SHAPE)` does. Deriving the advertised schema from this one value, and holding
- * the hand-written guard to it, is what stops the advertised contract and the enforced contract
- * from drifting apart across a release.
+ * `isClaim`. Deriving the advertised schema from this one value is what stops the two from drifting
+ * apart across a release on any member either can express. `isClaim` is narrower on the one member
+ * neither a schema keyword nor this shape can carry — the containment rule on `Source.path` — and
+ * `validators.ts` names where.
  *
  * @example
  * ```ts

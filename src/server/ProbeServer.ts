@@ -4,7 +4,14 @@ import { compileSchema, schemaToParameters } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { CLAIM_SHAPE, ProbeError, formatVerdict, isClaim, isVerdict } from '@src/core'
+import {
+	CLAIM_SHAPE,
+	ProbeError,
+	findRefusedPaths,
+	formatVerdict,
+	isClaim,
+	isVerdict,
+} from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
 import { captureListeners, releaseListeners } from './helpers.js'
 import { Probe } from './Probe.js'
@@ -18,10 +25,12 @@ import { Probe } from './Probe.js'
  * arming while its client is still handshaking.
  *
  * `start` seizes standard input and registers the two signals a harness ends a child with. It takes
- * a listener capture on each before it does either, and `destroy` releases exactly what appeared
- * between them, so a process that outlives this server reads its own standard input again and
- * receives its own signals. Teardown removes the signal handlers first: it takes seconds when a boot
- * is in flight, and a harness that signals twice means the second one to kill rather than to queue.
+ * a listener capture on each before it does either, and records whether standard input was already
+ * flowing. `destroy` releases exactly what appeared between them, and pauses the stream only when
+ * this server is what set it flowing, so a process that outlives this server reads its own standard
+ * input again and receives its own signals. Teardown removes the signal
+ * handlers first: it takes seconds when a boot is in flight, and a harness that signals twice means
+ * the second one to kill rather than to queue.
  *
  * @example
  * ```ts
@@ -35,6 +44,7 @@ export class ProbeServer implements ProbeServerInterface {
 	readonly #transport: ReturnType<typeof createStdioServer>
 	#signals: ListenerCapture | undefined
 	#input: ListenerCapture | undefined
+	#owns: boolean | undefined
 	#closing: Promise<void> | undefined
 
 	/**
@@ -52,6 +62,13 @@ export class ProbeServer implements ProbeServerInterface {
 		// that the server is already serving. A second call would otherwise register a second pair of
 		// signal handlers and forget the first pair's capture.
 		if (this.#signals !== undefined) return
+		// The stream's flow is the third thing this server takes from the process, beside the two
+		// listener sets. Read it here, before anything attaches, because this is the only moment the
+		// answer exists. Read `readableFlowing` rather than `isPaused()`: a stream nobody has read
+		// reports `readableFlowing` as `null`, and `isPaused()` folds that into the same `false` an
+		// already-flowing stream reports, so only the flow itself separates a flow this server is
+		// about to start from one it found running.
+		this.#owns = process.stdin.readableFlowing !== true
 		this.#input = captureListeners(process.stdin, ['data', 'close', 'error'])
 		this.#signals = captureListeners(process, ['SIGINT', 'SIGTERM'])
 		this.#transport.start()
@@ -78,12 +95,17 @@ export class ProbeServer implements ProbeServerInterface {
 		this.#transport.stop()
 		// `@orkestrel/mcp` 0.0.19 closes its transport without detaching the stdin listeners its
 		// `start` attached, so the pipe keeps reading and this process's event loop stays alive on a
-		// handle nothing is serving. Release what the transport gained and pause the stream, which is
-		// the state standard input begins a process in. A later transport that detaches its own
-		// listeners leaves this release with nothing to do rather than making it wrong.
+		// handle nothing is serving. Release what the transport gained, then pause the stream only
+		// when this server both started the flow and is the last thing reading it. The reader half is
+		// answerable only here, after this server's own listeners come off, and it refuses to starve
+		// a reader the release left in place. A host that was already reading its own standard input
+		// keeps reading it, and a host that was not gets its paused stream back, so the flow this
+		// server never owned survives its teardown. A later transport that detaches its own listeners
+		// leaves this release with nothing to do rather than making it wrong.
 		if (this.#input !== undefined) releaseListeners(process.stdin, this.#input)
 		this.#input = undefined
-		process.stdin.pause()
+		if (this.#owns === true && process.stdin.listenerCount('data') === 0) process.stdin.pause()
+		this.#owns = undefined
 		await this.#probe.destroy()
 	}
 
@@ -105,10 +127,13 @@ export class ProbeServer implements ProbeServerInterface {
 				parameters,
 				execute: async (input) => {
 					if (!isClaim(input)) {
-						throw new ProbeError('The prove tool requires a valid claim', {
-							code: 'invalid',
-							context: { value: input },
-						})
+						const refused = findRefusedPaths(input)
+						throw new ProbeError(
+							refused.length === 0
+								? 'The prove tool requires a claim matching the advertised schema'
+								: `The prove tool refuses ${refused.join(', ')}: a source path must stay inside the workspace, which the advertised schema does not constrain`,
+							{ code: 'invalid', context: { value: input } },
+						)
 					}
 					return this.#probe.prove(input)
 				},

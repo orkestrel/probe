@@ -17,7 +17,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { computeReceipt } from '@src/core'
+import { computeReceipt, formatSpecification } from '@src/core'
 import { RuntimeStage, createRevisionFile } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
@@ -187,7 +187,7 @@ describe('runtime stage', () => {
 				toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
 				project: { path: 'tsconfig.json', digest: 'context-skip-project' },
 				checks: [...clean, check],
-				control: [control],
+				control: [...clean, control],
 				elapsed: 0,
 			}
 			// Every other condition a receipt needs holds here, so the assertion turns on the skip
@@ -230,17 +230,19 @@ describe('runtime stage', () => {
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				})
+				// A verdict `prove` really produces names every stage in both phases, so the two
+				// stages this test does not drive are recorded clean rather than omitted.
+				const clean: readonly Check[] = [
+					{ stage: 'type', elapsed: 0, findings: [] },
+					{ stage: 'lint', elapsed: 0, findings: [] },
+				]
 				const base: Verdict = {
 					id: 'receipt-origin',
 					digest: 'receipt-origin-claim',
 					toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
 					project: { path: 'tsconfig.json', digest: 'receipt-origin-project' },
-					checks: [
-						{ stage: 'type', elapsed: 0, findings: [] },
-						{ stage: 'lint', elapsed: 0, findings: [] },
-						passed,
-					],
-					control: [failed],
+					checks: [...clean, passed],
+					control: [...clean, failed],
 					elapsed: 0,
 				}
 				const token =
@@ -260,9 +262,9 @@ describe('runtime stage', () => {
 
 				// The three controls reach this assertion through the real stage and differ only in
 				// what it reported about them, so each verdict turns on that report alone.
-				expect(computeReceipt({ ...base, control: [skipped] }, 'runtime')).toBeUndefined()
+				expect(computeReceipt({ ...base, control: [...clean, skipped] }, 'runtime')).toBeUndefined()
 				expect(computeReceipt(base, 'runtime')).toBe(token)
-				expect(computeReceipt({ ...base, control: [passed] }, 'runtime')).toBeUndefined()
+				expect(computeReceipt({ ...base, control: [...clean, passed] }, 'runtime')).toBeUndefined()
 			} finally {
 				await stage.destroy()
 			}
@@ -1044,16 +1046,17 @@ describe('runtime stage', () => {
 		// and it then matches the consumer's own workbench glob and fails their gates.
 		const departed = spawnSync(process.execPath, ['--version'])
 		expect(departed.status).toBe(0)
-		const orphan = createRevisionFile(
-			scratch.path,
-			'tmp/probe/orphan.test.ts',
-			`${departed.pid}-${randomUUID()}`,
-		)
+		const orphanRevision = `${departed.pid}-${randomUUID()}`
+		const orphan = createRevisionFile(scratch.path, 'tmp/probe/orphan.test.ts', orphanRevision)
 		const specification = "import { test } from 'vitest'\ntest('leaks', () => {})\n"
-		scratch.write(relative(scratch.path, orphan), specification)
-		// Three controls the sweep must leave alone. The live one is the load-bearing one: several
-		// hosts share one workspace routinely, and a sweep reading the marker rather than the
-		// identity deletes a neighbour's specification while its run is reading it.
+		scratch.write(
+			relative(scratch.path, orphan),
+			formatSpecification(specification, orphanRevision),
+		)
+		// Five controls the sweep must leave alone. The live one and the developer's own file are
+		// the load-bearing pair: several hosts share one workspace routinely, so a sweep reading the
+		// name deletes a neighbour's specification while its run is reading it, and a consumer's own
+		// file that happens to carry the same name shape is theirs rather than this package's.
 		const live = createRevisionFile(
 			scratch.path,
 			'tmp/probe/live.test.ts',
@@ -1062,6 +1065,22 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, live), specification)
 		scratch.write('tmp/probe/keeper.test.ts', specification)
 		scratch.write('tmp/probe/notes.probe-draft.ts', 'export const NOTE = 1\n')
+		// A developer's own file, named exactly as this package names its own and carrying a dead
+		// identity, in a directory this package writes to only when a claim declares a test there.
+		const authored = createRevisionFile(
+			scratch.path,
+			'src/core/notes.ts',
+			`${departed.pid}-${randomUUID()}`,
+		)
+		scratch.write(relative(scratch.path, authored), 'export const NOTE = 1\n')
+		// The same file inside the workbench directory, so the rule is the marker rather than the
+		// location the flagship claim happens to use.
+		const drafted = createRevisionFile(
+			scratch.path,
+			'tmp/probe/draft.test.ts',
+			`${departed.pid}-${randomUUID()}`,
+		)
+		scratch.write(relative(scratch.path, drafted), specification)
 		// A boot the host did not survive leaves its two arming dependencies in the same directory.
 		// They are ordinary TypeScript in the consumer's tree, so they carry the same identity and
 		// the sweep reads them the same way.
@@ -1079,10 +1098,12 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, serving), "export const SIGNAL = 'before'\n")
 		const stage = new RuntimeStage(scratch.path)
 		try {
-			expect(existsSync(orphan)).toBe(false)
-			expect(existsSync(live)).toBe(true)
-			expect(existsSync(arming)).toBe(false)
-			expect(existsSync(serving)).toBe(true)
+			expect(existsSync(orphan), 'a marked specification whose writer is gone').toBe(false)
+			expect(existsSync(live), "a live neighbour's specification").toBe(true)
+			expect(existsSync(arming), 'a boot dependency whose writer is gone').toBe(false)
+			expect(existsSync(serving), "a live neighbour's boot dependency").toBe(true)
+			expect(existsSync(authored), "a developer's own file outside the workbench").toBe(true)
+			expect(existsSync(drafted), "a developer's own file inside the workbench").toBe(true)
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/keeper.test.ts'))).toBe(true)
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/notes.probe-draft.ts'))).toBe(true)
 		} finally {

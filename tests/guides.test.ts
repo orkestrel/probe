@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import * as core from '@src/core'
 import * as server from '@src/server'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from '@src/core'
-import { normalizePath, Probe, readWorkspaceManifest } from '@src/server'
+import { computeDigest, normalizePath, Probe, readWorkspaceManifest } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor } from '@orkestrel/contract'
 
@@ -333,6 +333,35 @@ describe('guides fences', () => {
 		expect(RECEIPT_PREFIX).toBe('probe')
 		expect(constants).toContain("`':'`")
 		expect(RECEIPT_SEPARATOR).toBe(':')
+	})
+
+	// The guide states what `verdict.digest` covers. `prove` computes it with `computeDigest` over
+	// the case and the control, read against the workspace, so these assertions read the same
+	// function through the same two inputs and would break if either sentence went false again.
+	it('digests the reason and the workspace the guide says it digests', () => {
+		const body = { case: CLAIM.case, control: CLAIM.control }
+		const reworded = {
+			case: CLAIM.case,
+			control: { ...CLAIM.control, reason: 'the falsifier, restated in other words' },
+		}
+		// A claim carrying an absolute string, which is the member the workspace rewrite reaches.
+		const anchored = {
+			case: {
+				files: [],
+				test: { path: 'tmp/probe/anchored.test.ts', text: '/srv/checkout/src/core/greeting.ts' },
+			},
+			control: CLAIM.control,
+		}
+
+		// The instrument reproduces the token the flagship fence documents, so the two assertions
+		// below are read against the digest the package really ships.
+		expect(computeDigest(ROOT, body)).toBe(DIGEST)
+		// Two claims differing only in the reason's prose are two claims.
+		expect(computeDigest(ROOT, reworded)).not.toBe(DIGEST)
+		// The flagship claim carries no absolute string, so its digest is the same in any workspace.
+		expect(computeDigest('/srv/checkout', body)).toBe(DIGEST)
+		// A claim that carries one is read against the workspace it runs in.
+		expect(computeDigest('/srv/checkout', anchored)).not.toBe(computeDigest('/opt/other', anchored))
 	})
 
 	it('earns the receipt the guide documents', { timeout: 300_000 }, async () => {

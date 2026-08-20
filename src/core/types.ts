@@ -276,6 +276,15 @@ export interface Project {
  * `reason` unchanged. A hand-built verdict may omit it because the receipt helper needs only the
  * recorded checks and declared stage.
  *
+ * `digest` covers three things: the case bytes, the control bytes including this `reason`, and the
+ * workspace they were read against. The reason is part of the control, so two claims differing only
+ * in its prose are two claims and digest differently — a claimant who restates the falsifier has
+ * answered a different question, and a digest that excluded it would describe less than the claim.
+ * The workspace enters because every absolute string in a claim is rewritten relative to it before
+ * hashing, so a claim carrying no absolute string digests the same in every workspace and one that
+ * carries any digests per workspace. `receipt` carries this digest as its second field, so the same
+ * three things reach the token.
+ *
  * @example
  * ```ts
  * const broke: Finding = {
@@ -318,7 +327,10 @@ export interface Verdict {
 	readonly toolchain: Toolchain
 	/** The TypeScript project the candidate sources were judged against. */
 	readonly project: Project
-	/** The claimant's explanation for the selected control, when the verdict came from a claim. */
+	/**
+	 * The claimant's explanation for the selected control, when the verdict came from a claim. Part
+	 * of the control, so it enters `digest` and through it the receipt token.
+	 */
 	readonly reason?: string
 	/** One outcome per stage for the claim's case. */
 	readonly checks: readonly Check[]

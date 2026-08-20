@@ -21,7 +21,12 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
-import { ProbeError, createDestroyedError } from '@src/core'
+import {
+	ProbeError,
+	createDestroyedError,
+	formatSpecification,
+	matchesSpecification,
+} from '@src/core'
 import {
 	captureListeners,
 	createRevisionFile,
@@ -330,15 +335,23 @@ export class RuntimeStage implements StageInterface {
 			// The writing host's own process id leads the revision, so a later host can tell a file
 			// whose writer is gone from one a live host is running right now. Several hosts share one
 			// workspace routinely — this package's own suite is one — and a sweep reading the name
-			// alone deletes a neighbour's specification out from under its run.
-			const file = createRevisionFile(this.#workspace, test.path, `${process.pid}-${randomUUID()}`)
+			// alone deletes a neighbour's specification out from under its run. The same revision
+			// goes into the file's own marker, so the sweep reads one value from two places.
+			const revision = `${process.pid}-${randomUUID()}`
+			const file = createRevisionFile(this.#workspace, test.path, revision)
 			if (!existsSync(dirname(file))) {
 				throw new ProbeError(`The runtime test directory does not exist: ${dirname(file)}`, {
 					code: 'invalid',
 					context: { stage: this.stage, path: test.path },
 				})
 			}
-			writeFileSync(file, test.text, { encoding: 'utf8', flag: 'wx' })
+			// The marker goes in the file rather than in its name alone, because the name is the
+			// caller's path and the text is the caller's test: without it nothing in the tree says
+			// this package wrote the file, and the sweep would have to delete on a name.
+			writeFileSync(file, formatSpecification(test.text, revision), {
+				encoding: 'utf8',
+				flag: 'wx',
+			})
 			return file
 		})
 		if (outcome.success) return outcome.value
@@ -482,26 +495,44 @@ export class RuntimeStage implements StageInterface {
 		return modules
 	}
 
-	// Removes the generated specifications a dead host left behind. Every inspection deletes its own
-	// file and teardown deletes the ones it abandoned, so a file that outlives both belongs to a
-	// host that was killed. No Vitest project collects it — the revision marker sits between the
-	// stem and the extension, so a specification generated from a `.test.ts` path is not itself a
-	// `.test.ts` file — but it is ordinary TypeScript in the target's tree, so the workspace's own
-	// `check` and `lint:check` report its diagnostics against the consumer. Two things make the
-	// sweep safe: only this stage writes the revision marker, and only with one process identity
-	// and one random UUID behind it, so a developer's own file carrying the marker is left where it
-	// is and so is a live neighbour's specification.
+	// Removes the files a dead host left behind. Every inspection deletes its own file and teardown
+	// deletes the ones it abandoned, so a file that outlives both belongs to a host that was killed.
+	// No Vitest project collects it — the revision marker sits between the stem and the extension,
+	// so a specification generated from a `.test.ts` path is not itself a `.test.ts` file — but it
+	// is ordinary TypeScript in the target's tree, so the workspace's own `check` and `lint:check`
+	// report its diagnostics against the consumer. Three conditions together make one file this
+	// package's to delete: the name carries a revision, the identity leading that revision names a
+	// process that is gone, and the file is one `#owned` can attribute. A file failing any of them
+	// stays where it is, whoever wrote it.
 	#sweep(): void {
 		for (const path of this.#walk()) {
-			const owner =
-				/\.probe-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.|$)/u.exec(
+			const match =
+				/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.|$)/u.exec(
 					basename(path),
-				)?.[1]
-			if (owner === undefined || this.#alive(Number.parseInt(owner, 10))) continue
+				)
+			const revision = match?.[1]
+			const owner = match?.[2]
+			if (revision === undefined || owner === undefined) continue
+			if (this.#alive(Number.parseInt(owner, 10))) continue
+			if (!this.#owned(path, revision)) continue
 			try {
 				unlinkSync(path)
 			} catch {}
 		}
+	}
+
+	// Whether this package wrote one file. A name proves nothing on its own: a consumer's own file
+	// can carry the same shape, and deleting it is data loss in their tree. A generated
+	// specification carries the caller's own test text, so the marker this stage appends to it is
+	// what attributes it, and the revision in the name must be the revision in the marker. The
+	// coordinator's boot writes two dependencies whose text it authors rather than receives, at the
+	// two fixed workbench paths named here, so their own path attributes them.
+	#owned(path: string, revision: string): boolean {
+		for (const dependency of ['tmp/probe/arm-type.ts', 'tmp/probe/arm-runtime.ts']) {
+			if (path === createRevisionFile(this.#workspace, dependency, revision)) return true
+		}
+		const outcome = attempt(() => readFileSync(path, 'utf8'))
+		return outcome.success && matchesSpecification(outcome.value, revision)
 	}
 
 	// Whether the host that wrote one specification is still running. Signal 0 delivers nothing and

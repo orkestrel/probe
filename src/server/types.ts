@@ -121,8 +121,10 @@ export interface StageInterface {
 	 * @remarks
 	 * A stage abandons every inspection it holds rather than waiting behind one, so teardown never
 	 * waits for an inspection to return. An abandoned inspection rejects, either at the stage's own
-	 * guard or as the owned tool closes. The coordinator depends on that guarantee to replace a
-	 * stage whose worker no longer returns.
+	 * guard or as the owned tool closes. Teardown is bounded whatever the resident tool does: a tool
+	 * that answers neither its warming exchange nor its ending is signalled and released at the
+	 * stage's own deadline. The coordinator depends on both guarantees to replace a stage whose
+	 * worker no longer returns.
 	 *
 	 * @returns A promise that settles after the resident tool releases its resources
 	 */
@@ -220,7 +222,9 @@ export interface ProbeServerInterface {
 	 * @remarks
 	 * Settling is idempotent: every call after the first returns the first call's promise. The
 	 * process is left as it was before `start`, so a host that keeps running after this call reads
-	 * its own standard input again and receives its own signals.
+	 * its own standard input again and receives its own signals. That covers the stream's flow as
+	 * well as its listeners: standard input is left flowing only when it was already flowing before
+	 * `start`, and a stream nothing had read yet was not.
 	 *
 	 * @returns A promise that settles after the probe releases its resident engines
 	 */

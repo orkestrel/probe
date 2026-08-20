@@ -11,13 +11,14 @@ const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately and can read whether that child is still alive. Four
+// the real child the stage owns privately and can read whether that child is still alive. Five
 // marker files select how it ends: `frail` exits with a code on the first document,
 // `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` exits
-// without replying to `initialize`, and `ignored-exit` answers `shutdown` and then stays alive
-// through `exit`, which is the one ending the protocol leaves to the client to force. Two markers
-// in a document's own text select how it answers that document: `PROBE_SILENT` publishes nothing,
-// and `PROBE_CLOSES_INPUT` closes the server's own standard input when that document is closed.
+// without replying to `initialize`, `silent-initialize` stays alive and never replies to
+// `initialize`, and `ignored-exit` answers `shutdown` and then stays alive through `exit`, which is
+// the one ending the protocol leaves to the client to force. Two markers in a document's own text
+// select how it answers that document: `PROBE_SILENT` publishes nothing, and `PROBE_CLOSES_INPUT`
+// closes the server's own standard input when that document is closed.
 const SERVER = [
 	"import { closeSync, existsSync, writeFileSync } from 'node:fs'",
 	'let buffer = Buffer.alloc(0)',
@@ -46,6 +47,7 @@ const SERVER = [
 	'\t\t\t\tsetTimeout(() => process.exit(0), 250)',
 	'\t\t\t\treturn',
 	'\t\t\t}',
+	"\t\t\tif (existsSync('silent-initialize')) return",
 	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })",
 	'\t\t}',
 	"\t\tif (message.method === 'textDocument/didOpen') {",
@@ -128,6 +130,17 @@ function readFixtureServer(scratch: ScratchInterface): number {
 	const announced = scratch.read('server.pid')
 	if (announced === undefined) throw new Error('The fixture server never announced its process id')
 	return Number.parseInt(announced, 10)
+}
+
+// Waits for the fixture server to announce itself, so a teardown under test races a server that
+// has accepted the connection rather than a spawn that has not landed yet.
+async function waitForFixtureServer(scratch: ScratchInterface): Promise<number> {
+	for (let attempt = 0; attempt < 200; attempt += 1) {
+		const announced = scratch.read('server.pid')
+		if (announced !== undefined) return Number.parseInt(announced, 10)
+		await waitForDelay(50)
+	}
+	throw new Error('The fixture server never announced its process id')
 }
 
 // Kills the language server the stage spawned, by the process id the fixture announced.
@@ -552,6 +565,28 @@ describe('lint stage', () => {
 			scratch.destroy()
 		}
 	})
+
+	it(
+		'settles teardown against a language server that never answers its warming exchange',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch({ files: { ...FIXTURE, 'silent-initialize': '' } })
+			try {
+				// No inspection runs here: warming is what never returns, so the stage is torn down
+				// while it is still waiting for the answer the server owes it.
+				const silent = new LintStage(scratch.path)
+				const owned = await waitForFixtureServer(scratch)
+				expect(isProcessLive(owned)).toBe(true)
+				const asked = performance.now()
+				await expect(silent.destroy()).resolves.toBeUndefined()
+				expect(performance.now() - asked).toBeLessThan(10_000)
+				await expectReleased(silent)
+				expect(isProcessLive(owned)).toBe(false)
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
 
 	it(
 		'settles teardown when the language server exits without answering shutdown',
