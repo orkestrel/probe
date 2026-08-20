@@ -231,7 +231,7 @@ describe('runtime stage', () => {
 				digest: 'context-skip-claim',
 				toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
 				project: { path: 'tsconfig.json', digest: 'context-skip-project' },
-				checks: [...clean, check],
+				case: [...clean, check],
 				control: [...clean, control],
 				elapsed: 0,
 			}
@@ -239,7 +239,7 @@ describe('runtime stage', () => {
 			// issue alone: remove it and the same verdict earns one.
 			expect(computeReceipt(verdict, 'runtime')).toBeUndefined()
 			expect(
-				computeReceipt({ ...verdict, checks: [...clean, { ...check, issues: [] }] }, 'runtime'),
+				computeReceipt({ ...verdict, case: [...clean, { ...check, issues: [] }] }, 'runtime'),
 			).toBe(
 				'probe:context-skip-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@context-skip-project',
 			)
@@ -286,7 +286,7 @@ describe('runtime stage', () => {
 					digest: 'receipt-origin-claim',
 					toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
 					project: { path: 'tsconfig.json', digest: 'receipt-origin-project' },
-					checks: [...clean, passed],
+					case: [...clean, passed],
 					control: [...clean, failed],
 					elapsed: 0,
 				}

@@ -2,7 +2,7 @@ import type { Check, Issue, Stage, Verdict } from './types.js'
 import { compileGuard } from '@orkestrel/contract'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
 import { CLAIM_SHAPE } from './shapers.js'
-import { isSource } from './validators.js'
+import { isDraft } from './validators.js'
 
 /**
  * Renders one tool message as a single line an agent can classify and locate.
@@ -91,7 +91,7 @@ export function formatVerdict(verdict: Verdict): string {
 		tools,
 		project,
 		...reason,
-		...verdict.checks.map((check) => `case ${formatCheck(check)}`),
+		...verdict.case.map((check) => `case ${formatCheck(check)}`),
 		...verdict.control.map((check) => `control ${formatCheck(check)}`),
 		proof,
 	].join('\n')
@@ -114,7 +114,7 @@ export function formatVerdict(verdict: Verdict): string {
  *
  * The token names every condition the verdict was reached under, so a receipt read away from its
  * verdict still says what was judged and what judged it: the claim's digest, the stage the control
- * broke at, the tool versions, and the project the candidate sources were checked against.
+ * broke at, the tool versions, and the project the candidate drafts were checked against.
  * The call's identity is deliberately absent. It carries no integrity and it is the only value
  * stopping two honest runs of one claim from producing one comparable string, so leaving it out is
  * what makes "re-run `prove` and compare tokens" a verification a reader can perform.
@@ -142,14 +142,14 @@ export function formatVerdict(verdict: Verdict): string {
 export function computeReceipt(verdict: Verdict, stage: Stage): string | undefined {
 	const ran = PROBE_STAGES.every(
 		(name) =>
-			verdict.checks.filter((check) => check.stage === name).length === 1 &&
+			verdict.case.filter((check) => check.stage === name).length === 1 &&
 			verdict.control.filter((check) => check.stage === name).length === 1,
 	)
-	const clean = verdict.checks.every((check) => check.issues.length === 0)
+	const clean = verdict.case.every((check) => check.issues.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
 	const broke = declared?.issues.some((issue) => issue.origin === 'claimant') ?? false
 	const faulted =
-		verdict.checks.some((check) => check.issues.some((issue) => issue.origin === 'instrument')) ||
+		verdict.case.some((check) => check.issues.some((issue) => issue.origin === 'instrument')) ||
 		verdict.control.some((check) => check.issues.some((issue) => issue.origin === 'instrument'))
 	const stayed = verdict.control.every(
 		(check) => check.stage === stage || check.issues.every((issue) => issue.origin !== 'claimant'),
@@ -216,15 +216,15 @@ export function matchesSpecification(text: string, revision: string): boolean {
 }
 
 /**
- * Names every source member of a claim-shaped value whose `path` this package's guard refuses.
+ * Names every draft member of a claim-shaped value whose `path` this package's guard refuses.
  *
  * @remarks
- * The published claim schema constrains `Source.path` to a non-empty string and nothing else, while
- * `isSource` also refuses an absolute path and one that escapes the workspace. That one member is
+ * The published claim schema constrains `Draft.path` to a non-empty string and nothing else, while
+ * `isDraft` also refuses an absolute path and one that escapes the workspace. That one member is
  * the whole of the difference between the advertised contract and the enforced one, so a caller
  * refused after satisfying the schema is refused here and nowhere else. The whole input must first
- * satisfy that schema. Each source is then tested with `isSource` itself rather than with a second
- * copy of its rule. Reports nothing for a value carrying no source member, including one refused for
+ * satisfy that schema. Each draft is then tested with `isDraft` itself rather than with a second
+ * copy of its rule. Reports nothing for a value carrying no draft member, including one refused for
  * a member this contract does not declare.
  *
  * @param value - The rejected tool input
@@ -246,12 +246,12 @@ export function findRefusedPaths(value: unknown): readonly string[] {
 	const members: string[] = []
 	for (const phase of ['case', 'control'] as const) {
 		const subject = value[phase]
-		const sources = new Map<string, unknown>([[`${phase}.test`, subject.test]])
+		const drafts = new Map<string, unknown>([[`${phase}.test`, subject.test]])
 		for (const [index, file] of subject.files.entries()) {
-			sources.set(`${phase}.files.${index}`, file)
+			drafts.set(`${phase}.files.${index}`, file)
 		}
-		for (const [member, source] of sources) {
-			if (isSource(source)) continue
+		for (const [member, draft] of drafts) {
+			if (isDraft(draft)) continue
 			members.push(`${member}.path`)
 		}
 	}

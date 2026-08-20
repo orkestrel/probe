@@ -1,8 +1,8 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
-import type { PARTIES, PROBE_ERROR_CODES } from './constants.js'
+import type { PROBE_ERROR_CODES, PROBE_PARTIES, PROBE_STAGES } from './constants.js'
 
 /**
- * Names an inspection a claim passes through.
+ * Names an inspection a claim passes through, derived from {@link PROBE_STAGES}.
  *
  * @remarks
  * They are irreducible modes rather than labels: each reads a different tool, and a verdict that
@@ -13,21 +13,22 @@ import type { PARTIES, PROBE_ERROR_CODES } from './constants.js'
  * const stage: Stage = 'lint'
  * ```
  */
-export type Stage = 'type' | 'lint' | 'runtime'
+export type Stage = (typeof PROBE_STAGES)[number]
 
 /**
- * Carries one file's location and its contents.
+ * Carries one proposed file's location and its contents.
  *
  * @remarks
- * `path` is contained within the workspace, relative to its root, and need not exist on disk. The
- * type and lint stages read the text from memory; only the runtime stage writes a file.
+ * A draft is a file as the claimant proposes it rather than as the workspace holds it. `path` is
+ * contained within the workspace, relative to its root, and need not exist on disk. The type and
+ * lint stages read the text from memory; only the runtime stage writes a file.
  *
  * @example
  * ```ts
- * const source: Source = { path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }
+ * const draft: Draft = { path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }
  * ```
  */
-export interface Source {
+export interface Draft {
 	/** Workspace-relative path the stages resolve the text against. */
 	readonly path: string
 	/** The file's full contents. */
@@ -35,10 +36,10 @@ export interface Source {
 }
 
 /**
- * Carries the candidate files a claim asserts about and the test that exercises them.
+ * Carries the candidate drafts a claim asserts about and the test that exercises them.
  *
  * @remarks
- * `files` and `test` belong to different TypeScript projects. Each file in `files` is checked
+ * `files` and `test` belong to different TypeScript projects. Each draft in `files` is checked
  * against the project its claim names, and `test` is checked against the root project, because a
  * test needs the Vitest and Node globals the scoped projects remove. A direct type-stage call that
  * supplies no project infers one from each candidate path.
@@ -55,10 +56,10 @@ export interface Source {
  * ```
  */
 export interface Case {
-	/** The candidate sources the test imports, in the order the claim supplies them. */
-	readonly files: readonly Source[]
-	/** The test that exercises those sources. */
-	readonly test: Source
+	/** The candidate drafts the test imports, in the order the claim supplies them. */
+	readonly files: readonly Draft[]
+	/** The test that exercises those drafts. */
+	readonly test: Draft
 }
 
 /**
@@ -93,11 +94,11 @@ export interface Control extends Case {
  * Carries everything the service needs to produce one verdict.
  *
  * @remarks
- * `project` names the TypeScript project the candidate sources in both cases are checked against,
+ * `project` names the TypeScript project the candidate drafts in both cases are checked against,
  * because the root project admits host globals the scoped projects remove and would report green
- * where the gate reports red. The test files remain on the root project for Vitest and Node globals.
+ * where the gate reports red. The test drafts remain on the root project for Vitest and Node globals.
  *
- * The control's candidate sources must differ from the case's. A control byte-identical to its case
+ * The control's candidate drafts must differ from the case's. A control byte-identical to its case
  * cannot break, so it never produces the `origin: 'claimant'` issue a receipt requires, and the
  * claim is unprovable however correct the case is.
  *
@@ -125,9 +126,9 @@ export interface Control extends Case {
  * ```
  */
 export interface Claim {
-	/** Workspace-relative path of the TypeScript project the candidate sources are checked against. */
+	/** Workspace-relative path of the TypeScript project the candidate drafts are checked against. */
 	readonly project: string
-	/** The files and test the claim asserts about. */
+	/** The drafts and test the claim asserts about. */
 	readonly case: Case
 	/** The negative control that must break, and where. */
 	readonly control: Control
@@ -137,7 +138,7 @@ export interface Claim {
  * Names who must act on an issue or probe failure.
  *
  * @remarks
- * `claimant` is the caller who wrote the claim: its input, selections, candidate source, and
+ * `claimant` is the caller who wrote the claim: its input, selections, candidate draft, and
  * lifecycle. `workspace` is the target tree probe borrows. `instrument` is this package.
  *
  * @example
@@ -145,7 +146,7 @@ export interface Claim {
  * const party: Party = 'claimant'
  * ```
  */
-export type Party = (typeof PARTIES)[number]
+export type Party = (typeof PROBE_PARTIES)[number]
 
 /**
  * Carries one message a stage reported, where it reported it, and whose fault it names.
@@ -154,7 +155,7 @@ export type Party = (typeof PARTIES)[number]
  * The stage is not repeated here. An issue always arrives inside the `Check` that names its
  * stage, so a second copy could only drift from the first.
  *
- * A `claimant` issue is a tool's diagnostic about a candidate source, and nothing else. Every
+ * A `claimant` issue is a tool's diagnostic about a candidate draft, and nothing else. Every
  * other claimant fault is thrown. Without this invariant, a bad test path could satisfy the
  * receipt condition even though the test never ran.
  *
@@ -219,7 +220,7 @@ export interface Check {
  *
  * @example
  * ```ts
- * const toolchain: Toolchain = { typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' }
+ * const toolchain: Toolchain = { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' }
  * ```
  */
 export interface Toolchain {
@@ -232,7 +233,7 @@ export interface Toolchain {
 }
 
 /**
- * Names the TypeScript project that judged a verdict's candidate sources.
+ * Names the TypeScript project that judged a verdict's candidate drafts.
  *
  * @remarks
  * A verdict is an assertion about code under one compiler configuration, and the same code passes
@@ -260,7 +261,7 @@ export interface Project {
  * Carries the full result of one claim: every stage, for both the case and its control.
  *
  * @remarks
- * A verdict exists only when every stage ran on both the case and the control, so `checks`
+ * A verdict exists only when every stage ran on both the case and the control, so `case`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when the case reported no
  * issue, the control reported an `origin: 'claimant'` issue at the stage it declared,
@@ -287,7 +288,7 @@ export interface Project {
  * ```ts
  * const broke: Issue = {
  * 	origin: 'claimant',
- * 	path: 'src/core/greeting.ts',
+ * 	path: 'src/core/farewell.ts',
  * 	message: 'not assignable',
  * 	line: 1,
  * }
@@ -299,8 +300,8 @@ export interface Project {
  * 		path: 'configs/src/tsconfig.core.json',
  * 		digest: '3b674fdf121c85efb9ed1bab25ceeec8',
  * 	},
- * 	reason: 'a string literal assigned to a number must not compile',
- * 	checks: [
+ * 	reason: 'a number annotation must reject the string literal beside it',
+ * 	case: [
  * 		{ stage: 'type', elapsed: 61, issues: [] },
  * 		{ stage: 'lint', elapsed: 17, issues: [] },
  * 		{ stage: 'runtime', elapsed: 259, issues: [] },
@@ -323,7 +324,7 @@ export interface Verdict {
 	readonly digest: string
 	/** The tool versions that produced it. */
 	readonly toolchain: Toolchain
-	/** The TypeScript project the candidate sources were judged against. */
+	/** The TypeScript project the candidate drafts were judged against. */
 	readonly project: Project
 	/**
 	 * The claimant's explanation for the selected control, when the verdict came from a claim. Part
@@ -331,7 +332,7 @@ export interface Verdict {
 	 */
 	readonly reason?: string
 	/** One outcome per stage for the claim's case. */
-	readonly checks: readonly Check[]
+	readonly case: readonly Check[]
 	/** One outcome per stage for the claim's control. */
 	readonly control: readonly Check[]
 	/** Milliseconds the whole call took, including both the case and the control. */
@@ -355,7 +356,7 @@ export interface Verdict {
  * ```
  */
 export type ProbeEventMap = {
-	/** The boot control reported red and the instrument now serves. */
+	/** The boot control reported red and the instrument has begun answering calls. */
 	readonly arm: readonly [toolchain: Toolchain]
 	/** A claim was answered. */
 	readonly prove: readonly [verdict: Verdict]
@@ -390,7 +391,10 @@ export interface ProbeOptions {
 	readonly error?: EmitterErrorHandler
 	/** Target workspace root. Default: the current working directory. */
 	readonly workspace?: string
-	/** Milliseconds one active stage inspection may take; an expired stage is replaced. */
+	/**
+	 * Milliseconds one active stage inspection may take; an expired stage is replaced. Default:
+	 * 30,000 ms.
+	 */
 	readonly deadline?: number
 }
 
@@ -402,7 +406,7 @@ export interface ProbeOptions {
  * the process and a restart is a new process rather than a second lifecycle.
  *
  * `prove` re-reads the target workspace before it answers, so a file edited since the last call is
- * judged as it now stands rather than as a warm service remembers it. The resident readers key
+ * judged as it stands on disk rather than as a warm service remembers it. The resident readers key
  * that sweep differently: the runtime stage compares each workspace module's contents, and the type
  * stage versions a disk file by its modification time.
  *
@@ -421,7 +425,7 @@ export interface ProbeInterface {
 	/**
 	 * Answers one claim with every stage's evidence.
 	 *
-	 * @param claim - The case, its control, and the project the candidate sources in both cases
+	 * @param claim - The case, its control, and the project the candidate drafts in both cases
 	 * are checked against
 	 * @returns The verdict, carrying one check per stage for both the case and the control
 	 * @throws When a stage cannot start, so no verdict ever reports a stage that did not run

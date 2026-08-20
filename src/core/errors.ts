@@ -1,6 +1,6 @@
 import type { Party, ProbeErrorCode, ProbeErrorContext, ProbeErrorOptions } from './types.js'
 import { holds, isError } from '@orkestrel/contract'
-import { PARTIES, PROBE_ERROR_CODES } from './constants.js'
+import { PROBE_ERROR_CODES, PROBE_PARTIES } from './constants.js'
 
 /**
  * Reports one probe failure under stable ownership and condition axes.
@@ -55,7 +55,7 @@ export class ProbeError extends Error {
  *
  * @remarks
  * Recognition combines the global own-property brand with the native `Error` base, the subclass
- * prototype, the fixed name, a party {@link PARTIES} declares, and a condition
+ * prototype, the fixed name, a party {@link PROBE_PARTIES} declares, and a condition
  * {@link PROBE_ERROR_CODES} declares. The brand carries recognition across duplicate installations
  * and across an ESM and a CommonJS copy of this package, where the two classes are different values.
  * A plain `Error`, a property-only lookalike, and a branded value carrying an undeclared origin or
@@ -80,7 +80,7 @@ export function isProbeError(value: unknown): value is ProbeError {
 		const origin: unknown = value.origin
 		const code: unknown = value.code
 		return (
-			PARTIES.some((declared) => declared === origin) &&
+			PROBE_PARTIES.some((declared) => declared === origin) &&
 			PROBE_ERROR_CODES.some((declared) => declared === code)
 		)
 	})

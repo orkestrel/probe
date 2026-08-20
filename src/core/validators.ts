@@ -4,10 +4,10 @@ import type {
 	Check,
 	Claim,
 	Control,
+	Draft,
 	Issue,
 	Party,
 	Project,
-	Source,
 	Stage,
 	Toolchain,
 	Verdict,
@@ -21,7 +21,7 @@ import {
 	literalOf,
 	recordOf,
 } from '@orkestrel/contract'
-import { PARTIES, PROBE_STAGES } from './constants.js'
+import { PROBE_PARTIES, PROBE_STAGES } from './constants.js'
 
 /**
  * Checks whether a value names a stage.
@@ -38,26 +38,26 @@ import { PARTIES, PROBE_STAGES } from './constants.js'
 export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
 
 /**
- * Checks whether a value carries a file's path and text.
+ * Checks whether a value carries a proposed file's path and text.
  *
  * @remarks
  * Rejects an empty, absolute, or workspace-escaping path. A contained relative path may contain
  * `.` or may traverse to a parent that remains inside the workspace. Every stage resolves a file
  * by that path, so admitting an escape here would defer the refusal until a stage had already
- * accepted the source. An `Issue` carries no such minimum because this package produces issues
+ * accepted the draft. An `Issue` carries no such minimum because this package produces issues
  * rather than admits them.
  *
  * @param value - The value to check
- * @returns True if the value is a source; false otherwise
+ * @returns True if the value is a draft; false otherwise
  *
  * @example
  * ```ts
- * isSource({ path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }) // true
- * isSource({ path: '../../etc/hosts', text: '' }) // false
- * isSource({ path: 'src/core/greeting.ts' }) // false
+ * isDraft({ path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }) // true
+ * isDraft({ path: '../../etc/hosts', text: '' }) // false
+ * isDraft({ path: 'src/core/greeting.ts' }) // false
  * ```
  */
-export const isSource: Guard<Source> = recordOf({
+export const isDraft: Guard<Draft> = recordOf({
 	path: andOf<string>(isNonEmptyString, (path) => {
 		if (/^(?:[\\/]|[A-Za-z]:)/.test(path)) return false
 		let depth = 0
@@ -76,7 +76,7 @@ export const isSource: Guard<Source> = recordOf({
 })
 
 /**
- * Checks whether a value carries a claim's candidate files and its test.
+ * Checks whether a value carries a claim's candidate drafts and its test.
  *
  * @param value - The value to check
  * @returns True if the value is a case; false otherwise
@@ -87,7 +87,7 @@ export const isSource: Guard<Source> = recordOf({
  * isCase({ files: [], test }) // true
  * ```
  */
-export const isCase: Guard<Case> = recordOf({ files: arrayOf(isSource), test: isSource })
+export const isCase: Guard<Case> = recordOf({ files: arrayOf(isDraft), test: isDraft })
 
 /**
  * Checks whether a value carries a case plus the stage and reason it must fail for.
@@ -103,8 +103,8 @@ export const isCase: Guard<Case> = recordOf({ files: arrayOf(isSource), test: is
  * ```
  */
 export const isControl: Guard<Control> = recordOf({
-	files: arrayOf(isSource),
-	test: isSource,
+	files: arrayOf(isDraft),
+	test: isDraft,
 	stage: isStage,
 	reason: isNonEmptyString,
 })
@@ -117,8 +117,8 @@ export const isControl: Guard<Control> = recordOf({
  * sending a contract this service does not implement rather than a wider caller it must tolerate.
  *
  * `CLAIM_SHAPE` is the wire contract's shape and this is the admission rule the tool enforces, and
- * the rule is strictly narrower than the shape. They agree on every member but `Source.path`: the
- * shape constrains it to a non-empty string, while `isSource` also refuses an absolute path
+ * the rule is strictly narrower than the shape. They agree on every member but `Draft.path`: the
+ * shape constrains it to a non-empty string, while `isDraft` also refuses an absolute path
  * and one that traverses out of the workspace, so `../../etc/hosts` satisfies
  * `compileGuard(CLAIM_SHAPE)` and is refused here. `ProbeServer` advertises the shape and enforces
  * this rule, so it names the refused member with `findRefusedPaths` rather than reporting only that
@@ -153,7 +153,7 @@ export const isClaim: Guard<Claim> = recordOf({
  * isParty('stage') // false
  * ```
  */
-export const isParty: Guard<Party> = literalOf(PARTIES)
+export const isParty: Guard<Party> = literalOf(PROBE_PARTIES)
 
 /**
  * Checks whether a value carries one message, its location, and the origin of the fault it names.
@@ -202,7 +202,7 @@ export const isCheck: Guard<Check> = recordOf({
  *
  * @example
  * ```ts
- * isToolchain({ typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' }) // true
+ * isToolchain({ typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' }) // true
  * isToolchain({ typescript: '6.0.3' }) // false
  * ```
  */
@@ -247,8 +247,8 @@ export const isProject: Guard<Project> = recordOf({
  * @example
  * ```ts
  * const basis = { id: '01J8Z0', digest: '6ca20c3b', toolchain, project, elapsed: 337 }
- * isVerdict({ ...basis, checks: [], control: [] }) // true
- * isVerdict({ ...basis, checks: [] }) // false
+ * isVerdict({ ...basis, case: [], control: [] }) // true
+ * isVerdict({ ...basis, case: [] }) // false
  * ```
  */
 export const isVerdict: Guard<Verdict> = recordOf(
@@ -258,7 +258,7 @@ export const isVerdict: Guard<Verdict> = recordOf(
 		toolchain: isToolchain,
 		project: isProject,
 		reason: isNonEmptyString,
-		checks: arrayOf(isCheck),
+		case: arrayOf(isCheck),
 		control: arrayOf(isCheck),
 		elapsed: isNumber,
 		receipt: isString,

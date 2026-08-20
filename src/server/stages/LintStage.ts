@@ -1,4 +1,4 @@
-import type { Case, Check, Issue, Source, Stage } from '@src/core'
+import type { Case, Check, Draft, Issue, Stage } from '@src/core'
 import type { StageInterface } from '../types.js'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { TimeoutInterface } from '@orkestrel/timeout'
@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url'
 import { createTimeout } from '@orkestrel/timeout'
 import { ProbeError, createDestroyedError } from '@src/core'
 import {
+	describeUnknown,
 	inferDocumentLanguage,
-	messageFromUnknown,
 	normalizePath,
 	parseContentLength,
 	resolveWorkspaceBinary,
@@ -89,8 +89,8 @@ export class LintStage implements StageInterface {
 		await this.#warmth
 		if (this.#destroyed) throw createDestroyedError('lint stage')
 		const issues: Issue[] = []
-		for (const source of [...subject.files, subject.test]) {
-			issues.push(...(await this.#document(source)))
+		for (const draft of [...subject.files, subject.test]) {
+			issues.push(...(await this.#document(draft)))
 		}
 		return {
 			stage: this.stage,
@@ -226,19 +226,19 @@ export class LintStage implements StageInterface {
 	// gate applies, and an override naming one exact file is reachable by nothing else. One URI
 	// carries one open document and one publication, so a caller driving two inspections of one path
 	// at once is refused rather than served an answer belonging to the other.
-	#document(source: Source): Promise<readonly Issue[]> {
-		const uri = pathToFileURL(resolveWorkspaceFile(this.#workspace, source.path)).href
+	#document(draft: Draft): Promise<readonly Issue[]> {
+		const uri = pathToFileURL(resolveWorkspaceFile(this.#workspace, draft.path)).href
 		if (this.#publishes.has(uri)) {
 			return Promise.reject(
-				new ProbeError(`The lint stage is already inspecting ${source.path}`, {
+				new ProbeError(`The lint stage is already inspecting ${draft.path}`, {
 					origin: 'claimant',
 					code: 'refused',
-					context: { stage: this.stage, path: source.path },
+					context: { stage: this.stage, path: draft.path },
 				}),
 			)
 		}
 		const diagnostics = new Promise<readonly Issue[]>((resolve, reject) => {
-			this.#documents.set(uri, normalizePath(source.path))
+			this.#documents.set(uri, normalizePath(draft.path))
 			this.#publishes.set(uri, resolve)
 			this.#refusals.set(uri, reject)
 		})
@@ -249,14 +249,14 @@ export class LintStage implements StageInterface {
 			this.#notify('textDocument/didOpen', {
 				textDocument: {
 					uri,
-					languageId: inferDocumentLanguage(source.path),
+					languageId: inferDocumentLanguage(draft.path),
 					version: this.#sequence,
-					text: source.text,
+					text: draft.text,
 				},
 			})
 			this.#progress += 1
 		} catch (error) {
-			this.#refusals.get(uri)?.(this.#fault(messageFromUnknown(error), error, source.path))
+			this.#refusals.get(uri)?.(this.#fault(describeUnknown(error), error, draft.path))
 		}
 		return inspected
 	}
@@ -321,7 +321,7 @@ export class LintStage implements StageInterface {
 			const reject = this.#failures.get(id)
 			this.#responses.delete(id)
 			this.#failures.delete(id)
-			reject?.(this.#fault(messageFromUnknown(error), error))
+			reject?.(this.#fault(describeUnknown(error), error))
 		}
 		return response
 	}
@@ -368,7 +368,7 @@ export class LintStage implements StageInterface {
 			const message: unknown = JSON.parse(content)
 			this.#receive(message)
 		} catch (error) {
-			this.#fail(this.#fault(`Oxlint sent invalid JSON: ${messageFromUnknown(error)}`, error))
+			this.#fail(this.#fault(`Oxlint sent invalid JSON: ${describeUnknown(error)}`, error))
 		}
 		return true
 	}
@@ -382,7 +382,7 @@ export class LintStage implements StageInterface {
 			this.#responses.delete(id)
 			this.#failures.delete(id)
 			if ('error' in message && message.error !== undefined) {
-				reject?.(this.#fault(messageFromUnknown(message.error)))
+				reject?.(this.#fault(describeUnknown(message.error)))
 			} else {
 				resolve?.('result' in message ? message.result : undefined)
 			}

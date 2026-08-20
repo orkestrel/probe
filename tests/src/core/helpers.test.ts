@@ -1,4 +1,4 @@
-import type { Check, Issue, Project, Source, Stage, Toolchain, Verdict } from '@src/core'
+import type { Check, Draft, Issue, Project, Stage, Toolchain, Verdict } from '@src/core'
 import { compileGuard } from '@orkestrel/contract'
 import {
 	CLAIM_SHAPE,
@@ -121,7 +121,7 @@ describe('core formatting helpers', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			reason: 'a string literal assigned to a number must not compile',
-			checks,
+			case: checks,
 			control,
 			elapsed: 81,
 			receipt: 'proof-token',
@@ -152,7 +152,7 @@ describe('core formatting helpers', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: [{ stage: 'type', elapsed: 61, issues: [] }],
+			case: [{ stage: 'type', elapsed: 61, issues: [] }],
 			control: [{ stage: 'type', elapsed: 58, issues: [] }],
 			elapsed: 337,
 		}
@@ -177,7 +177,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
+			case: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
 			control: buildControl('type', [
 				{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
 			]),
@@ -201,7 +201,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project,
-			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
+			case: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
 			control: buildControl('type', [
 				{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
 			]),
@@ -243,17 +243,17 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks,
+			case: checks,
 			control: buildControl('type', [issue]),
 			elapsed: 7,
 		}
 
-		expect(computeReceipt({ ...base, checks: checks.slice(0, -1) }, 'type')).toBeUndefined()
+		expect(computeReceipt({ ...base, case: checks.slice(0, -1) }, 'type')).toBeUndefined()
 		expect(
 			computeReceipt(
 				{
 					...base,
-					checks: checks.map((check) =>
+					case: checks.map((check) =>
 						check.stage === 'lint' ? { ...check, issues: [issue] } : check,
 					),
 				},
@@ -282,7 +282,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
+			case: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
 			control: buildControl('runtime', [broke]),
 			elapsed: 7,
 		}
@@ -316,7 +316,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
+			case: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
 			control,
 			elapsed: 7,
 		}
@@ -350,14 +350,14 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks,
+			case: checks,
 			control,
 			elapsed: 7,
 		}
 
 		expect(
 			computeReceipt(
-				{ ...base, checks: [...checks, { stage: 'type', elapsed: 1, issues: [] }] },
+				{ ...base, case: [...checks, { stage: 'type', elapsed: 1, issues: [] }] },
 				'type',
 			),
 		).toBeUndefined()
@@ -378,7 +378,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
+			case: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, issues: [] })),
 			control: [
 				{
 					stage: 'type',
@@ -417,7 +417,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks,
+			case: checks,
 			control,
 			elapsed: 7,
 		}
@@ -427,7 +427,7 @@ describe('core receipt helper', () => {
 			computeReceipt(
 				{
 					...verdict,
-					checks: PROBE_STAGES.map((stage) => ({
+					case: PROBE_STAGES.map((stage) => ({
 						stage,
 						elapsed: 1,
 						issues: [],
@@ -460,7 +460,7 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			checks: faulted,
+			case: faulted,
 			control: buildControl('runtime', [
 				{
 					origin: 'claimant',
@@ -476,7 +476,7 @@ describe('core receipt helper', () => {
 			computeReceipt(
 				{
 					...base,
-					checks: clean,
+					case: clean,
 					control: buildControl('runtime', [
 						{
 							origin: 'claimant',
@@ -489,7 +489,7 @@ describe('core receipt helper', () => {
 				'runtime',
 			),
 		).toBeUndefined()
-		expect(computeReceipt({ ...base, checks: clean }, 'runtime')).toBe(
+		expect(computeReceipt({ ...base, case: clean }, 'runtime')).toBe(
 			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
 		)
 	})
@@ -530,14 +530,14 @@ describe('core specification marker', () => {
 })
 
 describe('core claim refusal', () => {
-	const source: Source = { path: 'src/core/greeting.ts', text: '' }
-	const control = { files: [], test: source, stage: 'type', reason: 'must not compile' }
+	const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
+	const control = { files: [], test: draft, stage: 'type', reason: 'must not compile' }
 
-	it('names every source member whose path the guard refuses', () => {
+	it('names every draft member whose path the guard refuses', () => {
 		expect(
 			findRefusedPaths({
 				project: 'configs/src/tsconfig.core.json',
-				case: { files: [source], test: source },
+				case: { files: [draft], test: draft },
 				control,
 			}),
 		).toStrictEqual([])
@@ -545,7 +545,7 @@ describe('core claim refusal', () => {
 			findRefusedPaths({
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [source, { path: '../../etc/hosts', text: '' }],
+					files: [draft, { path: '../../etc/hosts', text: '' }],
 					test: { path: '/etc/hosts', text: '' },
 				},
 				control: { ...control, files: [{ path: 'C:\\Windows\\hosts', text: '' }] },
@@ -559,7 +559,7 @@ describe('core claim refusal', () => {
 		// wrong member.
 		const missingPath = {
 			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ text: '' }], test: source },
+			case: { files: [{ text: '' }], test: draft },
 			control,
 		}
 		expect(compileGuard(CLAIM_SHAPE)(missingPath)).toBe(false)
@@ -567,20 +567,20 @@ describe('core claim refusal', () => {
 		expect(
 			findRefusedPaths({
 				project: 'configs/src/tsconfig.core.json',
-				case: { files: [{ path: 'src/core/greeting.ts' }], test: source },
+				case: { files: [{ path: 'src/core/greeting.ts' }], test: draft },
 				control,
 			}),
 		).toStrictEqual([])
 		expect(
 			findRefusedPaths({
 				project: 'configs/src/tsconfig.core.json',
-				case: { files: [], test: source },
+				case: { files: [], test: draft },
 				control,
 				surplus: true,
 			}),
 		).toStrictEqual([])
 		expect(findRefusedPaths(undefined)).toStrictEqual([])
-		expect(findRefusedPaths([source])).toStrictEqual([])
+		expect(findRefusedPaths([draft])).toStrictEqual([])
 		expect(findRefusedPaths({ case: 17, control: 'control' })).toStrictEqual([])
 	})
 })

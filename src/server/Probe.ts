@@ -29,7 +29,7 @@ import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	computeDigest,
 	createRevisionFile,
-	messageFromUnknown,
+	describeUnknown,
 	readWorkspaceManifest,
 	resolveWorkspaceFile,
 } from './helpers.js'
@@ -158,7 +158,7 @@ export class Probe implements ProbeInterface {
 				case: claim.case,
 				control: claim.control,
 			})
-			const checks = Object.freeze(await this.#inspect(claim.case, claim))
+			const subject = Object.freeze(await this.#inspect(claim.case, claim))
 			const control = Object.freeze(await this.#inspect(claim.control, claim))
 			const basis: Verdict = {
 				id,
@@ -166,7 +166,7 @@ export class Probe implements ProbeInterface {
 				toolchain: this.#toolchain,
 				project,
 				reason: claim.control.reason,
-				checks,
+				case: subject,
 				control,
 				elapsed: Math.round(performance.now() - started),
 			}
@@ -217,7 +217,7 @@ export class Probe implements ProbeInterface {
 			// A boot failure and a claim's own stage failure are otherwise one message: the controls
 			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
 			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
-			throw new ProbeError(`The probe could not arm: ${messageFromUnknown(error)}`, {
+			throw new ProbeError(`The probe could not arm: ${describeUnknown(error)}`, {
 				origin: 'instrument',
 				code: 'malformed',
 				cause: error,
@@ -229,7 +229,7 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #boot(): Promise<void> {
-		// The dependencies below are real files in the target's tree, so they carry the same
+		// The dependencies that follow are real files in the target's tree, so they carry the same
 		// revision identity a generated specification does: the writing host's process id, then a
 		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
 		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
@@ -428,8 +428,8 @@ export class Probe implements ProbeInterface {
 				),
 			])
 		} catch {
-			// The failure belongs to the stage being replaced, and the replacement below is the
-			// recovery the caller is owed.
+			// The failure belongs to the stage being replaced, and the replacement that follows is
+			// the recovery the caller is owed.
 		} finally {
 			timeout.clear()
 		}

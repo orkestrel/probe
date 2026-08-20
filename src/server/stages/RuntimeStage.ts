@@ -1,4 +1,4 @@
-import type { Case, Check, Issue, Source, Stage } from '@src/core'
+import type { Case, Check, Draft, Issue, Stage } from '@src/core'
 import type { OverlayInterface, StageInterface } from '../types.js'
 import type {
 	TestProjectConfiguration,
@@ -31,9 +31,9 @@ import {
 import {
 	captureListeners,
 	createRevisionFile,
+	describeUnknown,
 	inferTestProject,
 	loadWorkspaceModule,
-	messageFromUnknown,
 	matchesWorkspaceModule,
 	normalizePath,
 	releaseListeners,
@@ -139,8 +139,8 @@ export class RuntimeStage implements StageInterface {
 		const overlay = new Overlay()
 		this.#overlay = overlay
 		try {
-			for (const source of subject.files) {
-				overlay.set(resolveWorkspaceFile(this.#workspace, source.path), source.text)
+			for (const draft of subject.files) {
+				overlay.set(resolveWorkspaceFile(this.#workspace, draft.path), draft.text)
 			}
 			this.#revalidate(vitest)
 			const specification = this.#specification(subject.test)
@@ -165,7 +165,7 @@ export class RuntimeStage implements StageInterface {
 				} catch (error) {
 					if (error instanceof ProbeError) throw error
 					throw new ProbeError(
-						`The runtime stage could not run the generated specification (${messageFromUnknown(error)})`,
+						`The runtime stage could not run the generated specification (${describeUnknown(error)})`,
 						{
 							origin: 'instrument',
 							code: 'malformed',
@@ -195,7 +195,7 @@ export class RuntimeStage implements StageInterface {
 									? 'workspace'
 									: 'instrument',
 							path: relativeWorkspaceFile(this.#workspace, file),
-							message: `The runtime stage could not delete the generated specification (${messageFromUnknown(error)})`,
+							message: `The runtime stage could not delete the generated specification (${describeUnknown(error)})`,
 						},
 					]
 				}
@@ -373,11 +373,11 @@ export class RuntimeStage implements StageInterface {
 		return this.#overlay.text(id.slice(0, separator))
 	}
 
-	#specification(test: Source): string | Issue {
+	#specification(test: Draft): string | Issue {
 		let creating = false
 		const outcome = attempt(() => {
 			// The writing host's own process id leads the revision, so a later host can tell a file
-			// whose writer is gone from one a live host is running right now. Several hosts share one
+			// whose writer is gone from one a live host still holds. Several hosts share one
 			// workspace routinely — this package's own suite is one — and a sweep reading the name
 			// alone deletes a neighbour's specification out from under its run. The same revision
 			// goes into the file's own marker, so the sweep reads one value from two places.
@@ -421,7 +421,7 @@ export class RuntimeStage implements StageInterface {
 						? 'workspace'
 						: 'instrument',
 			path: test.path,
-			message: `The runtime stage could not write the generated specification (${messageFromUnknown(outcome.error)})`,
+			message: `The runtime stage could not write the generated specification (${describeUnknown(outcome.error)})`,
 		}
 	}
 
@@ -501,7 +501,7 @@ export class RuntimeStage implements StageInterface {
 				{
 					origin: 'instrument',
 					path: relativeWorkspaceFile(this.#workspace, file),
-					message: `The runtime stage could not evict the generated specification (${messageFromUnknown(error)})`,
+					message: `The runtime stage could not evict the generated specification (${describeUnknown(error)})`,
 				},
 			]
 		}
@@ -718,7 +718,7 @@ export class RuntimeStage implements StageInterface {
 
 	// Resolves one path through its real form, and leaves a path it cannot resolve as it stands.
 	// `resolve` does not follow a symbolic link, so a workspace handed to this stage as a link
-	// produces a specification path no reported frame ever equals, and the mapping below then reports
+	// produces a specification path no reported frame ever equals, and the mapping that follows reports
 	// the generated `probe-<revision>` file a caller cannot open instead of the test it declared.
 	#real(path: string): string {
 		const outcome = attempt(() => realpathSync(path))
@@ -730,7 +730,7 @@ export class RuntimeStage implements StageInterface {
 	// already resolved through its real path, and every reported frame is resolved the same way, so
 	// the two sides compare on one spelling.
 	#issue(error: unknown, specification: string, original: string): Issue {
-		const message = messageFromUnknown(error)
+		const message = describeUnknown(error)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
 			return { origin: 'claimant', path: original, message }
 		}

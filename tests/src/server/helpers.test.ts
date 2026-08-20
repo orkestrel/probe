@@ -8,12 +8,12 @@ import {
 	captureListeners,
 	computeDigest,
 	createRevisionFile,
+	describeUnknown,
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
-	messageFromUnknown,
 	normalizePath,
 	normalizeValue,
 	parseContentLength,
@@ -28,6 +28,14 @@ import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+
+// Two distinct listeners reporting one name, so a release keyed on the name cannot tell them apart
+// and a release keyed on identity can. The name is assigned rather than declared, because two
+// function declarations cannot share a name in one scope, which is the whole difficulty the pair
+// under test exists to survive.
+function onExit(): void {}
+function onExitAgain(): void {}
+Object.defineProperty(onExitAgain, 'name', { value: 'onExit' })
 
 // Every `@example` block the documented server helpers carry, run verbatim and asserted against
 // the value each block states. An illustrative `/srv/checkout` root stands for the workspace under
@@ -74,10 +82,10 @@ describe('server helper examples', () => {
 		expect(matchesWorkspaceModule('src/styles/tokens.css')).toBe(false)
 		expect(parseContentLength('Content-Length: 128')).toBe(128)
 		expect(parseContentLength('Content-Type: application/json')).toBeUndefined()
-		expect(messageFromUnknown(new Error('The lint stage has been destroyed'))).toBe(
+		expect(describeUnknown(new Error('The lint stage has been destroyed'))).toBe(
 			'The lint stage has been destroyed',
 		)
-		expect(messageFromUnknown(17)).toBe('17')
+		expect(describeUnknown(17)).toBe('17')
 		const capture = captureListeners(process, ['SIGTERM'])
 		expect(capture.get('SIGTERM')?.length).toBe(process.listenerCount('SIGTERM'))
 		process.on('SIGTERM', () => {})
@@ -117,11 +125,10 @@ describe('server listener leaves', () => {
 	// listener and miss the one it came for.
 	it('separates two listeners that share a name', () => {
 		const emitter = new EventEmitter()
-		function onExit(): void {}
+		expect(onExitAgain.name).toBe(onExit.name)
+		expect(onExitAgain).not.toBe(onExit)
 		emitter.on('close', onExit)
 		const capture = captureListeners(emitter, ['close'])
-		function onExitAgain(): void {}
-		Object.defineProperty(onExitAgain, 'name', { value: 'onExit' })
 		emitter.on('close', onExitAgain)
 		releaseListeners(emitter, capture)
 		expect(emitter.listeners('close')).toStrictEqual([onExit])
@@ -346,10 +353,10 @@ describe('server wire helpers', () => {
 	})
 
 	it('normalizes errors, strings, message records, and other values', () => {
-		expect(messageFromUnknown(new Error('failed'))).toBe('failed')
-		expect(messageFromUnknown('failed')).toBe('failed')
-		expect(messageFromUnknown({ message: 'failed' })).toBe('failed')
-		expect(messageFromUnknown(17)).toBe('17')
+		expect(describeUnknown(new Error('failed'))).toBe('failed')
+		expect(describeUnknown('failed')).toBe('failed')
+		expect(describeUnknown({ message: 'failed' })).toBe('failed')
+		expect(describeUnknown(17)).toBe('17')
 	})
 })
 

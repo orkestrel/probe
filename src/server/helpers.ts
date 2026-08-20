@@ -315,11 +315,11 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 }
 
 /**
- * Selects the scoped TypeScript project for one candidate source path.
+ * Selects the scoped TypeScript project for one candidate draft path.
  *
- * @param path - The workspace-relative candidate source path
+ * @param path - The workspace-relative candidate draft path
  * @returns The workspace-relative scoped project path
- * @throws When the source does not name a configured source or application environment
+ * @throws When the path does not name a configured source or application environment
  *
  * @example
  * ```ts
@@ -454,12 +454,12 @@ export function parseContentLength(header: string): number | undefined {
  *
  * @example
  * ```ts
- * messageFromUnknown(new Error('The lint stage has been destroyed'))
+ * describeUnknown(new Error('The lint stage has been destroyed'))
  * // 'The lint stage has been destroyed'
- * messageFromUnknown(17) // '17'
+ * describeUnknown(17) // '17'
  * ```
  */
-export function messageFromUnknown(value: unknown): string {
+export function describeUnknown(value: unknown): string {
 	if (value instanceof Error) return value.message
 	if (
 		typeof value === 'object' &&
@@ -541,7 +541,7 @@ export function computeDigest(workspace: string, value: unknown): string {
  *
  * @param emitter - The emitter to read
  * @param events - The event names to record
- * @returns The listeners each named event carries now
+ * @returns The listeners each named event carries at the moment of the call
  *
  * @example
  * ```ts

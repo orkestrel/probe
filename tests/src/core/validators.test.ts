@@ -3,9 +3,9 @@ import type {
 	Check,
 	Claim,
 	Control,
+	Draft,
 	Issue,
 	Project,
-	Source,
 	Toolchain,
 	Verdict,
 } from '@src/core'
@@ -19,8 +19,8 @@ import {
 	isControl,
 	isIssue,
 	isParty,
+	isDraft,
 	isProject,
-	isSource,
 	isStage,
 	isToolchain,
 	isVerdict,
@@ -30,11 +30,11 @@ import { describe, expect, it } from 'vitest'
 
 describe('core guards', () => {
 	it('accepts valid guard values and rejects one-field violations', () => {
-		const source: Source = { path: 'src/core/greeting.ts', text: '' }
-		const subject: Case = { files: [source], test: source }
+		const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
+		const subject: Case = { files: [draft], test: draft }
 		const control: Control = {
-			files: [source],
-			test: source,
+			files: [draft],
+			test: draft,
 			stage: 'type',
 			reason: 'must not compile',
 		}
@@ -43,8 +43,8 @@ describe('core guards', () => {
 		const check: Check = { stage: 'lint', elapsed: 17, issues: [issue] }
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
-			oxlint: '1.78.0',
-			vitest: '4.1.10',
+			oxlint: '1.79.0',
+			vitest: '4.1.11',
 		}
 		const project: Project = {
 			path: 'configs/src/tsconfig.core.json',
@@ -55,17 +55,17 @@ describe('core guards', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain,
 			project,
-			checks: [check],
+			case: [check],
 			control: [check],
 			elapsed: 17,
 		}
 
 		expect(isStage('type')).toBe(true)
 		expect(isStage('compile')).toBe(false)
-		expect(isSource(source)).toBe(true)
-		expect(isSource({ ...source, path: '' })).toBe(false)
+		expect(isDraft(draft)).toBe(true)
+		expect(isDraft({ ...draft, path: '' })).toBe(false)
 		expect(isCase(subject)).toBe(true)
-		expect(isCase({ ...subject, files: 'source' })).toBe(false)
+		expect(isCase({ ...subject, files: 'draft' })).toBe(false)
 		expect(isControl(control)).toBe(true)
 		expect(isControl({ ...control, reason: '' })).toBe(false)
 		expect(isClaim(claim)).toBe(true)
@@ -84,13 +84,13 @@ describe('core guards', () => {
 		expect(isVerdict({ ...verdict, receipt: 1 })).toBe(false)
 	})
 
-	it('admits a contained relative source path and refuses an absolute or escaping one', () => {
-		expect(isSource({ path: 'src/../tests/greeting.test.ts', text: '' })).toBe(true)
-		expect(isSource({ path: '../../etc/hosts', text: '' })).toBe(false)
+	it('admits a contained relative draft path and refuses an absolute or escaping one', () => {
+		expect(isDraft({ path: 'src/../tests/greeting.test.ts', text: '' })).toBe(true)
+		expect(isDraft({ path: '../../etc/hosts', text: '' })).toBe(false)
 		// Both absolute forms, on every host. The rule reads the string rather than the filesystem,
 		// so a Windows drive letter is refused on Linux and a POSIX root is refused on Windows.
-		expect(isSource({ path: '/etc/hosts', text: '' })).toBe(false)
-		expect(isSource({ path: 'C:\\Windows\\System32\\drivers\\etc\\hosts', text: '' })).toBe(false)
+		expect(isDraft({ path: '/etc/hosts', text: '' })).toBe(false)
+		expect(isDraft({ path: 'C:\\Windows\\System32\\drivers\\etc\\hosts', text: '' })).toBe(false)
 	})
 
 	it('admits an issue that names its origin and refuses one that does not', () => {
@@ -109,7 +109,7 @@ describe('core guards', () => {
 				path: 'configs/src/tsconfig.core.json',
 				digest: '3b674fdf121c85efb9ed1bab25ceeec8',
 			},
-			checks: [check],
+			case: [check],
 			control: [check],
 			elapsed: 17,
 		}
@@ -128,11 +128,11 @@ describe('core guards', () => {
 	})
 
 	it('agrees with the compiled claim shape for a named hostile population', () => {
-		const source: Source = { path: 'src/core/greeting.ts', text: '' }
-		const subject: Case = { files: [source], test: source }
+		const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
+		const subject: Case = { files: [draft], test: draft }
 		const control: Control = {
-			files: [source],
-			test: source,
+			files: [draft],
+			test: draft,
 			stage: 'type',
 			reason: 'must not compile',
 		}
@@ -170,11 +170,11 @@ describe('core guards', () => {
 			compiled({ ...claim, extra: true }),
 		)
 		expect(
-			isClaim({ ...claim, case: { ...subject, test: { ...source, path: '' } } }),
+			isClaim({ ...claim, case: { ...subject, test: { ...draft, path: '' } } }),
 			'empty test path',
-		).toBe(compiled({ ...claim, case: { ...subject, test: { ...source, path: '' } } }))
-		expect(isClaim({ ...claim, case: { ...subject, files: 'source' } }), 'files not an array').toBe(
-			compiled({ ...claim, case: { ...subject, files: 'source' } }),
+		).toBe(compiled({ ...claim, case: { ...subject, test: { ...draft, path: '' } } }))
+		expect(isClaim({ ...claim, case: { ...subject, files: 'draft' } }), 'files not an array').toBe(
+			compiled({ ...claim, case: { ...subject, files: 'draft' } }),
 		)
 		expect(isClaim({ ...claim, case: { ...subject, files: [17] } }), 'file entry wrong').toBe(
 			compiled({ ...claim, case: { ...subject, files: [17] } }),
@@ -189,22 +189,22 @@ describe('core guards', () => {
 		}
 	})
 
-	it('refuses a source path the published claim schema admits', () => {
-		const source: Source = { path: 'src/core/greeting.ts', text: '' }
+	it('refuses a draft path the published claim schema admits', () => {
+		const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
 		const control: Control = {
 			files: [],
-			test: source,
+			test: draft,
 			stage: 'type',
 			reason: 'must not compile',
 		}
 		const escaping: Claim = {
 			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ path: '../../etc/hosts', text: '' }], test: source },
+			case: { files: [{ path: '../../etc/hosts', text: '' }], test: draft },
 			control,
 		}
 		const absolute: Claim = {
 			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ path: '/etc/hosts', text: '' }], test: source },
+			case: { files: [{ path: '/etc/hosts', text: '' }], test: draft },
 			control,
 		}
 		const compiled = compileGuard(CLAIM_SHAPE)
@@ -228,7 +228,7 @@ describe('core guards', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
 			project,
-			checks: [check],
+			case: [check],
 			control: [check],
 			elapsed: 17,
 		}

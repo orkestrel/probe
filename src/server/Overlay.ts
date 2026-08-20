@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { normalizePath } from './helpers.js'
 
 /**
- * Holds the candidate sources one inspection substitutes for the files a tool would read from disk.
+ * Holds the candidate drafts one inspection substitutes for the files a tool would read from disk.
  *
  * @remarks
  * One overlay belongs to one inspection: the inspection creates it, records every candidate it

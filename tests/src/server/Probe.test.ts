@@ -1,4 +1,4 @@
-import type { Check, Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
+import type { Check, Claim, Draft, ProbeEventMap, Toolchain, Verdict } from '@src/core'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -92,12 +92,12 @@ const STALLING = [
 	'})',
 ].join('\n')
 
-// Builds one candidate whose type check costs about a second: 100 exclusions applied one after
-// another to a 10,000-member template-literal union, measured at 12.8 ms per exclusion in this
+// Builds one candidate draft whose type check costs about a second: 100 exclusions applied one
+// after another to a 10,000-member template-literal union, measured at 12.8 ms per exclusion in this
 // workspace. Volume is what makes the cost predictable, because the compiler pays per exclusion, so
 // a claim carrying enough of these outruns a deadline by a margin no host's speed closes. The
 // candidate is clean: the work is the point, and a diagnostic would report something else.
-function createHeavySource(index: number): Source {
+function createHeavyDraft(index: number): Draft {
 	const rows = [
 		'type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9',
 		'type Pair = `${Digit}${Digit}`',
@@ -202,7 +202,7 @@ describe.sequential('probe', () => {
 				expect(minted.reason).toBe('the source assigns a string to a number')
 				expect(refused.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
-				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.issues).toEqual([
+				expect(unexecuted.case.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						message: 'Vitest ran no tests in the module',
@@ -242,7 +242,7 @@ describe.sequential('probe', () => {
 				const documented = readDocumentedTimings()
 
 				expect(verdict.elapsed).toBeGreaterThanOrEqual(
-					slowest(verdict.checks) + slowest(verdict.control),
+					slowest(verdict.case) + slowest(verdict.control),
 				)
 				// The same relation applied to the contract's own example, so the documented figure
 				// cannot drift back below the accounting the run above demonstrated.
@@ -323,14 +323,10 @@ describe.sequential('probe', () => {
 						reason: 'the source assigns a string to a number',
 					},
 				})
-				expect(verdict.checks.map((check) => check.stage)).toStrictEqual([
-					'type',
-					'lint',
-					'runtime',
-				])
-				expect(verdict.checks.find((check) => check.stage === 'type')?.issues).toStrictEqual([])
-				expect(verdict.checks.find((check) => check.stage === 'lint')?.issues).toStrictEqual([])
-				expect(verdict.checks.find((check) => check.stage === 'runtime')?.issues).toEqual([
+				expect(verdict.case.map((check) => check.stage)).toStrictEqual(['type', 'lint', 'runtime'])
+				expect(verdict.case.find((check) => check.stage === 'type')?.issues).toStrictEqual([])
+				expect(verdict.case.find((check) => check.stage === 'lint')?.issues).toStrictEqual([])
+				expect(verdict.case.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'workspace',
 						path,
@@ -535,8 +531,8 @@ describe.sequential('probe', () => {
 		// stage hands the host's event loop back between candidates, so the expiry lands at the
 		// first boundary after the deadline rather than after the whole claim: the wait is one
 		// candidate, and the margin is what keeps a faster host from finishing inside the budget.
-		const files: readonly Source[] = Array.from({ length: 30 }, (_unused, index) =>
-			createHeavySource(index),
+		const files: readonly Draft[] = Array.from({ length: 30 }, (_unused, index) =>
+			createHeavyDraft(index),
 		)
 		const heavy: Claim = {
 			project: 'configs/src/tsconfig.core.json',
@@ -574,7 +570,7 @@ describe.sequential('probe', () => {
 				},
 			})
 			expect(served.receipt).toBeTypeOf('string')
-			expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
+			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
 		}
@@ -661,12 +657,12 @@ describe.sequential('probe', () => {
 					reason: 'this control is deliberately clean',
 				},
 			})
-			expect(served.checks.map((check) => check.stage).sort()).toStrictEqual([
+			expect(served.case.map((check) => check.stage).sort()).toStrictEqual([
 				'lint',
 				'runtime',
 				'type',
 			])
-			expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
+			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
 			scratch.destroy()
@@ -741,12 +737,12 @@ describe.sequential('probe', () => {
 				// before the repair landed.
 				const served = await probe.prove(claim)
 				expect(armings.count).toBe(1)
-				expect(served.checks.map((check) => check.stage).sort()).toStrictEqual([
+				expect(served.case.map((check) => check.stage).sort()).toStrictEqual([
 					'lint',
 					'runtime',
 					'type',
 				])
-				expect(served.checks.flatMap((check) => check.issues)).toStrictEqual([])
+				expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 			} finally {
 				await probe.destroy()
 				scratch.destroy()
@@ -854,7 +850,7 @@ describe.sequential('probe', () => {
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			try {
 				const verdict = await probe.prove(claim)
-				expect(verdict.checks.flatMap((check) => check.issues)).toEqual([
+				expect(verdict.case.flatMap((check) => check.issues)).toEqual([
 					expect.objectContaining({ origin: 'workspace', path: claim.case.test.path }),
 				])
 				expect(verdict.receipt).toBeUndefined()
@@ -1106,7 +1102,7 @@ describe.sequential('probe', () => {
 				const lines = (scratch.read('probe-lint.log') ?? '')
 					.split('\n')
 					.filter((line) => line.startsWith('open '))
-				// Each inspection opens its candidate source and then its test.
+				// Each inspection opens its candidate draft and then its test.
 				expect(lines).toHaveLength(8)
 				expect(lines.map((line) => line.split(' ')[1])).toStrictEqual(Array(8).fill('1'))
 				expect(
@@ -1114,7 +1110,7 @@ describe.sequential('probe', () => {
 						.filter((line) => line.includes('/src/'))
 						.map((line) => (line.includes('/src/core/') ? 'first' : 'second')),
 				).toStrictEqual(['first', 'second', 'first', 'second'])
-				expect(verdict.map((answer) => answer.checks.map((check) => check.stage).sort())).toEqual([
+				expect(verdict.map((answer) => answer.case.map((check) => check.stage).sort())).toEqual([
 					['lint', 'runtime', 'type'],
 					['lint', 'runtime', 'type'],
 				])
@@ -1245,7 +1241,7 @@ describe.sequential('probe', () => {
 				// workspace's own project reports the candidate and issues nothing, so a policy
 				// comparing the token's project field refuses what a token without one admitted.
 				expect(workspace.receipt).toBeUndefined()
-				expect(workspace.checks.flatMap((check) => check.issues)).toEqual([
+				expect(workspace.case.flatMap((check) => check.issues)).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: `src/core/probe-forgery-${id}.ts`,

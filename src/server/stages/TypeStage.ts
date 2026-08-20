@@ -1,4 +1,4 @@
-import type { Case, Check, Issue, Project, Source, Stage } from '@src/core'
+import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
 import type { OverlayInterface, TypeStageInterface } from '../types.js'
 import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
@@ -20,7 +20,7 @@ import { Overlay } from '../Overlay.js'
  *
  * @remarks
  * Construction starts loading the workspace's compiler and warming one service per project the
- * workspace declares. A candidate source file is checked against the project a call names, or
+ * workspace declares. A candidate draft is checked against the project a call names, or
  * against its own scoped environment project when a call names none, while the test uses the root
  * project. Disk snapshots use their modification time as the service version so dependency edits
  * cannot leave a warm answer stale. Candidate text lives in an overlay the inspection owns, and
@@ -84,8 +84,8 @@ export class TypeStage implements TypeStageInterface {
 	 * stages read no project, so `StageInterface` declares one parameter and every caller that
 	 * needs this one holds a `TypeStage`.
 	 *
-	 * @param subject - The candidate sources and test to inspect
-	 * @param project - The workspace-relative TypeScript project the candidate sources are checked
+	 * @param subject - The candidate drafts and test to inspect
+	 * @param project - The workspace-relative TypeScript project the candidate drafts are checked
 	 * against. Default: the scoped project each candidate path infers
 	 * @returns One outcome for this stage
 	 * @throws When the resident compiler cannot start or the stage has already been destroyed
@@ -95,12 +95,12 @@ export class TypeStage implements TypeStageInterface {
 		const started = performance.now()
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw createDestroyedError('type stage')
-		const resolved = subject.files.map((source) => ({
-			source,
-			path: resolveWorkspaceFile(this.#workspace, source.path),
+		const resolved = subject.files.map((draft) => ({
+			draft,
+			path: resolveWorkspaceFile(this.#workspace, draft.path),
 		}))
 		const selections = resolved.map((candidate) => ({
-			source: candidate.source,
+			draft: candidate.draft,
 			project: project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, candidate.path)),
 		}))
 		this.#configure(this.#service(typescript, 'tsconfig.json'), 'tsconfig.json')
@@ -108,14 +108,14 @@ export class TypeStage implements TypeStageInterface {
 			this.#configure(this.#service(typescript, selection.project), selection.project)
 		}
 		// Each inspection owns its candidate set and reads it through its own reference, so the
-		// clear below releases what this inspection recorded and nothing else. The resident
+		// clear that follows releases what this inspection recorded and nothing else. The resident
 		// services read whichever overlay is installed, so a caller admits one inspection at a
 		// time the way `Probe` does.
 		const overlay = new Overlay()
 		this.#overlay = overlay
 		try {
 			this.#record(subject.test, overlay)
-			for (const source of subject.files) this.#record(source, overlay)
+			for (const draft of subject.files) this.#record(draft, overlay)
 			this.#progress += 1
 			const issues: Issue[] = []
 			const projects = new Set<string>()
@@ -124,14 +124,14 @@ export class TypeStage implements TypeStageInterface {
 			projects.add('tsconfig.json')
 			await this.#unblock()
 			for (const selection of selections) {
-				const source = selection.source
+				const draft = selection.draft
 				const selected = selection.project
 				const service = this.#service(typescript, selected)
 				issues.push(
 					...this.#issues(
 						typescript,
 						service,
-						source,
+						draft,
 						selected,
 						project !== undefined,
 						!projects.has(selected),
@@ -238,8 +238,8 @@ export class TypeStage implements TypeStageInterface {
 	// Resolution happens here rather than in the overlay, because the workspace a candidate's
 	// declared path is relative to is the stage's knowledge. A path that escapes the workspace
 	// throws before the overlay records it, and the inspection's clear releases the rest.
-	#record(source: Source, overlay: OverlayInterface): void {
-		overlay.set(resolveWorkspaceFile(this.#workspace, source.path), source.text)
+	#record(draft: Draft, overlay: OverlayInterface): void {
+		overlay.set(resolveWorkspaceFile(this.#workspace, draft.path), draft.text)
 	}
 
 	// Keyed by the resolved project file rather than by the caller's spelling of it, so
@@ -340,12 +340,12 @@ export class TypeStage implements TypeStageInterface {
 	#issues(
 		typescript: typeof TypeScript,
 		service: LanguageService,
-		source: Source,
+		draft: Draft,
 		project: string,
 		selected: boolean,
 		configure: boolean,
 	): readonly Issue[] {
-		const path = resolveWorkspaceFile(this.#workspace, source.path)
+		const path = resolveWorkspaceFile(this.#workspace, draft.path)
 		const configuration = resolveWorkspaceFile(this.#workspace, project)
 		const diagnostics = [
 			...(configure ? (this.#diagnostics.get(configuration) ?? []) : []),

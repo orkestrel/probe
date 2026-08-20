@@ -1,18 +1,17 @@
-import type { Stage } from './types.js'
-
 /**
  * The stages a claim passes through, in the order a verdict reports them.
  *
  * @remarks
- * One list feeds the wire shape, the stage guard, and the receipt computation, so a stage cannot
- * be admitted by one and refused by another.
+ * One list feeds the `Stage` type, the wire shape, the stage guard, and the receipt computation, so
+ * a stage cannot be admitted by one and refused by another. The type derives from this list rather
+ * than standing beside it, so a stage the list omits is a stage no member of the union names.
  *
  * @example
  * ```ts
  * PROBE_STAGES // ['type', 'lint', 'runtime']
  * ```
  */
-export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'runtime'])
+export const PROBE_STAGES = Object.freeze(['type', 'lint', 'runtime'] as const)
 
 /**
  * The parties that can own action on an issue or probe failure.
@@ -23,10 +22,10 @@ export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'ru
  *
  * @example
  * ```ts
- * PARTIES // ['claimant', 'workspace', 'instrument']
+ * PROBE_PARTIES // ['claimant', 'workspace', 'instrument']
  * ```
  */
-export const PARTIES = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
+export const PROBE_PARTIES = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
 
 /**
  * The conditions that can end a probe operation.

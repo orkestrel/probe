@@ -175,7 +175,7 @@ export class ProbeServer implements ProbeServerInterface {
 						throw new ProbeError(
 							refused.length === 0
 								? 'The prove tool requires a claim matching the advertised schema'
-								: `The prove tool refuses ${refused.join(', ')}: a source path must stay inside the workspace, which the advertised schema does not constrain`,
+								: `The prove tool refuses ${refused.join(', ')}: a draft path must stay inside the workspace, which the advertised schema does not constrain`,
 							{
 								origin: 'claimant',
 								code: 'refused',

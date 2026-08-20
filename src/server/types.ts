@@ -14,14 +14,14 @@ import type { Case, Check, Claim, Project, Stage } from '@src/core'
  * ```
  */
 export interface Inspection {
-	/** The candidate sources and test one stage inspects. */
+	/** The candidate drafts and test one stage inspects. */
 	readonly subject: Case
 	/** The claim the subject belongs to. */
 	readonly claim: Claim
 }
 
 /**
- * Holds the candidate sources one inspection substitutes for the files a tool would read from disk.
+ * Holds the candidate drafts one inspection substitutes for the files a tool would read from disk.
  *
  * @remarks
  * A stage records every candidate the inspection carries before it reads any of them, and clears
@@ -122,7 +122,7 @@ export interface StageInterface {
 	/**
 	 * Inspects one case.
 	 *
-	 * @param subject - The candidate sources and test to inspect
+	 * @param subject - The candidate drafts and test to inspect
 	 * @returns One outcome for this stage
 	 * @throws When the resident tool cannot start or has already been destroyed
 	 */
@@ -135,8 +135,8 @@ export interface StageInterface {
 	 * waits for an inspection to return. An abandoned inspection rejects, either at the stage's own
 	 * guard or as the owned tool closes. Teardown is bounded whatever the resident tool does: a tool
 	 * that answers neither its warming exchange nor its ending is signalled and released at the
-	 * stage's own deadline. The coordinator depends on both guarantees to replace a stage whose
-	 * worker no longer returns.
+	 * stage's own deadline. A coordinator replaces a stage whose worker no longer returns because
+	 * teardown neither waits for an inspection nor waits past that deadline.
 	 *
 	 * @returns A promise that settles after the resident tool releases its resources
 	 */
@@ -161,8 +161,8 @@ export interface TypeStageInterface extends StageInterface {
 	/**
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
-	 * @param subject - The candidate sources and test to inspect
-	 * @param project - The workspace-relative TypeScript project the candidate sources are checked
+	 * @param subject - The candidate drafts and test to inspect
+	 * @param project - The workspace-relative TypeScript project the candidate drafts are checked
 	 * against. Default: the scoped project each candidate path infers
 	 * @returns One outcome for this stage
 	 * @throws When the resident compiler cannot start or the stage has already been destroyed

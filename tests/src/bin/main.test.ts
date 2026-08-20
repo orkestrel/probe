@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { createMCPClient } from '@orkestrel/mcp'
+import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
@@ -323,6 +325,64 @@ describe('bin entry', () => {
 			}
 		},
 	)
+
+	// A foreign client, not this file's own line writer: `@orkestrel/mcp`'s stdio client spawns the
+	// shipped entry, negotiates the era, and correlates the reply itself. What it hands back is the
+	// reply shape § Registering the server documents — one rendered text block whose closing line
+	// carries the receipt — read through a client that knows nothing about this package.
+	it('answers a driven third-party client with one text block', { timeout: 120_000 }, async () => {
+		const claim = {
+			project: 'configs/src/tsconfig.core.json',
+			case: {
+				files: [{ path: 'src/core/client.ts', text: "export const VALUE = 'ok'\n" }],
+				test: {
+					path: 'tmp/probe/bin/client-runtime.test.ts',
+					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+				},
+			},
+			control: {
+				files: [{ path: 'src/core/client.ts', text: "export const VALUE: number = 'bad'\n" }],
+				test: {
+					path: 'tmp/probe/bin/client-runtime.test.ts',
+					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+				},
+				stage: 'type',
+				reason: 'the source assigns a string to a number',
+			},
+		}
+		const directory = resolve(ROOT, 'tmp/probe/bin')
+		mkdirSync(directory, { recursive: true })
+		const client = createMCPClient({
+			transport: createStdioClientTransport({
+				command: process.execPath,
+				args: [BUILT_ENTRY],
+			}),
+			identity: { name: 'probe-foreign-client', version: '1.0.0' },
+			// Well above the client's own default, because the first call waits on arming and this
+			// deadline is here to catch a hang rather than to grade the host.
+			timeout: 300_000,
+		})
+		try {
+			await client.connect()
+			expect(client.connected).toBe(true)
+			expect(client.version).toBeDefined()
+			expect((await client.tools()).map((tool) => tool.name)).toStrictEqual(['prove'])
+			const outcome = await client.call('prove', claim)
+			expect(outcome.resultType).toBe('complete')
+			if (outcome.resultType !== 'complete') return
+			// A string rather than a record: the tool answers with rendered text, so a client holding
+			// the reply holds `formatVerdict`'s output and not the `Verdict` the process built.
+			expect(typeof outcome.value).toBe('string')
+			const text = String(outcome.value)
+			expect(text.startsWith('probe ')).toBe(true)
+			expect(text.trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
+		} finally {
+			await client.disconnect()
+			try {
+				rmdirSync(directory)
+			} catch {}
+		}
+	})
 
 	it('preserves worker diagnostics on stderr', { timeout: 60_000 }, async () => {
 		const modern = {

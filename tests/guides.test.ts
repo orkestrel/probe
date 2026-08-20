@@ -329,7 +329,7 @@ describe('guides fences', () => {
 		expect(constants).toContain("`['type', 'lint', 'runtime']`")
 		expect(PROBE_STAGES).toStrictEqual(['type', 'lint', 'runtime'])
 		expect(constants).toContain("`['claimant', 'workspace', 'instrument']`")
-		expect(core.PARTIES).toStrictEqual(['claimant', 'workspace', 'instrument'])
+		expect(core.PROBE_PARTIES).toStrictEqual(['claimant', 'workspace', 'instrument'])
 		expect(constants).toContain("`'probe'`")
 		expect(RECEIPT_PREFIX).toBe('probe')
 		expect(constants).toContain("`':'`")
@@ -344,7 +344,7 @@ describe('guides fences', () => {
 		expect(rows.length).toBeGreaterThan(0)
 		const parties = new Set(rows.map((row) => row[1] ?? ''))
 		const codes = new Set(rows.map((row) => row[2] ?? ''))
-		expect([...parties].sort()).toStrictEqual([...core.PARTIES].sort())
+		expect([...parties].sort()).toStrictEqual([...core.PROBE_PARTIES].sort())
 		expect([...codes].sort()).toStrictEqual([...core.PROBE_ERROR_CODES].sort())
 	})
 
