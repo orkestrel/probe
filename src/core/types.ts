@@ -154,13 +154,20 @@ export type FindingOrigin = 'code' | 'instrument'
  *
  * @remarks
  * The stage is not repeated here. A finding always arrives inside the `Check` that names its
- * stage, so a second copy could only drift from the first. `line` is absent when the tool
- * reported no line, which happens for a whole-file diagnostic and for a runtime failure.
+ * stage, so a second copy could only drift from the first.
  *
- * `origin` decides what the other two members mean. A `code` finding carries the tool's own
- * message, unedited, against the path the tool reported. An `instrument` finding carries the
- * stage's own message, in the stage's own voice, against the path the stage could not inspect, so
+ * `origin` decides what `message` means. A `code` finding carries the tool's own message,
+ * unedited. An `instrument` finding carries the stage's own message, in the stage's own voice, so
  * a reader is never told a tool said something it never said.
+ *
+ * `path` is the workspace-relative path a reader can open, which is not always the path the tool
+ * named. Each stage maps its tool's own spelling back: the type stage from the compiler's absolute
+ * path, the lint stage from the document URI it opened, and the runtime stage from the generated
+ * specification it wrote to the test path the case declared.
+ *
+ * `line` is absent when the stage's tool reported no line, which happens for a whole-file
+ * diagnostic. A runtime failure is not one of those: a failure Vitest reported at a stack frame
+ * carries that frame's line.
  *
  * @example
  * ```ts
@@ -292,7 +299,7 @@ export interface Project {
  * 		{ stage: 'lint', elapsed: 16, findings: [] },
  * 		{ stage: 'runtime', elapsed: 254, findings: [] },
  * 	],
- * 	elapsed: 337,
+ * 	elapsed: 549,
  * 	receipt:
  * 		'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
  * }
@@ -347,13 +354,13 @@ export type ProbeEventMap = {
  *
  * @remarks
  * `workspace` is the target root whose installed `typescript`, `oxlint`, and `vitest` the stages
- * resolve, and whose modification times the revalidation sweep reads. Default: the current
- * working directory. `deadline` is the coordinator's milliseconds budget for one active stage
- * inspection. Queue wait is not charged to that inspection; the inspections and runtime recoveries
- * ahead of it carry their own bounds. The runtime deadline lives outside the worker because a test
- * timeout expressed in worker configuration cannot fire while that worker spins. One runtime
- * inspection in every 64 also pays the resident runner's replacement, so budget `deadline` against
- * that inspection rather than the common one.
+ * resolve, and whose files each stage re-reads before it answers. Default: the current working
+ * directory. `deadline` is the coordinator's milliseconds budget for one active stage inspection.
+ * Queue wait is not charged to that inspection; the inspections and runtime recoveries ahead of it
+ * carry their own bounds. The runtime deadline lives outside the worker because a test timeout
+ * expressed in worker configuration cannot fire while that worker spins. One runtime inspection in
+ * every 64 also pays the resident runner's replacement, so budget `deadline` against that
+ * inspection rather than the common one.
  *
  * @example
  * ```ts
@@ -376,9 +383,12 @@ export interface ProbeOptions {
  *
  * @remarks
  * Warming begins at construction and `prove` awaits it, so there is no `start`: the harness owns
- * the process and a restart is a new process rather than a second lifecycle. `prove` revalidates
- * every workspace file whose modification time moved before it answers, because a warm service
- * otherwise returns a confident wrong answer about freshly edited source.
+ * the process and a restart is a new process rather than a second lifecycle.
+ *
+ * `prove` re-reads the target workspace before it answers, so a file edited since the last call is
+ * judged as it now stands rather than as a warm service remembers it. The two resident readers key
+ * that sweep differently: the runtime stage compares each workspace module's contents, and the type
+ * stage versions a disk file by its modification time.
  *
  * @example
  * ```ts

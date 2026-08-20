@@ -21,6 +21,7 @@ describe('src server entry', () => {
 			'loadWorkspaceModule',
 			'matchesWorkspaceModule',
 			'messageFromUnknown',
+			'normalizePath',
 			'normalizeValue',
 			'parseContentLength',
 			'readWorkspaceManifest',

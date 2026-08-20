@@ -1,5 +1,15 @@
 import type { Check, Verdict } from '@src/core'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	utimesSync,
+	writeFileSync,
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { relative, resolve } from 'node:path'
@@ -66,12 +76,57 @@ describe('runtime stage', () => {
 				})
 				expect(passing.findings).toStrictEqual([])
 				expect(failing.findings.length).toBeGreaterThan(0)
+				// Vitest reported the generated specification, at the frame inside it. The finding names
+				// the test path the case declared and keeps that frame's line, so a runtime failure whose
+				// stack carries a frame arrives with `line` set.
 				expect(failing.findings[0]).toMatchObject({
 					origin: 'code',
 					path: 'tmp/probe/runtime-failing.test.ts',
+					line: expect.any(Number),
 				})
 			} finally {
 				await stage.destroy()
+			}
+		},
+	)
+
+	it(
+		'names the declared test path when the workspace is reached through a symbolic link',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-runtime-symlink-' })
+			scratch.write('real/package.json', '{"type":"module"}\n')
+			scratch.link('real/node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'real/vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('real/tmp/probe/.keep', '')
+			// The stage is handed the link rather than its target, which is what a consumer running
+			// under a symlinked checkout supplies. Vitest reports every stack frame at the real path,
+			// so the generated specification only maps back to the declared test path when both sides
+			// are compared through their real form.
+			const alias = resolve(scratch.path, 'alias')
+			symlinkSync(resolve(scratch.path, 'real'), alias, 'dir')
+			const stage = new RuntimeStage(alias)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/symlinked.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
+					},
+				})
+
+				expect(check.findings).toHaveLength(1)
+				expect(check.findings[0]).toMatchObject({
+					origin: 'code',
+					path: 'tmp/probe/symlinked.test.ts',
+					line: expect.any(Number),
+				})
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
 			}
 		},
 	)
@@ -262,6 +317,45 @@ describe('runtime stage', () => {
 				const before = await stage.inspect(subject)
 				writeFileSync(dependency, "export const SIGNAL = 'after'\n", 'utf8')
 				const after = await stage.inspect(subject)
+				expect(before.findings).toStrictEqual([])
+				expect(after.findings.length).toBeGreaterThan(0)
+			} finally {
+				await stage.destroy()
+				rmSync(dependency, { force: true })
+			}
+		},
+	)
+
+	it(
+		'revalidates a dependency whose contents changed under an unchanged modification time',
+		{ timeout: 60_000 },
+		async () => {
+			const id = randomUUID()
+			const dependency = resolve(ROOT, `tmp/probe/runtime-content-${id}.ts`)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			// One fixed instant, written back after each edit, so both inspections read the same
+			// modification time to the millisecond. A sweep keyed on that time has nothing to
+			// invalidate at the second inspection and reports the stale pass; a sweep keyed on the
+			// file's contents sees the new bytes.
+			const stamp = new Date(Date.now() - 60_000)
+			writeFileSync(dependency, "export const SIGNAL = 'before'\n", 'utf8')
+			utimesSync(dependency, stamp, stamp)
+			const stale = statSync(dependency).mtimeMs
+			const stage = new RuntimeStage(ROOT)
+			const subject = {
+				files: [],
+				test: {
+					path: `tmp/probe/runtime-content-${id}.test.ts`,
+					text: `import { SIGNAL } from './runtime-content-${id}.js'\nimport { expect, test } from 'vitest'\ntest('reads the dependency', () => expect(SIGNAL).toBe('before'))\n`,
+				},
+			}
+			try {
+				const before = await stage.inspect(subject)
+				writeFileSync(dependency, "export const SIGNAL = 'after'\n", 'utf8')
+				utimesSync(dependency, stamp, stamp)
+				const after = await stage.inspect(subject)
+
+				expect(statSync(dependency).mtimeMs).toBe(stale)
 				expect(before.findings).toStrictEqual([])
 				expect(after.findings.length).toBeGreaterThan(0)
 			} finally {

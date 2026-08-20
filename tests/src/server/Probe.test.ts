@@ -1,5 +1,5 @@
-import type { Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import type { Check, Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -110,6 +110,23 @@ function createHeavySource(index: number): Source {
 	return { path: `src/core/probe-heavy-${index}.ts`, text: `${rows.join('\n')}\n` }
 }
 
+// The seven timings the `Verdict` contract's own `@example` states, in the order the block writes
+// them: three case stages, three control stages, then the whole call. `prove` runs the case through
+// its stages and only then the control through its own, so an example whose call is faster than the
+// slowest stage of each phase together describes an accounting this coordinator does not have.
+function readDocumentedTimings(): readonly number[] {
+	const contract = readFileSync(resolve(ROOT, 'src/core/types.ts'), 'utf8')
+	const start = contract.indexOf('const verdict: Verdict = {')
+	const end = contract.indexOf('export interface Verdict', start)
+	return [...contract.slice(start, end).matchAll(/elapsed: (\d+)/g)].map((match) =>
+		Number(match[1]),
+	)
+}
+
+function slowest(checks: readonly Check[]): number {
+	return Math.max(...checks.map((check) => check.elapsed))
+}
+
 describe.sequential('probe', () => {
 	it(
 		'issues receipts only when every stage executes cleanly and returns admitted path findings',
@@ -190,6 +207,48 @@ describe.sequential('probe', () => {
 						message: 'The runtime stage found no configured Vitest project matching the test path',
 					}),
 				])
+			} finally {
+				await probe.destroy()
+			}
+		},
+	)
+
+	it(
+		'accounts one verdict for the two phases it ran in sequence',
+		{ timeout: 60_000 },
+		async () => {
+			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			const test = {
+				path: 'tmp/probe/probe-elapsed.test.ts',
+				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+			}
+			try {
+				const verdict = await probe.prove({
+					project: 'configs/src/tsconfig.core.json',
+					case: {
+						files: [{ path: 'src/core/probe-elapsed.ts', text: "export const VALUE = 'ok'\n" }],
+						test,
+					},
+					control: {
+						files: [
+							{ path: 'src/core/probe-elapsed.ts', text: "export const VALUE: number = 'bad'\n" },
+						],
+						test,
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				})
+				const documented = readDocumentedTimings()
+
+				expect(verdict.elapsed).toBeGreaterThanOrEqual(
+					slowest(verdict.checks) + slowest(verdict.control),
+				)
+				// The same relation applied to the contract's own example, so the documented figure
+				// cannot drift back below the accounting the run above just demonstrated.
+				expect(documented).toHaveLength(7)
+				expect(documented[6]).toBeGreaterThanOrEqual(
+					Math.max(...documented.slice(0, 3)) + Math.max(...documented.slice(3, 6)),
+				)
 			} finally {
 				await probe.destroy()
 			}

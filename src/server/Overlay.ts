@@ -1,5 +1,6 @@
 import type { OverlayInterface } from './types.js'
 import { randomUUID } from 'node:crypto'
+import { normalizePath } from './helpers.js'
 
 /**
  * Holds the candidate sources one inspection substitutes for the files a tool would read from disk.
@@ -39,7 +40,7 @@ export class Overlay implements OverlayInterface {
 	 * @returns Nothing
 	 */
 	set(path: string, text: string): void {
-		this.#candidates.set(path.replaceAll('\\', '/'), text)
+		this.#candidates.set(normalizePath(path), text)
 	}
 
 	/**
@@ -49,7 +50,7 @@ export class Overlay implements OverlayInterface {
 	 * @returns The recorded text, or `undefined` when this overlay holds no candidate there
 	 */
 	text(path: string): string | undefined {
-		return this.#candidates.get(path.replaceAll('\\', '/'))
+		return this.#candidates.get(normalizePath(path))
 	}
 
 	/**
@@ -57,15 +58,15 @@ export class Overlay implements OverlayInterface {
 	 *
 	 * @remarks
 	 * The answer is derived from the paths the overlay holds rather than stored, so it stops being
-	 * true exactly when the inspection that declared those candidates clears them. Both sides are
-	 * compared on forward slashes, because a tool that normalizes its own paths asks about a
+	 * true exactly when the inspection that declared those candidates clears them. Both sides pass
+	 * through `normalizePath` first, because a tool that normalizes its own paths asks about a
 	 * directory in a spelling the recorded path may not share.
 	 *
 	 * @param directory - The absolute directory path to check
 	 * @returns True if a candidate path sits beneath the directory; false otherwise
 	 */
 	covers(directory: string): boolean {
-		const base = `${directory.replaceAll('\\', '/').replace(/\/+$/, '')}/`
+		const base = `${normalizePath(directory).replace(/\/+$/, '')}/`
 		for (const path of this.#candidates.keys()) {
 			if (path.startsWith(base)) return true
 		}

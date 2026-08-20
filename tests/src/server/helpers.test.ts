@@ -10,6 +10,7 @@ import {
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	messageFromUnknown,
+	normalizePath,
 	normalizeValue,
 	parseContentLength,
 	readWorkspaceManifest,
@@ -22,12 +23,14 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
-// Every `@example` block the eleven documented server helpers carry, run verbatim and asserted
-// against the value each block states. An illustrative `/srv/checkout` root stands for the
-// workspace under test, so a documented value carrying a path is composed the same way the block
-// composes it rather than pinned to one host's separator.
+// Every `@example` block the documented server helpers carry, run verbatim and asserted against
+// the value each block states. An illustrative `/srv/checkout` root stands for the workspace under
+// test, so a documented value carrying a path is composed the same way the block composes it rather
+// than pinned to one host's separator.
 describe('server helper examples', () => {
 	it('returns the documented value for every documented server-helper example', () => {
+		expect(normalizePath('src\\core\\greeting.ts')).toBe('src/core/greeting.ts')
+		expect(normalizePath('src/core/greeting.ts')).toBe('src/core/greeting.ts')
 		expect(resolveWorkspaceFile(ROOT, 'src/core/greeting.ts')).toBe(
 			resolve(ROOT, 'src/core/greeting.ts'),
 		)
@@ -101,6 +104,28 @@ describe('server project inferers', () => {
 })
 
 describe('server path helpers', () => {
+	// One helper, two callers. `Overlay` keys its candidates through it and matches a directory
+	// prefix through it, and the runtime stage keys the Vitest result cache through it, so a
+	// backslash spelling and a forward-slash spelling of one path can never miss each other.
+	it('rewrites every backslash and leaves an already-normalized path alone', () => {
+		expect(normalizePath('C:\\workspace\\src\\value.ts')).toBe('C:/workspace/src/value.ts')
+		expect(normalizePath('tmp/probe/value.test.ts')).toBe('tmp/probe/value.test.ts')
+		expect(normalizePath('mixed\\path/value.ts')).toBe('mixed/path/value.ts')
+		expect(normalizePath('')).toBe('')
+		expect(normalizePath('\\\\server\\share\\value.ts')).toBe('//server/share/value.ts')
+	})
+
+	// The leaves that each carried their own copy of this rewrite before it was promoted, asserted
+	// against the literal a caller reads rather than against a second call to the shared helper.
+	it('reports one spelling for a path a caller declares with backslashes', () => {
+		expect(inferTypeProject('src\\core\\value.ts')).toBe('configs/src/tsconfig.core.json')
+		expect(inferTestProject('tests\\src\\server\\value.test.ts')).toBe('src:server')
+		expect(relativeWorkspaceFile(ROOT, resolve(ROOT, 'src/core/value.ts'))).toBe(
+			'src/core/value.ts',
+		)
+		expect(normalizeValue(ROOT, resolve(ROOT, 'src/core/value.ts'))).toBe('src/core/value.ts')
+	})
+
 	it('creates sibling revision paths with and without extensions', () => {
 		expect(createRevisionFile(ROOT, 'tmp/probe/value.test.ts', 'revision')).toBe(
 			resolve(ROOT, 'tmp/probe/value.test.probe-revision.ts'),

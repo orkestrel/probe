@@ -22,18 +22,24 @@ const TOKEN =
 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
 
 describe('core formatting helpers', () => {
+	// The two findings `formatFinding` documents, transcribed as the typed literals the contract
+	// requires. `origin` is required on `Finding`, so a documented call that omitted it would fail
+	// this file's typecheck before any assertion ran.
 	it('renders findings with and without a line', () => {
-		expect(
-			formatFinding({
-				origin: 'code',
-				path: 'src/core/greeting.ts',
-				message: 'not assignable',
-				line: 3,
-			}),
-		).toBe('src/core/greeting.ts:3 not assignable')
-		expect(
-			formatFinding({ origin: 'code', path: 'src/core/greeting.ts', message: 'not assignable' }),
-		).toBe('src/core/greeting.ts not assignable')
+		const located: Finding = {
+			origin: 'code',
+			path: 'src/core/greeting.ts',
+			message: 'not assignable',
+			line: 1,
+		}
+		const whole: Finding = {
+			origin: 'code',
+			path: 'src/core/greeting.ts',
+			message: 'not assignable',
+		}
+
+		expect(formatFinding(located)).toBe('src/core/greeting.ts:1 not assignable')
+		expect(formatFinding(whole)).toBe('src/core/greeting.ts not assignable')
 	})
 
 	it('renders zero, one, and multiple findings with correct summaries and order', () => {

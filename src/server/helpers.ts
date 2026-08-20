@@ -8,6 +8,27 @@ import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isArray, isRecord } from '@orkestrel/contract'
 
 /**
+ * Rewrites one path into the forward-slash spelling this package compares and reports paths in.
+ *
+ * @remarks
+ * Windows reports a path with backslashes and accepts either separator, so two spellings of one
+ * file compare unequal until they are rewritten. Every path this package keys a map on, matches a
+ * prefix against, or hands a caller passes through here first.
+ *
+ * @param path - The path to rewrite
+ * @returns The same path with every backslash replaced by a forward slash
+ *
+ * @example
+ * ```ts
+ * normalizePath('src\\core\\greeting.ts') // 'src/core/greeting.ts'
+ * normalizePath('src/core/greeting.ts') // 'src/core/greeting.ts'
+ * ```
+ */
+export function normalizePath(path: string): string {
+	return path.replaceAll('\\', '/')
+}
+
+/**
  * Resolves a path inside a target workspace and rejects traversal outside it.
  *
  * @param workspace - The target workspace root
@@ -47,7 +68,7 @@ export function resolveWorkspaceFile(workspace: string, target: string): string 
  * ```
  */
 export function relativeWorkspaceFile(workspace: string, file: string): string {
-	return relative(resolve(workspace), resolve(file)).replaceAll('\\', '/')
+	return normalizePath(relative(resolve(workspace), resolve(file)))
 }
 
 /**
@@ -164,7 +185,7 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
  * ```
  */
 export function inferTypeProject(path: string): string {
-	const [axis, environment] = path.replaceAll('\\', '/').split('/')
+	const [axis, environment] = normalizePath(path).split('/')
 	if ((axis !== 'src' && axis !== 'app') || environment === undefined || environment === '') {
 		throw new Error(`Cannot infer a scoped TypeScript project for ${path}`)
 	}
@@ -174,8 +195,13 @@ export function inferTypeProject(path: string): string {
 /**
  * Selects the Vitest project whose environment matches one test path.
  *
+ * @remarks
+ * There is no root-project fallback. A path no configured project collects returns `undefined`,
+ * and the runtime stage reports that as an `origin: 'instrument'` finding rather than running the
+ * test somewhere the workspace never configured.
+ *
  * @param path - The workspace-relative test path
- * @returns The project name, or `undefined` for the root project
+ * @returns The matching project's name, or `undefined` when no configured project collects the path
  *
  * @example
  * ```ts
@@ -185,7 +211,7 @@ export function inferTypeProject(path: string): string {
  * ```
  */
 export function inferTestProject(path: string): string | undefined {
-	const [root, axis, environment] = path.replaceAll('\\', '/').split('/')
+	const [root, axis, environment] = normalizePath(path).split('/')
 	if (root === 'tmp' && axis === 'probe') return 'probe'
 	if (root !== 'tests' || axis === undefined || environment === undefined) return undefined
 	if (axis !== 'src' && axis !== 'app') return undefined
@@ -327,7 +353,7 @@ export function normalizeValue(workspace: string, value: unknown): unknown {
 		const path = relative(root, resolve(value))
 		if (path === '') return '.'
 		if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) return value
-		return path.replaceAll('\\', '/')
+		return normalizePath(path)
 	}
 	if (isArray(value)) return value.map((entry) => normalizeValue(workspace, entry))
 	if (isRecord(value)) {

@@ -8,7 +8,14 @@ import type {
 } from 'vitest/config'
 import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/node'
 import type { Dirent } from 'node:fs'
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+	existsSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	unlinkSync,
+	writeFileSync,
+} from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -20,6 +27,7 @@ import {
 	loadWorkspaceModule,
 	messageFromUnknown,
 	matchesWorkspaceModule,
+	normalizePath,
 	relativeWorkspaceFile,
 	resolveWorkspaceFile,
 } from '../helpers.js'
@@ -41,10 +49,10 @@ import { Overlay } from '../Overlay.js'
  * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
  * bound holds the retention flat, because the replacement releases everything the instance held,
  * and 64 is the value chosen. The inspection that crosses the bound pays the replacement
- * synchronously: it closes the resident service and warms a new one before it runs. That inspection
- * cost 466 ms and 498 ms over this package's own workspace on two runs of 66 inspections whose
- * median inspection cost 206 ms and 215 ms, so budget one call in 64 at 260 ms to 285 ms above the
- * rest.
+ * synchronously: it closes the resident service and warms a new one before it runs. On 2026-08-20,
+ * over this package's own workspace on the host `guides/probe.md` § Cost names, two runs of 66
+ * inspections put that one at 480 ms and 269 ms against median inspections of 156 ms and 155 ms, so
+ * budget one call in 64 at 110 ms to 330 ms above the rest.
  *
  * Only a failure Vitest reported about the candidate carries `origin: 'code'`. Everything the
  * stage raises about its own machinery — a project it could not select, a specification it could
@@ -379,7 +387,7 @@ export class RuntimeStage implements StageInterface {
 			}
 			vitest.watcher.onFileDelete(file)
 			vitest.watcher.invalidates.delete(file)
-			vitest.cache.results.removeFromCache(relative(this.#workspace, file).replaceAll('\\', '/'))
+			vitest.cache.results.removeFromCache(normalizePath(relative(this.#workspace, file)))
 			await vitest.cache.results.writeToCache()
 			return []
 		} catch (error) {
@@ -511,13 +519,16 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#findings(result: TestRunResult, file: string, original: string): readonly Finding[] {
+		const specification = this.#real(file)
 		const findings: Finding[] = []
 		for (const module of result.testModules) {
 			const before = findings.length
-			for (const error of module.errors()) findings.push(this.#finding(error, file, original))
+			for (const error of module.errors()) {
+				findings.push(this.#finding(error, specification, original))
+			}
 			for (const test of module.children.allTests('failed')) {
 				const errors = test.result().errors ?? []
-				for (const error of errors) findings.push(this.#finding(error, file, original))
+				for (const error of errors) findings.push(this.#finding(error, specification, original))
 			}
 			const state: string = module.state()
 			if (state === 'passed') {
@@ -570,7 +581,7 @@ export class RuntimeStage implements StageInterface {
 			})
 		}
 		for (const error of result.unhandledErrors) {
-			findings.push(this.#finding(error, file, original))
+			findings.push(this.#finding(error, specification, original))
 		}
 		if (result.testModules.length === 0 && findings.length === 0) {
 			findings.push({
@@ -582,8 +593,19 @@ export class RuntimeStage implements StageInterface {
 		return findings
 	}
 
+	// Resolves one path through its real form, and leaves a path it cannot resolve as it stands.
+	// `resolve` does not follow a symbolic link, so a workspace handed to this stage as a link
+	// produces a specification path no reported frame ever equals, and the mapping below then reports
+	// the generated `probe-<revision>` file a caller cannot open instead of the test it declared.
+	#real(path: string): string {
+		const outcome = attempt(() => realpathSync(path))
+		return outcome.success ? outcome.value : path
+	}
+
 	// Every error reaching here came out of a run Vitest completed over the candidate's own test,
-	// so each one is that code failing rather than this stage faulting.
+	// so each one is that code failing rather than this stage faulting. `specification` arrives
+	// already resolved through its real path, and every reported frame is resolved the same way, so
+	// the two sides compare on one spelling.
 	#finding(error: unknown, specification: string, original: string): Finding {
 		const message = messageFromUnknown(error)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
@@ -594,13 +616,16 @@ export class RuntimeStage implements StageInterface {
 		for (const stack of stacks) {
 			if (typeof stack !== 'object' || stack === null) continue
 			if (!('file' in stack) || typeof stack.file !== 'string') continue
-			const reported = stack.file.startsWith('file:')
+			const declared = stack.file.startsWith('file:')
 				? fileURLToPath(stack.file)
 				: isAbsolute(stack.file)
 					? stack.file
 					: resolve(this.#workspace, stack.file)
+			const reported = this.#real(declared)
 			const path =
-				reported === specification ? original : relativeWorkspaceFile(this.#workspace, reported)
+				reported === specification
+					? original
+					: relativeWorkspaceFile(this.#real(this.#workspace), reported)
 			if (!('line' in stack) || typeof stack.line !== 'number') {
 				return { origin: 'code', path, message }
 			}

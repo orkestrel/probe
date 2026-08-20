@@ -9,10 +9,19 @@ import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
  *
  * @example
  * ```ts
- * formatFinding({ path: 'src/core/greeting.ts', message: 'not assignable', line: 1 })
- * // 'src/core/greeting.ts:1 not assignable'
- * formatFinding({ path: 'src/core/greeting.ts', message: 'not assignable' })
- * // 'src/core/greeting.ts not assignable'
+ * const located: Finding = {
+ * 	origin: 'code',
+ * 	path: 'src/core/greeting.ts',
+ * 	message: 'not assignable',
+ * 	line: 1,
+ * }
+ * const whole: Finding = {
+ * 	origin: 'code',
+ * 	path: 'src/core/greeting.ts',
+ * 	message: 'not assignable',
+ * }
+ * formatFinding(located) // 'src/core/greeting.ts:1 not assignable'
+ * formatFinding(whole) // 'src/core/greeting.ts not assignable'
  * ```
  */
 export function formatFinding(finding: Finding): string {

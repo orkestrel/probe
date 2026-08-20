@@ -8,6 +8,7 @@ import { createTimeout } from '@orkestrel/timeout'
 import {
 	inferDocumentLanguage,
 	messageFromUnknown,
+	normalizePath,
 	parseContentLength,
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
@@ -191,7 +192,7 @@ export class LintStage implements StageInterface {
 			return Promise.reject(new Error(`The lint stage is already inspecting ${source.path}`))
 		}
 		const diagnostics = new Promise<readonly Finding[]>((resolve, reject) => {
-			this.#documents.set(uri, source.path.replaceAll('\\', '/'))
+			this.#documents.set(uri, normalizePath(source.path))
 			this.#publishes.set(uri, resolve)
 			this.#refusals.set(uri, reject)
 		})
