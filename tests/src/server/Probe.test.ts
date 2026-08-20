@@ -1,5 +1,5 @@
 import type { Check, Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -723,6 +723,49 @@ describe.sequential('probe', () => {
 					'type',
 				])
 				expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		"writes its boot dependencies under the sweep's revision identity",
+		{ timeout: 60_000 },
+		async () => {
+			// The boot controls write two real files into the target's `tmp/probe`, and a host killed
+			// before the boot's own cleanup runs leaves them there. They carry the revision marker
+			// for the same reason a generated specification does: the next warm sweeps a file whose
+			// writing process is gone and leaves a live neighbour's alone.
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			)
+			const directory = resolve(scratch.path, 'tmp/probe')
+			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			let observed: readonly string[] = []
+			try {
+				const deadline = performance.now() + 30_000
+				do {
+					observed = existsSync(directory)
+						? readdirSync(directory).filter((name) => name.startsWith('arm-'))
+						: []
+					if (observed.length === 2) break
+					await waitForDelay(5)
+				} while (performance.now() < deadline)
+				const revision = `probe-${process.pid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
+				expect([...observed].sort()).toStrictEqual([
+					expect.stringMatching(new RegExp(`^arm-runtime\\.${revision}\\.ts$`)),
+					expect.stringMatching(new RegExp(`^arm-type\\.${revision}\\.ts$`)),
+				])
 			} finally {
 				await probe.destroy()
 				scratch.destroy()

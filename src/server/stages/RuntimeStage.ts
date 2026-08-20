@@ -22,12 +22,14 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
 import {
+	captureListeners,
 	createRevisionFile,
 	inferTestProject,
 	loadWorkspaceModule,
 	messageFromUnknown,
 	matchesWorkspaceModule,
 	normalizePath,
+	releaseListeners,
 	relativeWorkspaceFile,
 	resolveWorkspaceFile,
 } from '../helpers.js'
@@ -200,34 +202,55 @@ export class RuntimeStage implements StageInterface {
 		this.#sweep()
 		const output = new PassThrough()
 		output.resume()
-		// Only standard output frames the Model Context Protocol transport. Preserve worker
-		// diagnostics on standard error while draining standard output into a bounded stream.
-		return create(
-			'test',
-			{
-				root: this.#workspace,
-				config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
-				watch: false,
-				run: true,
-				pool: 'threads',
-				reporters: [
-					{
-						onInit() {},
-						onTestRunEnd() {},
-					},
-				],
-			},
-			{
-				plugins: [
-					{
-						name: 'orkestrel-project-instrumentation',
-						enforce: 'post',
-						config: this.#configure.bind(this),
-					},
-				],
-			},
-			{ stdout: output, stderr: process.stderr },
-		)
+		// Vitest installs one `SIGINT` and one `SIGTERM` handler per `createVitest` call, and each
+		// one force exits this process about a millisecond after the signal arrives. Teardown takes
+		// three orders of magnitude longer than that, so a host answering the signal gracefully
+		// loses the race and leaves its generated files in the consumer's tree. Diff the listeners
+		// across the call and remove exactly what appeared: the handler's name is an unexported
+		// Vitest detail, and matching on it would both miss a rename and strip a coincidental name
+		// match this stage does not own. Every warm strips, because every replacement and every
+		// stage the coordinator recycles calls `createVitest` again. Vitest's `exit` handler is left
+		// alone: it runs while the process is already leaving rather than racing a teardown.
+		//
+		// The call is not awaited here, and that is what makes the diff correct rather than merely
+		// tidy. Vitest registers those handlers before its first await, so releasing them as the
+		// call returns leaves no window a signal can arrive in. Releasing them after the promise
+		// settles would leave the whole warm exposed, and would remove every termination listener
+		// the host registered meanwhile — including the server's own, which starts after this
+		// constructor returns.
+		const signals = captureListeners(process, ['SIGINT', 'SIGTERM'])
+		try {
+			// Only standard output frames the Model Context Protocol transport. Preserve worker
+			// diagnostics on standard error while draining standard output into a bounded stream.
+			return create(
+				'test',
+				{
+					root: this.#workspace,
+					config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
+					watch: false,
+					run: true,
+					pool: 'threads',
+					reporters: [
+						{
+							onInit() {},
+							onTestRunEnd() {},
+						},
+					],
+				},
+				{
+					plugins: [
+						{
+							name: 'orkestrel-project-instrumentation',
+							enforce: 'post',
+							config: this.#configure.bind(this),
+						},
+					],
+				},
+				{ stdout: output, stderr: process.stderr },
+			)
+		} finally {
+			releaseListeners(process, signals)
+		}
 	}
 
 	#configure(config: ViteUserConfig): void {

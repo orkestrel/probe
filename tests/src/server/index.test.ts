@@ -9,8 +9,10 @@ describe('src server entry', () => {
 		expect(Object.keys(entry).sort()).toStrictEqual([
 			'LintStage',
 			'Probe',
+			'ProbeServer',
 			'RuntimeStage',
 			'TypeStage',
+			'captureListeners',
 			'computeDigest',
 			'createProbe',
 			'createProbeServer',
@@ -26,6 +28,7 @@ describe('src server entry', () => {
 			'parseContentLength',
 			'readWorkspaceManifest',
 			'relativeWorkspaceFile',
+			'releaseListeners',
 			'resolveWorkspaceBinary',
 			'resolveWorkspaceFile',
 			'resolveWorkspaceModule',
@@ -46,5 +49,10 @@ describe('src server entry', () => {
 				.filter((name) => name !== 'constructor')
 				.sort(),
 		).toStrictEqual(['destroy', 'inspect', 'stage'])
+		expect(
+			Object.getOwnPropertyNames(entry.ProbeServer.prototype)
+				.filter((name) => name !== 'constructor')
+				.sort(),
+		).toStrictEqual(['destroy', 'start'])
 	})
 })

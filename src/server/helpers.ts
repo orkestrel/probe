@@ -1,4 +1,5 @@
-import type { WorkspaceManifest } from './types.js'
+import type { ListenerCapture, WorkspaceManifest } from './types.js'
+import type { EventEmitter } from 'node:events'
 import type * as TypeScript from 'typescript'
 import type * as VitestNode from 'vitest/node'
 import { readFileSync } from 'node:fs'
@@ -386,4 +387,56 @@ export function computeDigest(workspace: string, value: unknown): string {
 		.update(JSON.stringify(normalizeValue(workspace, value)))
 		.digest('hex')
 		.slice(0, 32)
+}
+
+/**
+ * Records the listeners one emitter carries for a set of events.
+ *
+ * @param emitter - The emitter to read
+ * @param events - The event names to record
+ * @returns The listeners each named event carries now
+ *
+ * @example
+ * ```ts
+ * const capture = captureListeners(process, ['SIGTERM'])
+ * capture.get('SIGTERM')?.length === process.listenerCount('SIGTERM') // true
+ * ```
+ */
+export function captureListeners(
+	emitter: EventEmitter,
+	events: readonly string[],
+): ListenerCapture {
+	const capture = new Map<string, readonly Function[]>()
+	for (const event of events) capture.set(event, emitter.listeners(event))
+	return capture
+}
+
+/**
+ * Removes every listener one emitter gained for the captured events since its capture.
+ *
+ * @remarks
+ * Compares identity rather than name, so a listener whose name a dependency changes between
+ * releases is still recognized and a listener that merely shares a name is still left alone. A
+ * listener the capture already held survives, and a listener the capture held that has since been
+ * removed is not restored.
+ *
+ * @param emitter - The emitter to release
+ * @param capture - The listeners the emitter carried at capture time
+ * @returns Nothing
+ *
+ * @example
+ * ```ts
+ * const capture = captureListeners(process, ['SIGTERM'])
+ * process.on('SIGTERM', () => {})
+ * releaseListeners(process, capture)
+ * process.listenerCount('SIGTERM') === capture.get('SIGTERM')?.length // true
+ * ```
+ */
+export function releaseListeners(emitter: EventEmitter, capture: ListenerCapture): void {
+	for (const [event, captured] of capture) {
+		for (const listener of emitter.listeners(event)) {
+			if (captured.includes(listener)) continue
+			emitter.removeListener(event, listener)
+		}
+	}
 }

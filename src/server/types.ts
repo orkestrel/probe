@@ -179,26 +179,57 @@ export interface WorkspaceManifest {
 }
 
 /**
- * Starts and stops the probe's Model Context Protocol stdio transport.
+ * Serves one probe over this process's Model Context Protocol stdio transport.
+ *
+ * @remarks
+ * The server owns the process it runs in. `start` seizes standard input and standard output for
+ * the transport and registers the termination handlers a harness signals, so a host that starts one
+ * has already given the process to it. `destroy` reverses all of that and tears the probe down with
+ * it, which is why there is no verb that stops serving and leaves the resident engines running: a
+ * probe nothing is reading from holds three resident tools for nobody.
  *
  * @example
  * ```ts
- * const server = createProbeServer(probe)
+ * const server = createProbeServer({ workspace: process.cwd() })
  * server.start()
- * server.stop()
+ * await server.destroy()
  * ```
  */
 export interface ProbeServerInterface {
 	/**
-	 * Starts reading newline-delimited JSON requests from standard input.
+	 * Serves the probe over this process's standard input and output.
+	 *
+	 * @remarks
+	 * Reads newline-delimited JSON requests from standard input, and answers a `SIGINT` or a
+	 * `SIGTERM` by destroying the server. Calling this on a server already serving does nothing.
 	 *
 	 * @returns Nothing
 	 */
 	start(): void
 	/**
-	 * Stops the standard-input pump.
+	 * Releases the transport, the process listeners, and the probe behind them.
 	 *
-	 * @returns Nothing
+	 * @remarks
+	 * Settling is idempotent: every call after the first returns the first call's promise. The
+	 * process is left as it was before `start`, so a host that keeps running after this call reads
+	 * its own standard input again and receives its own signals.
+	 *
+	 * @returns A promise that settles after the probe releases its resident engines
 	 */
-	stop(): void
+	destroy(): Promise<void>
 }
+
+/**
+ * Holds the listeners one emitter carried for a set of events at the moment it was captured.
+ *
+ * @remarks
+ * A capture is the before half of a listener diff. `captureListeners` takes one, and
+ * `releaseListeners` removes whatever the emitter has gained since. Identity is what the pair
+ * compares, so a listener a capture holds survives the release whatever it is named.
+ *
+ * @example
+ * ```ts
+ * const capture: ListenerCapture = new Map([['SIGTERM', process.listeners('SIGTERM')]])
+ * ```
+ */
+export type ListenerCapture = ReadonlyMap<string, readonly Function[]>

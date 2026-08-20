@@ -1,3 +1,3 @@
-import { createProbe, createProbeServer } from '@src/server'
+import { createProbeServer } from '@src/server'
 
-createProbeServer(createProbe()).start()
+createProbeServer().start()

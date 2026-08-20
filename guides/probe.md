@@ -109,27 +109,29 @@ From [`types.ts`](../src/server/types.ts).
 | `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names which inspection it performs. See [`## Methods`](#methods). |
 | `TypeStageInterface`   | interface | `StageInterface` plus a readonly `candidates` list and a project-aware `inspect`. See [`## Methods`](#methods).     |
 | `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                       |
-| `ProbeServerInterface` | interface | The stdio transport handle. See [`## Methods`](#methods).                                                           |
+| `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                              |
+| `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                 |
 
 ### Server factories
 
 From [`factories.ts`](../src/server/factories.ts).
 
-| Name                | Kind     | Signature                                         | Behavior                                                                         |
-| ------------------- | -------- | ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `createProbe`       | function | `(options?: ProbeOptions) => ProbeInterface`      | Creates a probe that begins warming its three stages at construction.            |
-| `createProbeServer` | function | `(probe: ProbeInterface) => ProbeServerInterface` | Creates the Model Context Protocol stdio server that publishes the `prove` tool. |
+| Name                | Kind     | Signature                                          | Behavior                                                                  |
+| ------------------- | -------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| `createProbe`       | function | `(options?: ProbeOptions) => ProbeInterface`       | Creates a probe that begins warming its three stages at construction.     |
+| `createProbeServer` | function | `(options?: ProbeOptions) => ProbeServerInterface` | Creates the Model Context Protocol stdio server, and the probe it serves. |
 
 ### The engine
 
-The four classes, each exported from its own file.
+The five classes, each exported from its own file.
 
-| Name           | Kind  | Implements           | Purpose                                                                                                                                  |
-| -------------- | ----- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `Probe`        | class | `ProbeInterface`     | The coordinator: one queue per stage, one deadline per active inspection, and the receipt decision. [`Probe.ts`](../src/server/Probe.ts) |
-| `TypeStage`    | class | `TypeStageInterface` | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)  |
-| `LintStage`    | class | `StageInterface`     | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)         |
-| `RuntimeStage` | class | `StageInterface`     | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)  |
+| Name           | Kind  | Implements             | Purpose                                                                                                                                               |
+| -------------- | ----- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | `ProbeInterface`       | The coordinator: one queue per stage, one deadline per active inspection, and the receipt decision. [`Probe.ts`](../src/server/Probe.ts)              |
+| `ProbeServer`  | class | `ProbeServerInterface` | The process owner: one probe, this process's stdio, and the two signals a harness ends a child with. [`ProbeServer.ts`](../src/server/ProbeServer.ts) |
+| `TypeStage`    | class | `TypeStageInterface`   | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)               |
+| `LintStage`    | class | `StageInterface`       | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)                      |
+| `RuntimeStage` | class | `StageInterface`       | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)               |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -157,6 +159,8 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `messageFromUnknown`     | function | `(value: unknown) => string`                                                                | Normalizes a caught or foreign error into readable text.                                                     |
 | `normalizeValue`         | function | `(workspace: string, value: unknown) => unknown`                                            | Rewrites every workspace-contained absolute path to its relative form and sorts every record's keys.         |
 | `computeDigest`          | function | `(workspace: string, value: unknown) => string`                                             | Digests the normalized value and returns 32 lowercase hex characters.                                        |
+| `captureListeners`       | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture`                     | Records the listeners one emitter carries for a set of events.                                               |
+| `releaseListeners`       | function | `(emitter: EventEmitter, capture: ListenerCapture) => void`                                 | Removes every listener one emitter gained for the captured events since its capture.                         |
 
 ## Methods
 
@@ -185,10 +189,10 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `ProbeServerInterface`
 
-| Method  | Returns | Behavior                                                            |
-| ------- | ------- | ------------------------------------------------------------------- |
-| `start` | `void`  | Starts reading newline-delimited JSON requests from standard input. |
-| `stop`  | `void`  | Stops the standard-input pump and leaves the probe itself running.  |
+| Method    | Returns         | Behavior                                                                                                     |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `start`   | `void`          | Reads newline-delimited JSON requests from standard input, and answers `SIGINT` and `SIGTERM` by destroying. |
+| `destroy` | `Promise<void>` | Releases the transport, the process listeners, and the probe behind them. Settling is idempotent.            |
 
 ## What a probe proves
 
@@ -295,8 +299,10 @@ Two facts decide whether a hand-written client works, and both fail silently whe
   list is `2026-07-28`, `2025-11-25`, and `2025-06-18`.
 
 The server answers the handshake era and the current revision together, so a client that sends
-`initialize` without `_meta` is served too. `stop()` ends the standard-input pump; the probe behind
-it keeps its resident engines until you call `destroy()`.
+`initialize` without `_meta` is served too. `createProbeServer` creates the probe it serves and
+takes every `ProbeOptions` member for it, because `start()` seizes this process's standard input and
+output: a host that starts one has given the process to it. `destroy()` gives the process back and
+tears the probe down with it.
 
 ## The claim that earns a receipt
 
@@ -430,9 +436,10 @@ carries. Put every candidate source you want linted at a path version control tr
 
 ## Lifecycle
 
-There is no `start`. Warming begins at construction and `prove` awaits it, because the harness owns
-the process: a restart is a new process rather than a second lifecycle, and a second client is a
-second process with its own resident engines.
+A probe has no `start`. Warming begins at construction and `prove` awaits it, because the harness
+owns the process: a restart is a new process rather than a second lifecycle, and a second client is
+a second process with its own resident engines. `ProbeServer.start` is the transport's verb rather
+than the probe's — it decides which process reads the stdio, not when the engines warm.
 
 - **Arming.** Construction runs two boot controls that mutate an imported dependency and refuse
   service unless the type and runtime stages report the change. The `arm` event fires once those
@@ -454,9 +461,29 @@ second process with its own resident engines.
   one, because a resident runner asked to re-run a path it has already seen reports a false pass.
   One inspection in every 64 also replaces the resident runner, and that inspection costs more than
   the other 63 — budget `deadline` against that one rather than the common one.
-- **Teardown.** `destroy()` releases every resident process and is idempotent. A host killed without
-  it can leave a generated specification behind; the runtime stage sweeps the ones whose writing
-  process is gone at its next warm.
+- **Teardown.** `destroy()` releases every resident process and is idempotent. `ProbeServer.destroy`
+  adds the process itself: it detaches the transport's standard-input listeners, pauses the stream,
+  and hands back the signal handlers `start` registered, so the event loop drains and the process
+  exits 0 with no explicit exit call.
+- **Termination.** `ProbeServer.start` answers `SIGINT` and `SIGTERM` by destroying the server, and
+  the two are the whole set: no evidence names a harness that ends a stdio child any other way, and
+  a configurable set would be a supported way to spell the leak this closes. A second signal during
+  a teardown already running reaches the default disposition and ends the process at once, because
+  teardown releases its handlers before the probe. Measured on 2026-08-20 on the host § Cost names,
+  signal to child exit is 2.2 s to 2.3 s during boot and 50 ms to 59 ms against an armed probe, over
+  3 runs each. The boot-time figure is the long one because teardown awaits the boot in flight;
+  budget a harness's grace window against it rather than against the warm case.
+- **The listener race.** Every `createVitest` call installs `SIGINT` and `SIGTERM` handlers that end
+  this process about a millisecond after the signal, which is three orders of magnitude inside the
+  teardown above. The runtime stage removes the handlers its own warm installed, as the call
+  returns and before anything is awaited, so no window exists for a signal to arrive in. Without
+  that, a graceful teardown reads as fixed, passes a manual test, and still leaves its files in the
+  consumer's tree.
+- **What a killed host leaves.** Nothing this package can sweep is left where a sweep can miss it. A
+  host killed without `destroy` — `SIGKILL`, a power loss, a harness that never signals — can leave
+  a generated specification or a boot dependency behind. Every file this package writes into a
+  target carries `probe-<pid>-<uuid>` between its stem and its extension, and the runtime stage
+  deletes the ones whose writing process is gone at its next warm, leaving a live neighbour's alone.
 
 ## Cost
 
@@ -494,7 +521,10 @@ inspection rather than the common one.
   [`LintStage.test.ts`](../tests/src/server/stages/LintStage.test.ts), and
   [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the three resident
   stages against their real tools.
-- [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by a foreign client.
+- [`ProbeServer.test.ts`](../tests/src/server/ProbeServer.test.ts) — what `start` seizes and what
+  `destroy` gives back.
+- [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by a foreign client,
+  and both signals delivered to it during boot and in service.
 - [`distribution.test.ts`](../tests/distribution.test.ts) — the packed package installed outside the
   repository and driven through its public exports.
 

@@ -1,3 +1,4 @@
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -10,17 +11,29 @@ import { describe, expect, it } from 'vitest'
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const ENTRY = 'src/bin/main.ts'
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
-const ARMING_TIMEOUT = 5_000
+const ARMING_TIMEOUT = 30_000
+// The wall clock a graceful teardown is given, from the signal to the child's exit. A boot-time
+// teardown awaits the boot in flight, which measured 2.3 s on the host `guides/probe.md` § Cost
+// names; this bound sits far above that so a loaded host reports a hang rather than its own load.
+const TEARDOWN_BOUND = 60_000
+const DELIVERIES = [
+	{ signal: 'SIGTERM', phase: 'boot' },
+	{ signal: 'SIGINT', phase: 'boot' },
+	{ signal: 'SIGTERM', phase: 'service' },
+	{ signal: 'SIGINT', phase: 'service' },
+] as const
 
-function readArming(directory: string): readonly string[] {
+function readWorkbench(directory: string): readonly string[] {
 	try {
-		return readdirSync(directory).filter(
-			(name) => name.startsWith('arm-type-') || name.startsWith('arm-runtime-'),
-		)
+		return readdirSync(directory)
 	} catch (error: unknown) {
 		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []
 		throw error
 	}
+}
+
+function readArming(directory: string): readonly string[] {
+	return readWorkbench(directory).filter((name) => name.startsWith('arm-'))
 }
 
 async function waitForArming(directory: string): Promise<readonly string[]> {
@@ -33,6 +46,35 @@ async function waitForArming(directory: string): Promise<readonly string[]> {
 	throw new Error(`Timed out waiting for two arming files in ${directory}`)
 }
 
+// Waits for the boot to finish rather than for the `arm` event, which no observer outside the
+// process can read. The two boot dependencies exist for the whole boot and are removed as it ends,
+// so their disappearance is the same moment from out here.
+async function waitForArmed(directory: string): Promise<void> {
+	await waitForArming(directory)
+	const deadline = performance.now() + ARMING_TIMEOUT
+	do {
+		if (readArming(directory).length === 0) return
+		await waitForDelay(10)
+	} while (performance.now() < deadline)
+	throw new Error(`Timed out waiting for the boot to end in ${directory}`)
+}
+
+// Builds a target the entry can really arm against: a peer-resolution or configuration failure
+// surfaces at stage construction, so a workspace missing its TypeScript project or its Vitest
+// configuration aborts the boot at a point that varies per run.
+function writeTarget(scratch: ScratchInterface): void {
+	scratch.write('package.json', '{}\n')
+	scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+	scratch.write(
+		'tsconfig.json',
+		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+	)
+	scratch.write(
+		'vite.config.ts',
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+	)
+}
+
 describe('bin entry', () => {
 	it('occupies the path the manifest declares side-effectful', () => {
 		const manifest: unknown = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'))
@@ -42,7 +84,7 @@ describe('bin entry', () => {
 
 	it('starts one probe server and exports nothing', () => {
 		const source = readFileSync(resolve(ROOT, ENTRY), 'utf8')
-		expect(source).toContain('createProbeServer(createProbe()).start()')
+		expect(source).toContain('createProbeServer().start()')
 		expect(source).not.toContain('export')
 	})
 
@@ -344,53 +386,49 @@ describe('bin entry', () => {
 		}
 	})
 
-	it(
-		'records the arming dependency leak when the entry is killed during boot',
-		{ timeout: 60_000 },
-		async () => {
-			const scratch = createScratch()
-			scratch.write('package.json', '{}\n')
-			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-			// Give the scratch a workspace the entry can actually arm against. A peer-resolution or
-			// configuration failure now surfaces at stage construction, so a workspace missing its
-			// TypeScript project or Vitest configuration aborts the boot at a point that varies per
-			// run, and the arming this test observes never happens.
-			scratch.write(
-				'tsconfig.json',
-				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
-			)
-			scratch.write(
-				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
-			)
-			const directory = resolve(scratch.path, 'tmp/probe')
-			const child = spawn(process.execPath, [BUILT_ENTRY], {
-				cwd: scratch.path,
-				stdio: ['pipe', 'pipe', 'pipe'],
-			})
-			const exited = new Promise<void>((resolveExit) => {
-				child.once('exit', () => resolveExit())
-			})
-			let leaked: readonly string[] = []
-			try {
-				const arming = await waitForArming(directory)
-				expect(arming).toHaveLength(2)
-				child.kill('SIGTERM')
-				await exited
-				// The leak is real and this records it: a host killed during boot leaves its arming
-				// specifications behind, where a consumer's own gates then collect them. Row P16 of
-				// the readiness grade owns the repair; until it lands, this pins the defect so the
-				// repair has something to turn green.
-				leaked = readArming(directory)
-				expect([...leaked].sort()).toStrictEqual([...arming].sort())
-			} finally {
-				if (child.exitCode === null) {
-					child.kill('SIGTERM')
-					await exited
+	// Two signals, and the two moments a harness delivers one in. The boot-time delivery is the
+	// load-bearing half: teardown awaits the boot in flight, so it takes seconds, and every
+	// termination listener Vitest installs while warming would end the process a millisecond after
+	// the signal and leave the boot's own files in the target's tree.
+	for (const delivery of DELIVERIES) {
+		it(
+			`leaves the target clean when ${delivery.signal} reaches the entry during ${delivery.phase}`,
+			{ timeout: 120_000 },
+			async () => {
+				const scratch = createScratch()
+				writeTarget(scratch)
+				const directory = resolve(scratch.path, 'tmp/probe')
+				const child = spawn(process.execPath, [BUILT_ENTRY], {
+					cwd: scratch.path,
+					stdio: ['pipe', 'pipe', 'pipe'],
+				})
+				const exited = new Promise<{ code: number | null; signal: string | null }>(
+					(resolveExit) => {
+						child.once('exit', (code, signal) => resolveExit({ code, signal }))
+					},
+				)
+				try {
+					if (delivery.phase === 'boot') await waitForArming(directory)
+					else await waitForArmed(directory)
+					const started = performance.now()
+					child.kill(delivery.signal)
+					const outcome = await exited
+					const elapsed = performance.now() - started
+					// A zero exit code is the whole claim: a host that lost the race to Vitest's own
+					// handler exits 143, and one the harness force-killed reports a signal instead of
+					// a code. The bound is generous against the seconds a boot-time teardown takes,
+					// because it is here to catch a hang rather than to grade the host.
+					expect(outcome).toStrictEqual({ code: 0, signal: null })
+					expect(elapsed).toBeLessThan(TEARDOWN_BOUND)
+					expect(readWorkbench(directory)).toStrictEqual([])
+				} finally {
+					if (child.exitCode === null && child.signalCode === null) {
+						child.kill('SIGKILL')
+						await exited
+					}
+					scratch.destroy()
 				}
-				for (const name of leaked) rmSync(resolve(directory, name), { force: true })
-				scratch.destroy()
-			}
-		},
-	)
+			},
+		)
+	}
 })

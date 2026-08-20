@@ -196,7 +196,9 @@ describe('guides parity', () => {
 		const remarks = extractComment(readWorkspaceText('src/core/shapers.ts'), 'CLAIM_SHAPE')
 		const named = /admits a call with\s+`([^`]+)`/.exec(remarks)?.[1]
 		expect(named).toBe('isClaim')
-		expect(readWorkspaceText('src/server/factories.ts')).toContain(`if (!${String(named)}(input))`)
+		expect(readWorkspaceText('src/server/ProbeServer.ts')).toContain(
+			`if (!${String(named)}(input))`,
+		)
 	})
 
 	it('ships registry metadata and a README that are not the scaffold default', () => {

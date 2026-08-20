@@ -806,7 +806,7 @@ describe('runtime stage', () => {
 	)
 
 	it(
-		'recycles the resident runner after 64 written specifications and evicts disk caches',
+		"recycles the resident runner after 64 written specifications, evicts disk caches, and strips the replacement warm's termination listeners",
 		{ timeout: 60_000 },
 		async () => {
 			const scratch = createScratch()
@@ -820,6 +820,10 @@ describe('runtime stage', () => {
 			const id = randomUUID()
 			const path = `tmp/probe/runtime-retention-${id}.test.ts`
 			const marker = `runtime-retention-${id}`
+			const signals = {
+				SIGINT: process.listenerCount('SIGINT'),
+				SIGTERM: process.listenerCount('SIGTERM'),
+			}
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				// An inspection that matches no project writes no specification, so it retains no URL
@@ -858,6 +862,12 @@ describe('runtime stage', () => {
 					'warm',
 					'warm',
 				])
+				// The replacement warm calls `createVitest` again, so the strip that cleared the
+				// first warm's termination listeners has to run on this one too.
+				expect({
+					SIGINT: process.listenerCount('SIGINT'),
+					SIGTERM: process.listenerCount('SIGTERM'),
+				}).toStrictEqual(signals)
 				const caches = readdirSync(resolve(scratch.path, 'node_modules/.vite'), {
 					recursive: true,
 					encoding: 'utf8',
@@ -971,7 +981,57 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it('removes the specifications a dead host left behind, at construction', async () => {
+	it(
+		'strips the termination listeners each Vitest warm installs',
+		{ timeout: 60_000 },
+		async () => {
+			// Vitest registers a `SIGINT` and `SIGTERM` handler per `createVitest` call that force
+			// exits this process about a millisecond after the signal. A host tearing down on that
+			// signal loses the race by three orders of magnitude, so the stage removes what its own
+			// warm installed. The counts are read as a delta, because a sibling test in this file
+			// may hold listeners of its own.
+			const before = {
+				SIGINT: process.listenerCount('SIGINT'),
+				SIGTERM: process.listenerCount('SIGTERM'),
+			}
+			const marker = `runtime-listeners-${randomUUID()}`
+			const first = new RuntimeStage(ROOT)
+			// Read synchronously, before anything is awaited. Vitest registers its handlers before
+			// its own first await, so a strip that waits for the warm to settle leaves the whole
+			// boot exposed — which is the window a harness signals a starting process in.
+			expect({
+				SIGINT: process.listenerCount('SIGINT'),
+				SIGTERM: process.listenerCount('SIGTERM'),
+			}).toStrictEqual(before)
+			const second = new RuntimeStage(ROOT)
+			try {
+				const subject = {
+					files: [],
+					test: {
+						path: `tmp/probe/${marker}.test.ts`,
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+				}
+				await expect(first.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				expect({
+					SIGINT: process.listenerCount('SIGINT'),
+					SIGTERM: process.listenerCount('SIGTERM'),
+				}).toStrictEqual(before)
+				// A second warm is the recycle path in miniature: a strip performed once at boot
+				// stops working the moment the coordinator replaces a stage.
+				await expect(second.inspect(subject)).resolves.toMatchObject({ findings: [] })
+				expect({
+					SIGINT: process.listenerCount('SIGINT'),
+					SIGTERM: process.listenerCount('SIGTERM'),
+				}).toStrictEqual(before)
+			} finally {
+				await first.destroy()
+				await second.destroy()
+			}
+		},
+	)
+
+	it('removes the files a dead host left behind, at construction', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
@@ -1002,10 +1062,27 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, live), specification)
 		scratch.write('tmp/probe/keeper.test.ts', specification)
 		scratch.write('tmp/probe/notes.probe-draft.ts', 'export const NOTE = 1\n')
+		// A boot the host did not survive leaves its two arming dependencies in the same directory.
+		// They are ordinary TypeScript in the consumer's tree, so they carry the same identity and
+		// the sweep reads them the same way.
+		const arming = createRevisionFile(
+			scratch.path,
+			'tmp/probe/arm-type.ts',
+			`${departed.pid}-${randomUUID()}`,
+		)
+		scratch.write(relative(scratch.path, arming), 'export type Signal = string\n')
+		const serving = createRevisionFile(
+			scratch.path,
+			'tmp/probe/arm-runtime.ts',
+			`${process.pid}-${randomUUID()}`,
+		)
+		scratch.write(relative(scratch.path, serving), "export const SIGNAL = 'before'\n")
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			expect(existsSync(orphan)).toBe(false)
 			expect(existsSync(live)).toBe(true)
+			expect(existsSync(arming)).toBe(false)
+			expect(existsSync(serving)).toBe(true)
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/keeper.test.ts'))).toBe(true)
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/notes.probe-draft.ts'))).toBe(true)
 		} finally {

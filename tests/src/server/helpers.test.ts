@@ -1,7 +1,9 @@
+import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { createScratch } from '@orkestrel/test/server'
 import {
+	captureListeners,
 	computeDigest,
 	createRevisionFile,
 	inferDocumentLanguage,
@@ -15,6 +17,7 @@ import {
 	parseContentLength,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
+	releaseListeners,
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
@@ -72,6 +75,53 @@ describe('server helper examples', () => {
 			'The lint stage has been destroyed',
 		)
 		expect(messageFromUnknown(17)).toBe('17')
+		const capture = captureListeners(process, ['SIGTERM'])
+		expect(capture.get('SIGTERM')?.length).toBe(process.listenerCount('SIGTERM'))
+		process.on('SIGTERM', () => {})
+		releaseListeners(process, capture)
+		expect(process.listenerCount('SIGTERM')).toBe(capture.get('SIGTERM')?.length)
+	})
+})
+
+describe('server listener leaves', () => {
+	it('releases what an emitter gained and leaves every captured listener attached', () => {
+		const emitter = new EventEmitter()
+		const kept = (): void => {}
+		emitter.on('close', kept)
+		const capture = captureListeners(emitter, ['close', 'error'])
+		emitter.on('close', () => {})
+		emitter.on('error', () => {})
+		emitter.on('data', () => {})
+		releaseListeners(emitter, capture)
+		expect(emitter.listeners('close')).toStrictEqual([kept])
+		expect(emitter.listenerCount('error')).toBe(0)
+		// An event no capture named is not this release's business, however recently it arrived.
+		expect(emitter.listenerCount('data')).toBe(1)
+	})
+
+	it('leaves a listener the capture held and something else removed', () => {
+		const emitter = new EventEmitter()
+		const departed = (): void => {}
+		emitter.on('close', departed)
+		const capture = captureListeners(emitter, ['close'])
+		emitter.removeListener('close', departed)
+		releaseListeners(emitter, capture)
+		expect(emitter.listenerCount('close')).toBe(0)
+	})
+
+	// Identity is what the pair compares. Two listeners can share a name, and a dependency can
+	// rename its own between releases, so a release keyed on the name would strip a stranger's
+	// listener and miss the one it came for.
+	it('separates two listeners that share a name', () => {
+		const emitter = new EventEmitter()
+		function onExit(): void {}
+		emitter.on('close', onExit)
+		const capture = captureListeners(emitter, ['close'])
+		function onExitAgain(): void {}
+		Object.defineProperty(onExitAgain, 'name', { value: 'onExit' })
+		emitter.on('close', onExitAgain)
+		releaseListeners(emitter, capture)
+		expect(emitter.listeners('close')).toStrictEqual([onExit])
 	})
 })
 

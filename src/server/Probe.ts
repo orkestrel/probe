@@ -14,6 +14,7 @@ import type { TimeoutInterface } from '@orkestrel/timeout'
 import type { Inspection, StageInterface } from './types.js'
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
@@ -21,6 +22,7 @@ import { computeReceipt, formatCheck } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	computeDigest,
+	createRevisionFile,
 	messageFromUnknown,
 	readWorkspaceManifest,
 	resolveWorkspaceFile,
@@ -210,21 +212,28 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #boot(): Promise<void> {
-		const id = randomUUID()
+		// The two dependencies below are real files in the target's tree, so they carry the same
+		// revision identity a generated specification does: the writing host's process id, then a
+		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
+		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
+		const revision = `${process.pid}-${randomUUID()}`
 		const directory = resolveWorkspaceFile(this.#workspace, 'tmp/probe')
-		const typeDependency = resolveWorkspaceFile(this.#workspace, `tmp/probe/arm-type-${id}.ts`)
-		const runtimeDependency = resolveWorkspaceFile(
+		const typeDependency = createRevisionFile(this.#workspace, 'tmp/probe/arm-type.ts', revision)
+		const runtimeDependency = createRevisionFile(
 			this.#workspace,
-			`tmp/probe/arm-runtime-${id}.ts`,
+			'tmp/probe/arm-runtime.ts',
+			revision,
 		)
 		const created = !existsSync(directory)
+		const typeModule = basename(typeDependency, '.ts')
+		const runtimeModule = basename(runtimeDependency, '.ts')
 		const typeTest = {
-			path: `tmp/probe/arm-type-${id}.test.ts`,
-			text: `import type { Signal } from './arm-type-${id}.js'\nimport { expect, test } from 'vitest'\nconst SIGNAL: Signal = 'before'\ntest('revalidates a mutated type', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
+			path: `tmp/probe/${typeModule}.test.ts`,
+			text: `import type { Signal } from './${typeModule}.js'\nimport { expect, test } from 'vitest'\nconst SIGNAL: Signal = 'before'\ntest('revalidates a mutated type', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
 		}
 		const runtimeTest = {
-			path: `tmp/probe/arm-runtime-${id}.test.ts`,
-			text: `import { SIGNAL } from './arm-runtime-${id}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated value', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
+			path: `tmp/probe/${runtimeModule}.test.ts`,
+			text: `import { SIGNAL } from './${runtimeModule}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated value', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
 		}
 		const typeClaim: Claim = {
 			project: 'tsconfig.json',
