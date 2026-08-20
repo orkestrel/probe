@@ -25,7 +25,7 @@ describe('core formatting helpers', () => {
 	// The two findings `formatFinding` documents, transcribed as the typed literals the contract
 	// requires. `origin` is required on `Finding`, so a documented call that omitted it would fail
 	// this file's typecheck before any assertion ran.
-	it('renders findings with and without a line', () => {
+	it('renders both origins with and without a line', () => {
 		const located: Finding = {
 			origin: 'code',
 			path: 'src/core/greeting.ts',
@@ -33,13 +33,13 @@ describe('core formatting helpers', () => {
 			line: 1,
 		}
 		const whole: Finding = {
-			origin: 'code',
+			origin: 'instrument',
 			path: 'src/core/greeting.ts',
 			message: 'not assignable',
 		}
 
-		expect(formatFinding(located)).toBe('src/core/greeting.ts:1 not assignable')
-		expect(formatFinding(whole)).toBe('src/core/greeting.ts not assignable')
+		expect(formatFinding(located)).toBe('[code] src/core/greeting.ts:1 not assignable')
+		expect(formatFinding(whole)).toBe('[instrument] src/core/greeting.ts not assignable')
 	})
 
 	it('renders zero, one, and multiple findings with correct summaries and order', () => {
@@ -52,7 +52,7 @@ describe('core formatting helpers', () => {
 				elapsed: 23,
 				findings: [{ origin: 'code', path: 'src/core/first.ts', message: 'first', line: 4 }],
 			}),
-		).toBe('type: 1 finding (23 ms)\n  src/core/first.ts:4 first')
+		).toBe('type: 1 finding (23 ms)\n  [code] src/core/first.ts:4 first')
 		expect(
 			formatCheck({
 				stage: 'runtime',
@@ -69,8 +69,8 @@ describe('core formatting helpers', () => {
 			}),
 		).toBe(
 			'runtime: 2 findings (31 ms)\n' +
-				'  tests/src/core/first.test.ts first failure\n' +
-				'  tests/src/core/second.test.ts:8 second failure',
+				'  [code] tests/src/core/first.test.ts first failure\n' +
+				'  [code] tests/src/core/second.test.ts:8 second failure',
 		)
 	})
 
@@ -96,6 +96,7 @@ describe('core formatting helpers', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
+			reason: 'a string literal assigned to a number must not compile',
 			checks,
 			control,
 			elapsed: 81,
@@ -106,11 +107,12 @@ describe('core formatting helpers', () => {
 			'claim 6ca20c3bff623031d3955b9d1a76d71d',
 			'toolchain typescript 6.0.3, oxlint 1.79.0, vitest 4.1.11',
 			'project configs/src/tsconfig.core.json 3b674fdf121c85efb9ed1bab25ceeec8',
+			'reason a string literal assigned to a number must not compile',
 			'case type: 0 findings (11 ms)',
 			'case lint: 0 findings (12 ms)',
 			'case runtime: 0 findings (13 ms)',
 			'control type: 1 finding (14 ms)',
-			'  src/core/control.ts:1 not assignable',
+			'  [code] src/core/control.ts:1 not assignable',
 			'control lint: 0 findings (15 ms)',
 			'control runtime: 0 findings (16 ms)',
 			'receipt proof-token',
@@ -298,6 +300,32 @@ describe('core receipt helper', () => {
 				'runtime',
 			),
 		).toBe(token)
+	})
+
+	it('refuses a receipt when the control also breaks at an undeclared stage', () => {
+		const base: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
+			control: [
+				{
+					stage: 'type',
+					elapsed: 1,
+					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' }],
+				},
+				{
+					stage: 'lint',
+					elapsed: 1,
+					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'lint failure' }],
+				},
+				{ stage: 'runtime', elapsed: 1, findings: [] },
+			],
+			elapsed: 7,
+		}
+
+		expect(computeReceipt(base, 'type')).toBeUndefined()
 	})
 
 	it('refuses a receipt for a case whose stage reported a fault in its own instrument', () => {

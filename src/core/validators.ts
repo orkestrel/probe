@@ -13,6 +13,7 @@ import type {
 	Verdict,
 } from './types.js'
 import {
+	andOf,
 	arrayOf,
 	isNonEmptyString,
 	isNumber,
@@ -40,11 +41,11 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
  * Checks whether a value carries a file's path and text.
  *
  * @remarks
- * Rejects an empty path, matching the minimum `SOURCE_SHAPE` sets. Every stage resolves a file by
- * that path, so an empty path names no file. Three arriving members carry that invariant — a
- * source path, a claim's project, and a control's reason — in the guards and the wire shape
- * alike. A `Finding` carries none, because this package produces findings rather than admits
- * them.
+ * Rejects an empty, absolute, or workspace-escaping path. A contained relative path may contain
+ * `.` or may traverse to a parent that remains inside the workspace. Every stage resolves a file
+ * by that path, so admitting an escape here would defer the refusal until a stage had already
+ * accepted the source. A `Finding` carries no such minimum because this package produces findings
+ * rather than admits them.
  *
  * @param value - The value to check
  * @returns True if the value is a source; false otherwise
@@ -52,10 +53,27 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
  * @example
  * ```ts
  * isSource({ path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }) // true
+ * isSource({ path: '../../etc/hosts', text: '' }) // false
  * isSource({ path: 'src/core/greeting.ts' }) // false
  * ```
  */
-export const isSource: Guard<Source> = recordOf({ path: isNonEmptyString, text: isString })
+export const isSource: Guard<Source> = recordOf({
+	path: andOf<string>(isNonEmptyString, (path) => {
+		if (/^(?:[\\/]|[A-Za-z]:)/.test(path)) return false
+		let depth = 0
+		for (const segment of path.split(/[\\/]+/)) {
+			if (segment === '' || segment === '.') continue
+			if (segment !== '..') {
+				depth += 1
+				continue
+			}
+			if (depth === 0) return false
+			depth -= 1
+		}
+		return true
+	}),
+	text: isString,
+})
 
 /**
  * Checks whether a value carries a claim's candidate files and its test.
@@ -231,10 +249,11 @@ export const isVerdict: Guard<Verdict> = recordOf(
 		digest: isString,
 		toolchain: isToolchain,
 		project: isProject,
+		reason: isNonEmptyString,
 		checks: arrayOf(isCheck),
 		control: arrayOf(isCheck),
 		elapsed: isNumber,
 		receipt: isString,
 	},
-	['receipt'],
+	['reason', 'receipt'],
 )

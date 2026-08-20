@@ -192,6 +192,7 @@ describe.sequential('probe', () => {
 					},
 				})
 				expect(issued.receipt).toMatch(/^probe:/)
+				expect(issued.reason).toBe('the source assigns a string to a number')
 				expect(refused.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
 				expect(unexecuted.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([

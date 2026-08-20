@@ -18,8 +18,8 @@ export type Stage = 'type' | 'lint' | 'runtime'
  * Carries one file's location and its contents.
  *
  * @remarks
- * `path` is workspace-relative and need not exist on disk. The type and lint stages read the text
- * from memory; only the runtime stage writes a file.
+ * `path` is contained within the workspace, relative to its root, and need not exist on disk. The
+ * type and lint stages read the text from memory; only the runtime stage writes a file.
  *
  * @example
  * ```ts
@@ -265,13 +265,15 @@ export interface Project {
  * A verdict exists only when all three stages ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when every stage ran clean
- * on the case and the control reported at least one `origin: 'code'` finding at the stage it
- * declared.
+ * on the case, the control reported at least one `origin: 'code'` finding at the stage it declared,
+ * and every other control stage stayed clean.
  *
  * `id` identifies this call and `digest` identifies the claim it answered, so two calls over one
  * claim share a digest and differ in their identity. `digest` and `project` are required, because
  * the type stage always runs and a claim always names a project, so no verdict exists without
- * either value.
+ * either value. A verdict returned by `Probe` also carries the control's claimant-authored
+ * `reason` unchanged. A hand-built verdict may omit it because the receipt helper needs only the
+ * recorded checks and declared stage.
  *
  * @example
  * ```ts
@@ -289,6 +291,7 @@ export interface Project {
  * 		path: 'configs/src/tsconfig.core.json',
  * 		digest: '3b674fdf121c85efb9ed1bab25ceeec8',
  * 	},
+ * 	reason: 'a string literal assigned to a number must not compile',
  * 	checks: [
  * 		{ stage: 'type', elapsed: 61, findings: [] },
  * 		{ stage: 'lint', elapsed: 17, findings: [] },
@@ -314,13 +317,15 @@ export interface Verdict {
 	readonly toolchain: Toolchain
 	/** The TypeScript project the candidate sources were judged against. */
 	readonly project: Project
+	/** The claimant's explanation for the selected control, when the verdict came from a claim. */
+	readonly reason?: string
 	/** One outcome per stage for the claim's case. */
 	readonly checks: readonly Check[]
 	/** One outcome per stage for the claim's control. */
 	readonly control: readonly Check[]
 	/** Milliseconds the whole call took, including both the case and the control. */
 	readonly elapsed: number
-	/** The proof token, present only when the case ran clean and the control's own code broke where it said. */
+	/** The proof token, present only when the case ran clean and the control broke only where it said. */
 	readonly receipt?: string
 }
 

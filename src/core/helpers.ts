@@ -2,10 +2,10 @@ import type { Check, Finding, Stage, Verdict } from './types.js'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
 
 /**
- * Renders one tool message as a single line an agent can read and locate.
+ * Renders one tool message as a single line an agent can classify and locate.
  *
  * @param finding - The message and location a stage reported
- * @returns The location and the message, separated by a space
+ * @returns The bracketed origin, location, and message, separated by spaces
  *
  * @example
  * ```ts
@@ -20,13 +20,13 @@ import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * }
- * formatFinding(located) // 'src/core/greeting.ts:1 not assignable'
- * formatFinding(whole) // 'src/core/greeting.ts not assignable'
+ * formatFinding(located) // '[code] src/core/greeting.ts:1 not assignable'
+ * formatFinding(whole) // '[code] src/core/greeting.ts not assignable'
  * ```
  */
 export function formatFinding(finding: Finding): string {
 	const where = finding.line === undefined ? finding.path : `${finding.path}:${finding.line}`
-	return `${where} ${finding.message}`
+	return `[${finding.origin}] ${where} ${finding.message}`
 }
 
 /**
@@ -61,14 +61,15 @@ export function formatCheck(check: Check): string {
  * earlier one. The last line always states the receipt or its absence, so a reader never has to
  * infer from silence whether the claim was proven.
  *
- * The four heading lines carry everything the receipt binds, each in the name-then-value form the
+ * The heading lines carry everything the receipt binds, each in the name-then-value form the
  * toolchain line established: the call's identity, the claim it answered, the tools that ran, and
- * the project that judged the candidates. A reader comparing two verdicts therefore reads what
- * differed without recomputing anything.
+ * the project that judged the candidates. A verdict carrying the control's reason renders it next,
+ * before either phase's checks. A reader comparing two verdicts therefore reads what differed
+ * without recomputing anything.
  *
  * @param verdict - The verdict to render
- * @returns The identity, claim, toolchain, and project, then every case and control stage, then
- * the receipt line
+ * @returns The identity, claim, toolchain, project, and reason when present, then every case and
+ * control stage, then the receipt line
  *
  * @example
  * ```ts
@@ -79,12 +80,14 @@ export function formatVerdict(verdict: Verdict): string {
 	const { typescript, oxlint, vitest } = verdict.toolchain
 	const tools = `toolchain typescript ${typescript}, oxlint ${oxlint}, vitest ${vitest}`
 	const project = `project ${verdict.project.path} ${verdict.project.digest}`
+	const reason = verdict.reason === undefined ? [] : [`reason ${verdict.reason}`]
 	const proof = verdict.receipt === undefined ? 'no receipt' : `receipt ${verdict.receipt}`
 	return [
 		`probe ${verdict.id} (${verdict.elapsed} ms)`,
 		`claim ${verdict.digest}`,
 		tools,
 		project,
+		...reason,
 		...verdict.checks.map((check) => `case ${formatCheck(check)}`),
 		...verdict.control.map((check) => `control ${formatCheck(check)}`),
 		proof,
@@ -95,10 +98,10 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is issued on two conditions together: every stage ran clean on the case, and the
- * control produced at least one `origin: 'code'` finding at the stage it declared. A control that
- * fails somewhere else has falsified the instrument rather than the claim, so no receipt is issued
- * for it.
+ * A receipt is issued on three conditions together: every stage ran clean on the case, the control
+ * produced at least one `origin: 'code'` finding at the stage it declared, and every other control
+ * stage stayed clean. A control that fails somewhere else has falsified the instrument rather than
+ * the claim, so no receipt is issued for it.
  *
  * The token names every condition the verdict was reached under, so a receipt read away from its
  * verdict still says what was judged and what judged it: the claim's digest, the stage the control
@@ -112,17 +115,17 @@ export function formatVerdict(verdict: Verdict): string {
  * read the project field; inside it the digest is everything after the final `@`. That rule stays
  * total for a workspace-relative project path containing either character.
  *
- * The two conditions count findings differently. The control's condition counts `origin: 'code'`
- * findings alone, because a control whose test never ran and a control whose specification could
- * not be deleted have each disproved nothing, and a receipt issued for either certifies an
- * inspection that did not happen. The case's condition counts every finding, `origin: 'instrument'`
- * included, because a case the stage could not inspect end to end is not a clean case. The case
- * therefore fails on a fault of either origin, and the control passes only on a fault in the
- * candidate's own code.
+ * The case and declared-control conditions count findings differently. The declared control stage
+ * counts `origin: 'code'` findings alone, because a control whose test never ran and a control whose
+ * specification could not be deleted have each disproved nothing, and a receipt issued for either
+ * certifies an inspection that did not happen. The case's condition counts every finding,
+ * `origin: 'instrument'` included, because a case the stage could not inspect end to end is not a
+ * clean case. The case therefore fails on a fault of either origin, and the control passes only on
+ * a fault in the candidate's own code at its declared stage while every other stage stays clean.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
- * @returns The receipt token, or `undefined` when either condition fails
+ * @returns The receipt token, or `undefined` when any condition fails
  *
  * @example
  * ```ts
@@ -136,7 +139,10 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 	const clean = verdict.checks.every((check) => check.findings.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
 	const broke = declared?.findings.some((finding) => finding.origin === 'code') ?? false
-	if (!ran || !clean || !broke) return undefined
+	const strayed = verdict.control.some(
+		(check) => check.stage !== stage && check.findings.length > 0,
+	)
+	if (!ran || !clean || !broke || strayed) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain
 	return [
 		RECEIPT_PREFIX,

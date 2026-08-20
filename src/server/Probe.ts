@@ -150,6 +150,7 @@ export class Probe implements ProbeInterface {
 				digest,
 				toolchain: this.#toolchain,
 				project,
+				reason: claim.control.reason,
 				checks,
 				control,
 				elapsed: Math.round(performance.now() - started),

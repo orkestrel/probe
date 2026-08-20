@@ -29,22 +29,22 @@ conditions it was reached under, and it exists only when the claim proved itself
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an absent
 optional field is absent rather than empty.
 
-| Name             | Kind      | Shape / Purpose                                                                                                                                     |
-| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Stage`          | type      | `'type' \| 'lint' \| 'runtime'` — the three inspections every claim passes through.                                                                 |
-| `Source`         | interface | `{ path, text }` — one file's workspace-relative path and its full contents. The path need not exist on disk.                                       |
-| `Case`           | interface | `{ files, test }` — the candidate sources a claim asserts about and the test that exercises them.                                                   |
-| `Control`        | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                   |
-| `Claim`          | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                   |
-| `FindingOrigin`  | type      | `'code' \| 'instrument'` — whether a message names a fault in the candidate's code or in the stage that ran.                                        |
-| `Finding`        | interface | `{ origin, path, message, line? }` — one message a stage reported. `line` is absent when the tool reported none.                                    |
-| `Check`          | interface | `{ stage, elapsed, findings }` — one stage's outcome. An empty `findings` list is the clean result; there is no separate pass flag.                 |
-| `Toolchain`      | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                             |
-| `Project`        | interface | `{ path, digest }` — the resolved TypeScript project that judged the candidates, and the digest of its compiler options.                            |
-| `Verdict`        | interface | `{ id, digest, toolchain, project, checks, control, elapsed, receipt? }` — the full result. `receipt` is present only when the claim proved itself. |
-| `ProbeEventMap`  | type      | The observation surface: `arm`, `prove`, `expire`, and `error`.                                                                                     |
-| `ProbeOptions`   | interface | `{ on?, error?, workspace?, deadline? }` — the construction input. `workspace` defaults to the working directory and `deadline` to 30,000 ms.       |
-| `ProbeInterface` | interface | The coordinator contract; its readonly `emitter` and `toolchain` are data. See [`## Methods`](#methods).                                            |
+| Name             | Kind      | Shape / Purpose                                                                                                                                       |
+| ---------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stage`          | type      | `'type' \| 'lint' \| 'runtime'` — the three inspections every claim passes through.                                                                   |
+| `Source`         | interface | `{ path, text }` — one file's contained workspace-relative path and its full contents. The path need not exist on disk.                               |
+| `Case`           | interface | `{ files, test }` — the candidate sources a claim asserts about and the test that exercises them.                                                     |
+| `Control`        | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                     |
+| `Claim`          | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                     |
+| `FindingOrigin`  | type      | `'code' \| 'instrument'` — whether a message names a fault in the candidate's code or in the stage that ran.                                          |
+| `Finding`        | interface | `{ origin, path, message, line? }` — one message a stage reported. `line` is absent when the tool reported none.                                      |
+| `Check`          | interface | `{ stage, elapsed, findings }` — one stage's outcome. An empty `findings` list is the clean result; there is no separate pass flag.                   |
+| `Toolchain`      | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                               |
+| `Project`        | interface | `{ path, digest }` — the resolved TypeScript project that judged the candidates, and the digest of its compiler options.                              |
+| `Verdict`        | interface | `{ id, digest, toolchain, project, reason?, checks, control, elapsed, receipt? }` — the full result. `Probe.prove` always carries the control reason. |
+| `ProbeEventMap`  | type      | The observation surface: `arm`, `prove`, `expire`, and `error`.                                                                                       |
+| `ProbeOptions`   | interface | `{ on?, error?, workspace?, deadline? }` — the construction input. `workspace` defaults to the working directory and `deadline` to 30,000 ms.         |
+| `ProbeInterface` | interface | The coordinator contract; its readonly `emitter` and `toolchain` are data. See [`## Methods`](#methods).                                              |
 
 ### Constants
 
@@ -62,12 +62,12 @@ From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 The blueprints behind both the published tool schema and the guard applied to an arriving call, from
 [`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON Schema.
 
-| Name            | Kind  | Describes                                                            |
-| --------------- | ----- | -------------------------------------------------------------------- |
-| `SOURCE_SHAPE`  | const | One file a claim carries; `path` must be a non-empty string.         |
-| `CASE_SHAPE`    | const | The files a claim asserts about and the test that exercises them.    |
-| `CONTROL_SHAPE` | const | A case plus the stage it must fail at and the reason it fails there. |
-| `CLAIM_SHAPE`   | const | One whole claim: the project, the case, and the control.             |
+| Name            | Kind  | Describes                                                                      |
+| --------------- | ----- | ------------------------------------------------------------------------------ |
+| `SOURCE_SHAPE`  | const | One file a claim carries; its schema requires `path` to be a non-empty string. |
+| `CASE_SHAPE`    | const | The files a claim asserts about and the test that exercises them.              |
+| `CONTROL_SHAPE` | const | A case plus the stage it must fail at and the reason it fails there.           |
+| `CLAIM_SHAPE`   | const | One whole claim: the project, the case, and the control.                       |
 
 ### Validators
 
@@ -78,7 +78,7 @@ and never throws.
 | ------------- | -------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `isStage`     | function | `(value: unknown) => value is Stage`         | Admits one of the three stage names.                                                                        |
 | `isOrigin`    | function | `(value: unknown) => value is FindingOrigin` | Admits `'code'` or `'instrument'`.                                                                          |
-| `isSource`    | function | `(value: unknown) => value is Source`        | Admits a record with a non-empty `path` and a string `text`.                                                |
+| `isSource`    | function | `(value: unknown) => value is Source`        | Admits a record with a contained relative `path` and string `text`; refuses absolute and escaping paths.    |
 | `isCase`      | function | `(value: unknown) => value is Case`          | Admits a record whose `files` are sources and whose `test` is one source.                                   |
 | `isControl`   | function | `(value: unknown) => value is Control`       | Admits a case that also carries a `stage` and a non-empty `reason`.                                         |
 | `isClaim`     | function | `(value: unknown) => value is Claim`         | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. |
@@ -92,12 +92,12 @@ and never throws.
 
 Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
-| Name             | Kind     | Signature                                                 | Behavior                                                                                                                    |
-| ---------------- | -------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `formatFinding`  | function | `(finding: Finding) => string`                            | Renders one message as `path:line message`, dropping `:line` when the tool reported none.                                   |
-| `formatCheck`    | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per finding.                                                       |
-| `formatVerdict`  | function | `(verdict: Verdict) => string`                            | Renders the identity, claim digest, toolchain, and project, then every case and control stage, then the receipt line.       |
-| `computeReceipt` | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the proof token when the case ran clean and the control's own code broke at `stage`; returns `undefined` otherwise. |
+| Name             | Kind     | Signature                                                 | Behavior                                                                                                                   |
+| ---------------- | -------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `formatFinding`  | function | `(finding: Finding) => string`                            | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                         |
+| `formatCheck`    | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per finding.                                                      |
+| `formatVerdict`  | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each finding's origin and the receipt line. |
+| `computeReceipt` | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when the case ran clean and the control broke only at `stage`; returns `undefined` otherwise.            |
 
 ### Server contracts
 
@@ -197,24 +197,30 @@ Its `control` is the same edit deliberately broken, plus the `stage` you say the
 and the `reason` in your own words. Both are judged under the TypeScript project the claim's
 `project` member names.
 
+Every verdict returned by `prove` carries that explanation unchanged as `Verdict.reason`. The
+member reports why the claimant chose the control. It does not change receipt eligibility or enter
+the token.
+
 `prove` runs all three stages over the case, then all three over the control, and returns one
 `Check` per stage for each. A stage that cannot start throws rather than returning an empty check,
 so no verdict ever reports a stage that did not run.
 
-The receipt is issued on two conditions together:
+The receipt is issued on three conditions together:
 
 - every stage ran clean on the case — no findings of either origin; and
-- the control produced at least one `origin: 'code'` finding at the stage it declared.
+- the control produced at least one `origin: 'code'` finding at the stage it declared; and
+- every other control stage stayed clean.
 
-A control that breaks somewhere else has falsified the instrument rather than the claim, so no
+A control that also breaks somewhere else has falsified the instrument rather than the claim, so no
 receipt is issued for it. A case the stage could not inspect end to end is not a clean case, which
 is why the case's condition counts `origin: 'instrument'` findings too.
 
 `Finding.origin` is the member that separates the two. A `code` finding carries the tool's own
 message about the candidate's source. An `instrument` finding carries the stage's own message about
 an inspection that did not complete — a specification it could not write, a project it could not
-select, a module that ran no test. A clean runtime check means every collected test passed, not that
-the module reported itself passed.
+select, a module that ran no test. `formatFinding` renders the value first as `[code]` or
+`[instrument]`, so the distinction survives `formatVerdict`. A clean runtime check means every
+collected test passed, not that the module reported itself passed.
 
 ## Prerequisites
 
@@ -401,14 +407,11 @@ carry enum-valued members whose numbering the compiler owns. The first compiler 
 changes the digest for an unchanged project file. That is contained rather than surprising: the
 token already names `typescript@<version>`, so any policy pinning a digest already pins the version.
 
-Two further limits belong beside those:
+One further limit belongs beside those:
 
 - **A control need not be a mutation of its case.** `Control` carries its own `files` and `test`, so
   a caller can pair a clean case with unrelated broken code and satisfy both receipt conditions. The
   claim digest binds the case and the control together, so a reader who reads the control sees it.
-- **`formatVerdict` renders both finding origins identically.** An agent reading the rendered text
-  cannot tell a control failure from an instrument fault. Read `Finding.origin` from the verdict
-  when that distinction matters.
 
 ## What the lint stage does not see
 

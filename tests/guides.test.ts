@@ -243,6 +243,7 @@ describe('guides fences', () => {
 			const verdict = await probe.prove(CLAIM)
 			expect(verdict.receipt).toBeDefined()
 			expect(verdict.digest).toBe(DIGEST)
+			expect(verdict.reason).toBe(CLAIM.control.reason)
 			const receipt = verdict.receipt ?? ''
 			// The guide's parsing rule, applied to the token the run returned: six leading fields,
 			// then a remainder that carries the project path and its digest.

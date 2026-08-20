@@ -79,7 +79,14 @@ describe('core guards', () => {
 		expect(isProject(project)).toBe(true)
 		expect(isProject({ ...project, digest: '' })).toBe(false)
 		expect(isVerdict(verdict)).toBe(true)
+		expect(isVerdict({ ...verdict, reason: 'must not compile' })).toBe(true)
+		expect(isVerdict({ ...verdict, reason: '' })).toBe(false)
 		expect(isVerdict({ ...verdict, receipt: 1 })).toBe(false)
+	})
+
+	it('admits a contained relative source path and refuses workspace escape', () => {
+		expect(isSource({ path: 'src/../tests/greeting.test.ts', text: '' })).toBe(true)
+		expect(isSource({ path: '../../etc/hosts', text: '' })).toBe(false)
 	})
 
 	it('admits a finding that names its origin and refuses one that does not', () => {
