@@ -12,18 +12,18 @@ import { isSource } from './validators.js'
  * @example
  * ```ts
  * const located: Finding = {
- * 	origin: 'code',
+ * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * 	line: 1,
  * }
  * const whole: Finding = {
- * 	origin: 'code',
+ * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * }
- * formatFinding(located) // '[code] src/core/greeting.ts:1 not assignable'
- * formatFinding(whole) // '[code] src/core/greeting.ts not assignable'
+ * formatFinding(located) // '[claimant] src/core/greeting.ts:1 not assignable'
+ * formatFinding(whole) // '[claimant] src/core/greeting.ts not assignable'
  * ```
  */
 export function formatFinding(finding: Finding): string {
@@ -100,10 +100,11 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is issued on these conditions together: both phases report one check per stage, every
- * stage ran clean on the case, the control produced at least one `origin: 'code'` finding at the
- * stage it declared, and every other control stage stayed clean. A control that fails somewhere
- * else has falsified the instrument rather than the claim, so no receipt is issued for it.
+ * A receipt is issued on these conditions together: both phases report one check per stage, the
+ * case carries no claimant finding, the control carries at least one `origin: 'claimant'` finding
+ * at the stage it declared, and every other control stage carries no claimant finding. A control
+ * that fails somewhere else has falsified the instrument rather than the claim, so no receipt is
+ * issued for it.
  *
  * Both phases owe every stage, not the case alone. `strayed` reads the control entries a verdict
  * carries, so a control that omits a stage entirely would otherwise read as a stage that stayed
@@ -123,8 +124,7 @@ export function formatVerdict(verdict: Verdict): string {
  * total for a workspace-relative project path containing either character.
  *
  * An `origin: 'instrument'` finding in either phase means the inspection did not complete and
- * refuses the receipt. The control passes only on a fault in the candidate's own code at its
- * declared stage while every other stage stays clean.
+ * refuses the receipt. A workspace finding does not decide whether the claimant's candidate broke.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
@@ -143,9 +143,11 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 			verdict.checks.some((check) => check.stage === name) &&
 			verdict.control.some((check) => check.stage === name),
 	)
-	const clean = verdict.checks.every((check) => check.findings.length === 0)
+	const clean = verdict.checks.every((check) =>
+		check.findings.every((finding) => finding.origin !== 'claimant'),
+	)
 	const declared = verdict.control.find((check) => check.stage === stage)
-	const broke = declared?.findings.some((finding) => finding.origin === 'code') ?? false
+	const broke = declared?.findings.some((finding) => finding.origin === 'claimant') ?? false
 	const faulted =
 		verdict.checks.some((check) =>
 			check.findings.some((finding) => finding.origin === 'instrument'),
@@ -153,10 +155,11 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 		verdict.control.some((check) =>
 			check.findings.some((finding) => finding.origin === 'instrument'),
 		)
-	const strayed = verdict.control.some(
-		(check) => check.stage !== stage && check.findings.length > 0,
+	const stayed = verdict.control.every(
+		(check) =>
+			check.stage === stage || check.findings.every((finding) => finding.origin !== 'claimant'),
 	)
-	if (!ran || !clean || !broke || faulted || strayed) return undefined
+	if (!ran || !clean || !broke || faulted || !stayed) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain
 	return [
 		RECEIPT_PREFIX,

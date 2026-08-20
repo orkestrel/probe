@@ -1,5 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
-import type { PROBE_ERROR_CODES } from './constants.js'
+import type { ORIGINS, PROBE_ERROR_CODES } from './constants.js'
 
 /**
  * Names an inspection a claim passes through.
@@ -98,8 +98,8 @@ export interface Control extends Case {
  * where the gate reports red. The test files remain on the root project for Vitest and Node globals.
  *
  * The control's candidate sources must differ from the case's. A control byte-identical to its case
- * cannot break, so it never produces the `origin: 'code'` finding a receipt requires, and the claim
- * is unprovable however correct the case is.
+ * cannot break, so it never produces the `origin: 'claimant'` finding a receipt requires, and the
+ * claim is unprovable however correct the case is.
  *
  * @example
  * ```ts
@@ -134,21 +134,18 @@ export interface Claim {
 }
 
 /**
- * Names where the fault one finding reports lives.
+ * Names the party that must act on a finding or probe failure.
  *
  * @remarks
- * `code` is a diagnostic the stage's tool reported about the candidate's source. `instrument` is
- * the stage's own report that its inspection did not complete over that source — a specification
- * it could not delete, a project it could not select, a module that ran no test. They are
- * irreducible modes rather than labels, because only a `code` finding disproves a claim: a control
- * whose test never ran has produced no evidence about the code it was written to break.
+ * `claimant` is the caller who wrote the claim: its input, selections, candidate source, and
+ * lifecycle. `workspace` is the target tree probe borrows. `instrument` is this package.
  *
  * @example
  * ```ts
- * const origin: FindingOrigin = 'code'
+ * const origin: Origin = 'claimant'
  * ```
  */
-export type FindingOrigin = 'code' | 'instrument'
+export type Origin = (typeof ORIGINS)[number]
 
 /**
  * Carries one message a stage reported, where it reported it, and whose fault it names.
@@ -157,9 +154,9 @@ export type FindingOrigin = 'code' | 'instrument'
  * The stage is not repeated here. A finding always arrives inside the `Check` that names its
  * stage, so a second copy could only drift from the first.
  *
- * `origin` decides what `message` means. A `code` finding carries the tool's own message,
- * unedited. An `instrument` finding carries the stage's own message, in the stage's own voice, so
- * a reader is never told a tool said something it never said.
+ * A `claimant` finding is a tool's diagnostic about a candidate source, and nothing else. Every
+ * other claimant fault is thrown. Without this invariant, a bad test path could satisfy the
+ * receipt condition even though the test never ran.
  *
  * `path` is the workspace-relative path a reader can open, which is not always the path the tool
  * named. Each stage maps its tool's own spelling back: the type stage from the compiler's absolute
@@ -173,7 +170,7 @@ export type FindingOrigin = 'code' | 'instrument'
  * @example
  * ```ts
  * const finding: Finding = {
- * 	origin: 'code',
+ * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
  * 	line: 1,
@@ -181,11 +178,11 @@ export type FindingOrigin = 'code' | 'instrument'
  * ```
  */
 export interface Finding {
-	/** Whether this message names a fault in the candidate's code or in the stage that ran. */
-	readonly origin: FindingOrigin
+	/** The party that must act on this message. */
+	readonly origin: Origin
 	/** Workspace-relative path this message is reported against. */
 	readonly path: string
-	/** The tool's own message for a `code` finding, or the stage's own for an `instrument` one. */
+	/** The diagnostic or failure message. */
 	readonly message: string
 	/** One-based line the tool reported, or absent when it reported none. */
 	readonly line?: number
@@ -265,9 +262,10 @@ export interface Project {
  * @remarks
  * A verdict exists only when every stage ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
- * why no member here models a missing stage. `receipt` is present only when every stage ran clean
- * on the case, the control reported an `origin: 'code'` finding at the stage it declared, every
- * other control stage stayed clean, and neither phase reported an `origin: 'instrument'` finding.
+ * why no member here models a missing stage. `receipt` is present only when the case reported no
+ * claimant finding, the control reported an `origin: 'claimant'` finding at the stage it declared,
+ * every other control stage reported no claimant finding, and neither phase reported an
+ * `origin: 'instrument'` finding.
  *
  * `id` identifies this call and `digest` identifies the claim it answered, so two calls over one
  * claim share a digest and differ in their identity. `digest` and `project` are required, because
@@ -288,7 +286,7 @@ export interface Project {
  * @example
  * ```ts
  * const broke: Finding = {
- * 	origin: 'code',
+ * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
  * 	line: 1,
@@ -438,19 +436,17 @@ export interface ProbeInterface {
 }
 
 /**
- * Names the category one probe failure belongs to, derived from {@link PROBE_ERROR_CODES}.
+ * Names the condition that ended a probe operation, derived from {@link PROBE_ERROR_CODES}.
  *
  * @remarks
- * They are irreducible modes rather than labels, because each one names a different party as the
- * one that must act. `invalid` is the caller's input. `destroyed` is an instrument the caller
- * already tore down. `deadline` is the coordinator's budget, and the stage behind it was replaced.
- * `workspace` is the target tree: a tool it does not install, a manifest it does not publish, a
- * project its compiler cannot parse. `instrument` is this package's own tooling reporting that it
- * could not serve, and it carries the same meaning here as it does on {@link FindingOrigin}.
+ * Each condition names a different repair. `refused` changes the rejected value. `missing` creates
+ * or installs the named thing. `malformed` repairs the value read against a contract. `destroyed`
+ * builds a replacement. `deadline` changes the budget or the work it bounds according to the
+ * failure's {@link Origin}.
  *
  * @example
  * ```ts
- * const code: ProbeErrorCode = 'workspace'
+ * const code: ProbeErrorCode = 'missing'
  * ```
  */
 export type ProbeErrorCode = (typeof PROBE_ERROR_CODES)[number]
@@ -490,20 +486,23 @@ export interface ProbeErrorContext {
  * Configures one probe failure at construction.
  *
  * @remarks
- * `code` is required, because a failure a consumer cannot branch on is the failure this type
- * exists to replace. `cause` carries the underlying fault where one ended the operation, and
- * reaches the native `Error` option of the same name.
+ * `origin` and `code` are required, because a failure a consumer cannot branch on is the failure
+ * this type exists to replace. `cause` carries the underlying fault where one ended the operation,
+ * and reaches the native `Error` option of the same name.
  *
  * @example
  * ```ts
  * const options: ProbeErrorOptions = {
- * 	code: 'invalid',
+ * 	origin: 'claimant',
+ * 	code: 'refused',
  * 	context: { path: '../secrets.env' },
  * }
  * ```
  */
 export interface ProbeErrorOptions {
-	/** The machine-readable category this failure belongs to. */
+	/** The party that must act on this failure. */
+	readonly origin: Origin
+	/** The condition that ended the operation. */
 	readonly code: ProbeErrorCode
 	/** Structured detail about the failure. */
 	readonly context?: ProbeErrorContext

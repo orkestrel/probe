@@ -5,7 +5,7 @@ import type {
 	Claim,
 	Control,
 	Finding,
-	FindingOrigin,
+	Origin,
 	Project,
 	Source,
 	Stage,
@@ -21,7 +21,7 @@ import {
 	literalOf,
 	recordOf,
 } from '@orkestrel/contract'
-import { FINDING_ORIGINS, PROBE_STAGES } from './constants.js'
+import { ORIGINS, PROBE_STAGES } from './constants.js'
 
 /**
  * Checks whether a value names a stage.
@@ -147,26 +147,28 @@ export const isClaim: Guard<Claim> = recordOf({
  *
  * @example
  * ```ts
+ * isOrigin('claimant') // true
+ * isOrigin('workspace') // true
  * isOrigin('instrument') // true
  * isOrigin('stage') // false
  * ```
  */
-export const isOrigin: Guard<FindingOrigin> = literalOf(FINDING_ORIGINS)
+export const isOrigin: Guard<Origin> = literalOf(ORIGINS)
 
 /**
  * Checks whether a value carries one message, its location, and the origin of the fault it names.
  *
  * @remarks
  * `origin` is required rather than optional. Every finding this package produces sets it, and a
- * receipt turns on it: a control's finding disproves the claim only when its origin says the
- * candidate's own code broke.
+ * receipt turns on it: a control's finding disproves the claim only when its origin names the
+ * claimant.
  *
  * @param value - The value to check
  * @returns True if the value is a finding; false otherwise
  *
  * @example
  * ```ts
- * isFinding({ origin: 'code', path: 'src/core/greeting.ts', message: 'not assignable' }) // true
+ * isFinding({ origin: 'claimant', path: 'src/core/greeting.ts', message: 'not assignable' }) // true
  * isFinding({ path: 'src/core/greeting.ts', message: 'not assignable' }) // false
  * ```
  */

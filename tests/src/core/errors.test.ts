@@ -27,17 +27,19 @@ describe('probe error', () => {
 		expect(isProbeError(error)).toBe(true)
 		expect(error.name).toBe('ProbeError')
 		expect(error.message).toBe('The probe has been destroyed')
+		expect(error.origin).toBe('claimant')
 		expect(error.code).toBe('destroyed')
 		expect(error.context).toBeUndefined()
 		expect(isProbeError(new Error('The probe has been destroyed'))).toBe(false)
 		expect(isProbeError(undefined)).toBe(false)
-		expect(isProbeError({ name: 'ProbeError', code: 'destroyed' })).toBe(false)
+		expect(isProbeError({ name: 'ProbeError', origin: 'claimant', code: 'destroyed' })).toBe(false)
 	})
 
 	it('carries the context and the cause it was given', () => {
 		const cause = new Error('EACCES')
 		const error = new ProbeError('Path escapes the workspace: ../secrets.env', {
-			code: 'invalid',
+			origin: 'claimant',
+			code: 'refused',
 			context: { path: '../secrets.env' },
 			cause,
 		})
@@ -51,13 +53,27 @@ describe('probe error', () => {
 	it('admits every declared code and refuses one the tuple does not declare', () => {
 		expect(PROBE_ERROR_CODES.length).toBeGreaterThan(0)
 		for (const code of PROBE_ERROR_CODES) {
-			expect(isProbeError(new ProbeError('declared', { code }))).toBe(true)
+			expect(isProbeError(new ProbeError('declared', { origin: 'claimant', code }))).toBe(true)
 		}
 		const undeclared = Object.defineProperty(
-			Object.assign(new Error('undeclared'), { code: 'stalled', name: 'ProbeError' }),
+			Object.assign(new Error('undeclared'), {
+				origin: 'claimant',
+				code: 'stalled',
+				name: 'ProbeError',
+			}),
 			Symbol.for('@orkestrel/probe.error'),
 			{ value: true },
 		)
+		expect(isProbeError(undeclared)).toBe(false)
+	})
+
+	it('refuses a branded error carrying an undeclared origin', () => {
+		const undeclared = Object.defineProperty(
+			new ProbeError('undeclared', { origin: 'claimant', code: 'destroyed' }),
+			'origin',
+			{ value: 'operator' },
+		)
+
 		expect(isProbeError(undeclared)).toBe(false)
 	})
 
@@ -89,7 +105,7 @@ describe('probe error', () => {
 		}
 		const other: unknown = Reflect.construct(SecondConstructor, [
 			'The prove tool requires a valid claim',
-			{ code: 'invalid' },
+			{ origin: 'claimant', code: 'refused' },
 		])
 		const lookalike = Object.defineProperty(
 			new Error('The prove tool requires a valid claim'),

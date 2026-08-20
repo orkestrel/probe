@@ -1,4 +1,4 @@
-import type { FindingOrigin, Stage } from './types.js'
+import type { Stage } from './types.js'
 
 /**
  * The stages a claim passes through, in the order a verdict reports them.
@@ -15,38 +15,38 @@ import type { FindingOrigin, Stage } from './types.js'
 export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'runtime'])
 
 /**
- * The origins a finding carries, naming where the fault it reports lives.
+ * The parties that can own action on a finding or probe failure.
  *
  * @remarks
- * One list feeds the origin guard and the wire shape the stages produce, so an origin cannot be
- * admitted by one and refused by another.
+ * One list feeds the origin type and guard, so an origin cannot be admitted by one and refused by
+ * another.
  *
  * @example
  * ```ts
- * FINDING_ORIGINS // ['code', 'instrument']
+ * ORIGINS // ['claimant', 'workspace', 'instrument']
  * ```
  */
-export const FINDING_ORIGINS: readonly FindingOrigin[] = Object.freeze(['code', 'instrument'])
+export const ORIGINS = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
 
 /**
- * The categories a probe failure carries, naming the party that must act on it.
+ * The conditions that can end a probe operation.
  *
  * @remarks
- * One list feeds the code union and the error guard, so a category cannot be constructed by one and
- * refused by the other. The guard reads this list rather than the class, which is what lets it
- * refuse a lookalike carrying a category this package never declared.
+ * One list feeds the code union and the error guard, so a condition cannot be constructed by one
+ * and refused by the other. The guard reads this list rather than the class, which is what lets it
+ * refuse a lookalike carrying a condition this package never declared.
  *
  * @example
  * ```ts
- * PROBE_ERROR_CODES // ['invalid', 'destroyed', 'deadline', 'workspace', 'instrument']
+ * PROBE_ERROR_CODES // ['refused', 'missing', 'malformed', 'destroyed', 'deadline']
  * ```
  */
 export const PROBE_ERROR_CODES = Object.freeze([
-	'invalid',
+	'refused',
+	'missing',
+	'malformed',
 	'destroyed',
 	'deadline',
-	'workspace',
-	'instrument',
 ] as const)
 
 /**

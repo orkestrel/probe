@@ -39,7 +39,7 @@ describe('core guards', () => {
 			reason: 'must not compile',
 		}
 		const claim: Claim = { project: 'configs/src/tsconfig.core.json', case: subject, control }
-		const finding: Finding = { origin: 'code', path: '', message: '' }
+		const finding: Finding = { origin: 'claimant', path: '', message: '' }
 		const check: Check = { stage: 'lint', elapsed: 17, findings: [finding] }
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
@@ -95,7 +95,7 @@ describe('core guards', () => {
 
 	it('admits a finding that names its origin and refuses one that does not', () => {
 		const finding: Finding = {
-			origin: 'code',
+			origin: 'claimant',
 			path: 'src/core/greeting.ts',
 			message: 'not assignable',
 		}
@@ -114,7 +114,8 @@ describe('core guards', () => {
 			elapsed: 17,
 		}
 
-		expect(isOrigin('code')).toBe(true)
+		expect(isOrigin('claimant')).toBe(true)
+		expect(isOrigin('workspace')).toBe(true)
 		expect(isOrigin('instrument')).toBe(true)
 		expect(isOrigin('stage')).toBe(false)
 		expect(isFinding(finding)).toBe(true)

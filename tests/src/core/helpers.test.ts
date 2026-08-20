@@ -42,7 +42,7 @@ describe('core formatting helpers', () => {
 	// this file's typecheck before any assertion ran.
 	it('renders both origins with and without a line', () => {
 		const located: Finding = {
-			origin: 'code',
+			origin: 'claimant',
 			path: 'src/core/greeting.ts',
 			message: 'not assignable',
 			line: 1,
@@ -53,7 +53,7 @@ describe('core formatting helpers', () => {
 			message: 'not assignable',
 		}
 
-		expect(formatFinding(located)).toBe('[code] src/core/greeting.ts:1 not assignable')
+		expect(formatFinding(located)).toBe('[claimant] src/core/greeting.ts:1 not assignable')
 		expect(formatFinding(whole)).toBe('[instrument] src/core/greeting.ts not assignable')
 	})
 
@@ -65,17 +65,21 @@ describe('core formatting helpers', () => {
 			formatCheck({
 				stage: 'type',
 				elapsed: 23,
-				findings: [{ origin: 'code', path: 'src/core/first.ts', message: 'first', line: 4 }],
+				findings: [{ origin: 'claimant', path: 'src/core/first.ts', message: 'first', line: 4 }],
 			}),
-		).toBe('type: 1 finding (23 ms)\n  [code] src/core/first.ts:4 first')
+		).toBe('type: 1 finding (23 ms)\n  [claimant] src/core/first.ts:4 first')
 		expect(
 			formatCheck({
 				stage: 'runtime',
 				elapsed: 31,
 				findings: [
-					{ origin: 'code', path: 'tests/src/core/first.test.ts', message: 'first failure' },
 					{
-						origin: 'code',
+						origin: 'claimant',
+						path: 'tests/src/core/first.test.ts',
+						message: 'first failure',
+					},
+					{
+						origin: 'claimant',
 						path: 'tests/src/core/second.test.ts',
 						message: 'second failure',
 						line: 8,
@@ -84,8 +88,8 @@ describe('core formatting helpers', () => {
 			}),
 		).toBe(
 			'runtime: 2 findings (31 ms)\n' +
-				'  [code] tests/src/core/first.test.ts first failure\n' +
-				'  [code] tests/src/core/second.test.ts:8 second failure',
+				'  [claimant] tests/src/core/first.test.ts first failure\n' +
+				'  [claimant] tests/src/core/second.test.ts:8 second failure',
 		)
 	})
 
@@ -100,7 +104,12 @@ describe('core formatting helpers', () => {
 				stage: 'type',
 				elapsed: 14,
 				findings: [
-					{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable', line: 1 },
+					{
+						origin: 'claimant',
+						path: 'src/core/control.ts',
+						message: 'not assignable',
+						line: 1,
+					},
 				],
 			},
 			{ stage: 'lint', elapsed: 15, findings: [] },
@@ -127,7 +136,7 @@ describe('core formatting helpers', () => {
 			'case lint: 0 findings (12 ms)',
 			'case runtime: 0 findings (13 ms)',
 			'control type: 1 finding (14 ms)',
-			'  [code] src/core/control.ts:1 not assignable',
+			'  [claimant] src/core/control.ts:1 not assignable',
 			'control lint: 0 findings (15 ms)',
 			'control runtime: 0 findings (16 ms)',
 			'receipt proof-token',
@@ -170,7 +179,7 @@ describe('core receipt helper', () => {
 			project: PROJECT,
 			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
 			control: buildControl('type', [
-				{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' },
+				{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
 			]),
 			elapsed: 7,
 		}
@@ -194,7 +203,7 @@ describe('core receipt helper', () => {
 			project,
 			checks: PROBE_STAGES.map((stage) => ({ stage, elapsed: 1, findings: [] })),
 			control: buildControl('type', [
-				{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' },
+				{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
 			]),
 			elapsed: 7,
 		}
@@ -220,7 +229,7 @@ describe('core receipt helper', () => {
 
 	it('refuses receipts for each incomplete or disproven verdict state', () => {
 		const finding: Finding = {
-			origin: 'code',
+			origin: 'claimant',
 			path: 'src/core/control.ts',
 			message: 'not assignable',
 		}
@@ -259,7 +268,7 @@ describe('core receipt helper', () => {
 
 	it('refuses a receipt when an instrument finding shares the declared control stage', () => {
 		const broke: Finding = {
-			origin: 'code',
+			origin: 'claimant',
 			path: 'tests/src/core/greeting.test.ts',
 			message: 'expected 4 to be 5',
 		}
@@ -297,7 +306,7 @@ describe('core receipt helper', () => {
 		// assembled by hand. The omitted stage never reported, and reading its absence as clean
 		// certifies an inspection that did not happen.
 		const broke: Finding = {
-			origin: 'code',
+			origin: 'claimant',
 			path: 'src/core/control.ts',
 			message: 'not assignable',
 		}
@@ -335,12 +344,14 @@ describe('core receipt helper', () => {
 				{
 					stage: 'type',
 					elapsed: 1,
-					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'not assignable' }],
+					findings: [
+						{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
+					],
 				},
 				{
 					stage: 'lint',
 					elapsed: 1,
-					findings: [{ origin: 'code', path: 'src/core/control.ts', message: 'lint failure' }],
+					findings: [{ origin: 'claimant', path: 'src/core/control.ts', message: 'lint failure' }],
 				},
 				{ stage: 'runtime', elapsed: 1, findings: [] },
 			],
@@ -350,7 +361,34 @@ describe('core receipt helper', () => {
 		expect(computeReceipt(base, 'type')).toBeUndefined()
 	})
 
-	it('refuses a receipt for a case whose stage reported a fault in its own instrument', () => {
+	it('permits workspace messages outside the claimant failure', () => {
+		const workspace: Finding = {
+			origin: 'workspace',
+			path: 'tsconfig.json',
+			message: 'The workspace contains an unrelated diagnostic',
+		}
+		const checks: readonly Check[] = PROBE_STAGES.map((stage) => ({
+			stage,
+			elapsed: 1,
+			findings: stage === 'lint' ? [workspace] : [],
+		}))
+		const control = buildControl('type', [
+			{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
+		]).map((check) => (check.stage === 'runtime' ? { ...check, findings: [workspace] } : check))
+		const verdict: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			checks,
+			control,
+			elapsed: 7,
+		}
+
+		expect(computeReceipt(verdict, 'type')).toBe(TOKEN)
+	})
+
+	it('refuses a receipt when either phase reports an instrument fault', () => {
 		// The stage's own fault, not the candidate's: nothing here is a message about the code the
 		// case supplied, and the case still cannot be certified clean.
 		const fault: Finding = {
@@ -374,12 +412,33 @@ describe('core receipt helper', () => {
 			project: PROJECT,
 			checks: faulted,
 			control: buildControl('runtime', [
-				{ origin: 'code', path: 'tests/src/core/greeting.test.ts', message: 'expected 4 to be 5' },
+				{
+					origin: 'claimant',
+					path: 'tests/src/core/greeting.test.ts',
+					message: 'expected 4 to be 5',
+				},
 			]),
 			elapsed: 7,
 		}
 
 		expect(computeReceipt(base, 'runtime')).toBeUndefined()
+		expect(
+			computeReceipt(
+				{
+					...base,
+					checks: clean,
+					control: buildControl('runtime', [
+						{
+							origin: 'claimant',
+							path: 'tests/src/core/greeting.test.ts',
+							message: 'expected 4 to be 5',
+						},
+						fault,
+					]),
+				},
+				'runtime',
+			),
+		).toBeUndefined()
 		expect(computeReceipt({ ...base, checks: clean }, 'runtime')).toBe(
 			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
 		)
