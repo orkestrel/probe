@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
-// Every count below is a delta against the moment it was read. A sibling test in this project holds
-// listeners of its own, and the worker these run in is not a fresh process.
+// Every following count is a delta against the moment it was read. A sibling test in this project
+// holds listeners of its own, and the worker these run in is not a fresh process.
 function readInput() {
 	return {
 		data: process.stdin.listenerCount('data'),
@@ -150,9 +150,8 @@ describe('probe server', () => {
 		})
 	})
 
-	// The two cases below attach after `start`, which is the moment a teardown that removed whatever
-	// an emitter had gained could not see: a listener a host registers there is a gain, and reading
-	// it as this server's takes a listener this server never added.
+	// The two following cases attach after `start`. A teardown that removed whatever an emitter had
+	// gained could not tell that a listener a host registers there is not this server's.
 	it(
 		'keeps a signal listener a host attached while it was serving',
 		{ timeout: 180_000 },

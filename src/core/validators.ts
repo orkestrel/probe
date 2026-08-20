@@ -121,8 +121,7 @@ export const isControl: Guard<Control> = recordOf({
  * shape constrains it to a non-empty string, while `isDraft` also refuses an absolute path
  * and one that traverses out of the workspace, so `../../etc/hosts` satisfies
  * `compileGuard(CLAIM_SHAPE)` and is refused here. `ProbeServer` advertises the shape and enforces
- * this rule, so it names the refused member with `findRefusedPaths` rather than reporting only that
- * the claim was invalid.
+ * this rule, so it names the refused member rather than reporting only that the claim was invalid.
  *
  * @param value - The value to check
  * @returns True if the value is a claim; false otherwise

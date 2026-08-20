@@ -1,7 +1,9 @@
+import type { Draft } from '@src/core'
 import { EventEmitter } from 'node:events'
 import { lstatSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { compileGuard } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
@@ -9,6 +11,7 @@ import {
 	computeDigest,
 	createRevisionFile,
 	describeUnknown,
+	findRefusedPaths,
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
@@ -24,7 +27,7 @@ import {
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
 } from '@src/server'
-import { isProbeError } from '@src/core'
+import { CLAIM_SHAPE, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -432,5 +435,61 @@ describe('server digest leaves', () => {
 		expect(computeDigest(ROOT, { first: 1, second: 2 })).toBe(
 			computeDigest(ROOT, { second: 2, first: 1 }),
 		)
+	})
+})
+
+describe('server claim refusal', () => {
+	const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
+	const control = { files: [], test: draft, stage: 'type', reason: 'must not compile' }
+
+	it('names every draft member whose path the guard refuses', () => {
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [draft], test: draft },
+				control,
+			}),
+		).toStrictEqual([])
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: {
+					files: [draft, { path: '../../etc/hosts', text: '' }],
+					test: { path: '/etc/hosts', text: '' },
+				},
+				control: { ...control, files: [{ path: 'C:\\Windows\\hosts', text: '' }] },
+			}),
+		).toStrictEqual(['case.test.path', 'case.files.1.path', 'control.files.0.path'])
+	})
+
+	it('reports nothing for a refusal the advertised schema already explains', () => {
+		// A missing text, a member this contract does not declare, and a value that is no claim at
+		// all are all refusals the schema itself reports, so blaming a path for one would name the
+		// wrong member.
+		const missingPath = {
+			project: 'configs/src/tsconfig.core.json',
+			case: { files: [{ text: '' }], test: draft },
+			control,
+		}
+		expect(compileGuard(CLAIM_SHAPE)(missingPath)).toBe(false)
+		expect(findRefusedPaths(missingPath)).toStrictEqual([])
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [{ path: 'src/core/greeting.ts' }], test: draft },
+				control,
+			}),
+		).toStrictEqual([])
+		expect(
+			findRefusedPaths({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [], test: draft },
+				control,
+				surplus: true,
+			}),
+		).toStrictEqual([])
+		expect(findRefusedPaths(undefined)).toStrictEqual([])
+		expect(findRefusedPaths([draft])).toStrictEqual([])
+		expect(findRefusedPaths({ case: 17, control: 'control' })).toStrictEqual([])
 	})
 })

@@ -9,12 +9,12 @@ import {
 	CLAIM_SHAPE,
 	ProbeError,
 	createDestroyedError,
-	findRefusedPaths,
 	formatVerdict,
 	isClaim,
 	isVerdict,
 } from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
+import { findRefusedPaths } from './helpers.js'
 import { Probe } from './Probe.js'
 
 /**

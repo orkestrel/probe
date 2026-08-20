@@ -17,8 +17,9 @@ const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 // without replying to `initialize`, `silent-initialize` stays alive and never replies to
 // `initialize`, and `ignored-exit` answers `shutdown` and then stays alive through `exit`, which is
 // the one ending the protocol leaves to the client to force. Markers in a document's own text
-// select how it answers that document: `PROBE_SILENT` publishes nothing, and `PROBE_CLOSES_INPUT`
-// closes the server's own standard input when that document is closed.
+// select how it answers that document: `PROBE_SILENT` writes the document URI to `admitted` and
+// publishes nothing, and `PROBE_CLOSES_INPUT` closes the server's own standard input when that
+// document is closed.
 const SERVER = [
 	"import { closeSync, existsSync, writeFileSync } from 'node:fs'",
 	'let buffer = Buffer.alloc(0)',
@@ -320,7 +321,7 @@ describe('lint stage', () => {
 				})
 				expect(excluded.issues).toStrictEqual([])
 				// The control is the same text under a path the gate does lint. Without it a stage that
-				// reported nothing at all would pass the assertion above.
+				// reported nothing at all would pass the preceding assertion.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'tests/src/server/lint-excluded.test.ts', text: 'debugger\n' },
@@ -347,7 +348,7 @@ describe('lint stage', () => {
 				})
 				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text under a path the exemption does not reach. Without it a
-				// stage that reported nothing at all would pass the assertion above.
+				// stage that reported nothing at all would pass the preceding assertion.
 				const reported = await stage.inspect({
 					files: [],
 					test: { path: 'tests/src/server/lint-override.ts', text },
@@ -505,12 +506,12 @@ describe('lint stage', () => {
 					}),
 				])
 				// The `clean` control is the boot control's own clean text at the same path. Without it a
-				// stage that reported an issue for everything would pass the assertion above.
+				// stage that reported an issue for everything would pass the preceding assertion.
 				const clean = await stage.inspect({ files: [], test: { path, text: PASSING } })
 				expect(clean.issues).toStrictEqual([])
 				// The `elsewhere` control is the same violation under the same file name outside that
-				// directory, where the workspace leaves the rule off. It is what makes the issue
-				// above evidence that the declared directory selected the rule set.
+				// directory, where the workspace leaves the rule off. It makes the preceding issue
+				// evidence that the declared directory selected the rule set.
 				const elsewhere = await stage.inspect({
 					files: [],
 					test: { path: 'lib/arm-runtime-89ab.test.ts', text: violation },
@@ -715,7 +716,7 @@ describe('lint stage', () => {
 	it('settles teardown when the language server cannot spawn', { timeout: 20_000 }, async () => {
 		const scratch = createScratch({ files: FIXTURE })
 		try {
-			// The workspace resolves its Oxlint binary from the directory above, and naming a
+			// The workspace resolves its Oxlint binary from the parent directory, and naming a
 			// directory that is not there is what makes the spawn itself fail. Such a child reports
 			// `error` and `close` and never `exit`, so teardown has to read the ending off the child
 			// rather than off an event it never receives.

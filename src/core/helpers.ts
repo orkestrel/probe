@@ -1,8 +1,5 @@
 import type { Check, Issue, Stage, Verdict } from './types.js'
-import { compileGuard } from '@orkestrel/contract'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
-import { CLAIM_SHAPE } from './shapers.js'
-import { isDraft } from './validators.js'
 
 /**
  * Renders one tool message as a single line an agent can classify and locate.
@@ -107,7 +104,7 @@ export function formatVerdict(verdict: Verdict): string {
  * that fails somewhere else has falsified the instrument rather than the claim, so no receipt is
  * minted for it.
  *
- * Both phases owe every stage, not the case alone. `strayed` reads the control entries a verdict
+ * Both phases owe every stage, not the case alone. `stayed` reads the control entries a verdict
  * carries, so a control that omits a stage entirely would otherwise read as a stage that stayed
  * clean, and the receipt would certify an inspection that never ran. `prove` records every stage
  * for both phases, so this condition refuses only a verdict a caller assembled by hand.
@@ -213,47 +210,4 @@ export function formatSpecification(text: string, revision: string): string {
  */
 export function matchesSpecification(text: string, revision: string): boolean {
 	return text.endsWith(formatSpecification('', revision))
-}
-
-/**
- * Names every draft member of a claim-shaped value whose `path` this package's guard refuses.
- *
- * @remarks
- * The published claim schema constrains `Draft.path` to a non-empty string and nothing else, while
- * `isDraft` also refuses an absolute path and one that escapes the workspace. That one member is
- * the whole of the difference between the advertised contract and the enforced one, so a caller
- * refused after satisfying the schema is refused here and nowhere else. The whole input must first
- * satisfy that schema. Each draft is then tested with `isDraft` itself rather than with a second
- * copy of its rule. Reports nothing for a value carrying no draft member, including one refused for
- * a member this contract does not declare.
- *
- * @param value - The rejected tool input
- * @returns The dotted member names, in `case` then `control` order, or an empty list
- *
- * @example
- * ```ts
- * const test = { path: 'tmp/probe/greeting.test.ts', text: '' }
- * findRefusedPaths({
- * 	project: 'tsconfig.json',
- * 	case: { files: [{ path: '../../etc/hosts', text: '' }], test },
- * 	control: { files: [], test, stage: 'type', reason: 'must not compile' },
- * })
- * // ['case.files.0.path']
- * ```
- */
-export function findRefusedPaths(value: unknown): readonly string[] {
-	if (!compileGuard(CLAIM_SHAPE)(value)) return []
-	const members: string[] = []
-	for (const phase of ['case', 'control'] as const) {
-		const subject = value[phase]
-		const drafts = new Map<string, unknown>([[`${phase}.test`, subject.test]])
-		for (const [index, file] of subject.files.entries()) {
-			drafts.set(`${phase}.files.${index}`, file)
-		}
-		for (const [member, draft] of drafts) {
-			if (isDraft(draft)) continue
-			members.push(`${member}.path`)
-		}
-	}
-	return members
 }

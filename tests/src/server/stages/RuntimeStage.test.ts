@@ -294,7 +294,7 @@ describe('runtime stage', () => {
 					'probe:receipt-origin-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@receipt-origin-project'
 
 				// The stage marks a test it never ran as its own fault and a failed expectation as
-				// the candidate's, which is what the outcomes below are read from.
+				// the candidate's, which is what the following outcomes are read from.
 				expect(skipped.issues).toStrictEqual([
 					{
 						origin: 'instrument',

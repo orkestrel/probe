@@ -44,8 +44,8 @@ function findBareErrors(source: string, path: string): readonly string[] {
 }
 
 // Runs one failure path and hands back what it raised, so an assertion reads the value a consumer
-// catches. A call that returns instead of raising hands back `undefined`, which no assertion below
-// admits.
+// catches. A call that returns instead of raising hands back `undefined`. No following assertion
+// admits that value.
 function raiseFailure(action: () => unknown): unknown {
 	try {
 		action()
@@ -162,7 +162,7 @@ describe('probe error', () => {
 	})
 })
 
-// Adoption, not definition: the class above is worth nothing to a consumer while a failure path
+// Adoption, not definition: the preceding class is worth nothing to a consumer while a failure path
 // beside it still raises a value that carries no ownership and no condition to branch on. The
 // failure this package raises most often is not one it constructs — it is a dependency's own,
 // caught and translated — so these run the paths and read what came back.
@@ -282,7 +282,7 @@ describe('failure adoption', () => {
 		}
 	})
 
-	// The control for the assertion above, drawn from outside the population it covers: the
+	// The control for the preceding assertion, drawn from outside the population it covers: the
 	// untranslated shape `readWorkspaceManifest` replaced. A gate that admitted this would report
 	// green over exactly the defect it exists to catch.
 	it('refuses a failure a dependency raised and this package did not translate', () => {

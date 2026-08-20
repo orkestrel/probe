@@ -245,7 +245,7 @@ describe.sequential('probe', () => {
 					slowest(verdict.case) + slowest(verdict.control),
 				)
 				// The same relation applied to the contract's own example, so the documented figure
-				// cannot drift back below the accounting the run above demonstrated.
+				// cannot drift back below the accounting the preceding run demonstrated.
 				expect(documented).toHaveLength(7)
 				expect(documented[6]).toBeGreaterThanOrEqual(
 					Math.max(...documented.slice(0, 3)) + Math.max(...documented.slice(3, 6)),
@@ -341,6 +341,55 @@ describe.sequential('probe', () => {
 			}
 		},
 	)
+
+	it('reports a blocked boot workbench as a workspace failure', async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'tsconfig.json',
+			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+		)
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		scratch.write('tmp/probe', '')
+		const probe = new Probe({ workspace: scratch.path })
+		try {
+			await expect(
+				probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probe/blocked-workbench.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probe/blocked-workbench.test.ts',
+							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						},
+						stage: 'runtime',
+						reason: 'the test throws',
+					},
+				}),
+			).rejects.toMatchObject({
+				name: 'ProbeError',
+				message: expect.stringContaining('The probe could not write the boot workbench'),
+				origin: 'workspace',
+				code: 'malformed',
+				context: { path: 'tmp/probe' },
+				cause: expect.any(Error),
+			})
+		} finally {
+			await probe.destroy()
+			scratch.destroy()
+		}
+	})
 
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()
@@ -1237,7 +1286,7 @@ describe.sequential('probe', () => {
 				expect(forged.receipt).toBe(
 					`probe:${forged.digest}:type:typescript@${forged.toolchain.typescript}:oxlint@${forged.toolchain.oxlint}:vitest@${forged.toolchain.vitest}:${lax}@${forged.project.digest}`,
 				)
-				// The control that makes the receipt above worth reading: the same claim under the
+				// The control that makes the preceding receipt worth reading: the same claim under the
 				// workspace's own project reports the candidate and issues nothing, so a policy
 				// comparing the token's project field refuses what a token without one admitted.
 				expect(workspace.receipt).toBeUndefined()

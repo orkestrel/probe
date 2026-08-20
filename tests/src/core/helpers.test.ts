@@ -1,12 +1,9 @@
-import type { Check, Draft, Issue, Project, Stage, Toolchain, Verdict } from '@src/core'
-import { compileGuard } from '@orkestrel/contract'
+import type { Check, Issue, Project, Stage, Toolchain, Verdict } from '@src/core'
 import {
-	CLAIM_SHAPE,
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
 	RECEIPT_SEPARATOR,
 	computeReceipt,
-	findRefusedPaths,
 	formatCheck,
 	formatIssue,
 	formatSpecification,
@@ -526,61 +523,5 @@ describe('core specification marker', () => {
 		expect(matchesSpecification(text, '4821-9f0c')).toBe(false)
 		expect(matchesSpecification(`${marked}export const NOTE = 1\n`, '4821-9f0c')).toBe(false)
 		expect(matchesSpecification('', '4821-9f0c')).toBe(false)
-	})
-})
-
-describe('core claim refusal', () => {
-	const draft: Draft = { path: 'src/core/greeting.ts', text: '' }
-	const control = { files: [], test: draft, stage: 'type', reason: 'must not compile' }
-
-	it('names every draft member whose path the guard refuses', () => {
-		expect(
-			findRefusedPaths({
-				project: 'configs/src/tsconfig.core.json',
-				case: { files: [draft], test: draft },
-				control,
-			}),
-		).toStrictEqual([])
-		expect(
-			findRefusedPaths({
-				project: 'configs/src/tsconfig.core.json',
-				case: {
-					files: [draft, { path: '../../etc/hosts', text: '' }],
-					test: { path: '/etc/hosts', text: '' },
-				},
-				control: { ...control, files: [{ path: 'C:\\Windows\\hosts', text: '' }] },
-			}),
-		).toStrictEqual(['case.test.path', 'case.files.1.path', 'control.files.0.path'])
-	})
-
-	it('reports nothing for a refusal the advertised schema already explains', () => {
-		// A missing text, a member this contract does not declare, and a value that is no claim at
-		// all are all refusals the schema itself reports, so blaming a path for one would name the
-		// wrong member.
-		const missingPath = {
-			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ text: '' }], test: draft },
-			control,
-		}
-		expect(compileGuard(CLAIM_SHAPE)(missingPath)).toBe(false)
-		expect(findRefusedPaths(missingPath)).toStrictEqual([])
-		expect(
-			findRefusedPaths({
-				project: 'configs/src/tsconfig.core.json',
-				case: { files: [{ path: 'src/core/greeting.ts' }], test: draft },
-				control,
-			}),
-		).toStrictEqual([])
-		expect(
-			findRefusedPaths({
-				project: 'configs/src/tsconfig.core.json',
-				case: { files: [], test: draft },
-				control,
-				surplus: true,
-			}),
-		).toStrictEqual([])
-		expect(findRefusedPaths(undefined)).toStrictEqual([])
-		expect(findRefusedPaths([draft])).toStrictEqual([])
-		expect(findRefusedPaths({ case: 17, control: 'control' })).toStrictEqual([])
 	})
 })

@@ -224,6 +224,7 @@ export interface ProbeServerInterface {
 	 * Calling it after teardown begins throws a claimant-owned `destroyed` failure.
 	 *
 	 * @returns Nothing
+	 * @throws When this call comes after teardown begins
 	 */
 	start(): void
 	/**

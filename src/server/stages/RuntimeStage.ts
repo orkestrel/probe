@@ -69,10 +69,11 @@ import { Overlay } from '../Overlay.js'
  * as a path string, into which the stage can install no overlay, and a specification path that
  * crosses a symbolic link, whose existing components this host cannot inspect, or whose directory
  * the target tree blocks probe from creating. An `origin: 'instrument'` issue names this package's
- * own machinery: a specification it could not run, evict, or delete for a reason the target tree
- * does not own, and a run that reported no test. An unmapped caller test and a test whose named
- * project is absent are claimant failures with `code: 'missing'`, thrown rather than reported,
- * because a test that never ran is no evidence about the candidate.
+ * own machinery: a specification it could not write after its directory exists, or one it could
+ * not run, evict, or delete for a reason the target tree does not own, and a run that reported no
+ * test. An unmapped caller test and a test whose named project is absent are claimant failures with
+ * `code: 'missing'`, thrown rather than reported, because a test that never ran is no evidence
+ * about the candidate.
  *
  * The write path's physical-containment guarantee covers the claim inputs and the target tree as
  * inspected. A concurrent process that mutates a path component between the final inspection and
@@ -415,11 +416,9 @@ export class RuntimeStage implements StageInterface {
 		}
 		return {
 			origin:
-				outcome.error instanceof ProbeError && outcome.error.origin === 'workspace'
+				(outcome.error instanceof ProbeError && outcome.error.origin === 'workspace') || creating
 					? 'workspace'
-					: creating
-						? 'workspace'
-						: 'instrument',
+					: 'instrument',
 			path: test.path,
 			message: `The runtime stage could not write the generated specification (${describeUnknown(outcome.error)})`,
 		}

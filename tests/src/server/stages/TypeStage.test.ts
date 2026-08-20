@@ -454,7 +454,7 @@ describe('type stage project resolution', () => {
 			expect(declared.path).toBe('configs/src/tsconfig.core.json')
 			expect(declared.digest).toMatch(/^[0-9a-f]{32}$/)
 			expect(spelled).toStrictEqual(declared)
-			// Without this the pair above passes for a digest that reads nothing at all, because
+			// Without this the preceding pair passes for a digest that reads nothing at all, because
 			// two spellings of one file would agree under any constant.
 			expect(root.digest).not.toBe(declared.digest)
 			expect(root.path).toBe('tsconfig.json')
@@ -487,7 +487,7 @@ describe('type stage project resolution', () => {
 			)
 			expect(first.digest).not.toBe(second.digest)
 
-			// The pair above sits at two paths, and a parsed project carries its own file path, so
+			// The preceding pair sits at two paths, and a parsed project carries its own file path, so
 			// that inequality alone cannot say the parent moved it. Realign the second parent and
 			// read the same path again on a stage holding no parse of it: the project file and its
 			// path are fixed, and its parent's `strict` is the only thing that moved.

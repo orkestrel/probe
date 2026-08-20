@@ -211,8 +211,9 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #arm(): Promise<void> {
+		const created = this.#workbench()
 		try {
-			await this.#boot()
+			await this.#boot(created)
 		} catch (error) {
 			// A boot failure and a claim's own stage failure are otherwise one message: the controls
 			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
@@ -228,20 +229,40 @@ export class Probe implements ProbeInterface {
 		this.#emitter.emit('arm', this.#toolchain)
 	}
 
-	async #boot(): Promise<void> {
+	#workbench(): boolean {
+		const path = 'tmp/probe'
+		const directory = resolveWorkspaceFile(this.#workspace, path)
+		const created = !existsSync(directory)
+		try {
+			mkdirSync(resolveWorkspaceFile(this.#workspace, path, true), { recursive: true })
+		} catch (error) {
+			const code =
+				error instanceof ProbeError && error.origin === 'workspace' ? error.code : 'malformed'
+			throw new ProbeError(
+				`The probe could not write the boot workbench (${describeUnknown(error)})`,
+				{
+					origin: 'workspace',
+					code,
+					context: { path },
+					cause: error,
+				},
+			)
+		}
+		return created
+	}
+
+	async #boot(created: boolean): Promise<void> {
 		// The dependencies that follow are real files in the target's tree, so they carry the same
 		// revision identity a generated specification does: the writing host's process id, then a
 		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
 		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
 		const revision = `${process.pid}-${randomUUID()}`
-		const directory = resolveWorkspaceFile(this.#workspace, 'tmp/probe')
 		const typeDependency = createRevisionFile(this.#workspace, 'tmp/probe/arm-type.ts', revision)
 		const runtimeDependency = createRevisionFile(
 			this.#workspace,
 			'tmp/probe/arm-runtime.ts',
 			revision,
 		)
-		const created = !existsSync(directory)
 		const typeModule = basename(typeDependency, '.ts')
 		const runtimeModule = basename(runtimeDependency, '.ts')
 		const typeTest = {
@@ -273,7 +294,6 @@ export class Probe implements ProbeInterface {
 			},
 		}
 		try {
-			mkdirSync(resolveWorkspaceFile(this.#workspace, 'tmp/probe', true), { recursive: true })
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true)
 			writeFileSync(

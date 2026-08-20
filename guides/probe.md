@@ -19,7 +19,7 @@
 
 A `Claim`, a `Verdict`, and a `receipt` carry the package. A `Claim` is the question: a case, a
 control that must break, and the TypeScript project both are judged under. A `Verdict` is the
-answer: one `Check` per stage for the case and one per stage for the control. A `receipt` is the
+answer: one `Check` per stage in each phase. A `receipt` is the
 verdict's one-line summary of the conditions it was reached under, and it exists only when the claim
 proved itself.
 
@@ -118,7 +118,6 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 | `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise. |
 | `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                         |
 | `matchesSpecification` | function | `(text: string, revision: string) => boolean`             | Reports whether one file's text is the generated specification written for that revision.                                                      |
-| `findRefusedPaths`     | function | `(value: unknown) => readonly string[]`                   | Names every draft member of a rejected claim whose `path` the guard refuses and the advertised schema admits.                                  |
 
 ### Server contracts
 
@@ -186,6 +185,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `matchesWorkspaceModule` | function | `(path: string) => boolean`                                                                 | Reports whether a path is a script, TypeScript, Vue, or JSON module Vitest can cache.                                                                                                                                                                                                                                                                                                                                                   |
 | `parseContentLength`     | function | `(header: string) => number \| undefined`                                                   | Reads a Language Server Protocol frame's declared byte length, or `undefined` for an invalid header.                                                                                                                                                                                                                                                                                                                                    |
 | `describeUnknown`        | function | `(value: unknown) => string`                                                                | Normalizes a caught or foreign error into readable text.                                                                                                                                                                                                                                                                                                                                                                                |
+| `findRefusedPaths`       | function | `(value: unknown) => readonly string[]`                                                     | Names every draft member of a rejected claim whose `path` the guard refuses and the advertised schema admits.                                                                                                                                                                                                                                                                                                                           |
 | `normalizeValue`         | function | `(workspace: string, value: unknown) => unknown`                                            | Rewrites every workspace-contained absolute path to its relative form and sorts every record's keys.                                                                                                                                                                                                                                                                                                                                    |
 | `computeDigest`          | function | `(workspace: string, value: unknown) => string`                                             | Digests the normalized value and returns 32 lowercase hex characters.                                                                                                                                                                                                                                                                                                                                                                   |
 | `captureListeners`       | function | `(emitter: EventEmitter, events: readonly string[]) => ListenerCapture`                     | Records the listeners one emitter carries for a set of events.                                                                                                                                                                                                                                                                                                                                                                          |
@@ -281,10 +281,11 @@ serve both an issue and a failure: without it, a caller's own mistake — a test
 collects, a project the caller named and the compiler cannot parse — would arrive as a `claimant`
 issue and satisfy the condition that a test which never ran must never satisfy. A `workspace` issue
 carries the target tree's own defect, such as a symbolic link in a mutation path, a mutation path
-whose existing components cannot be inspected, or a Vitest project the root configuration declares
-as a path string, into which the runtime stage can install no overlay. An `instrument` issue carries
-this package's own message about an inspection that did not complete — a specification it could not
-write, or a module that ran no test.
+whose existing components cannot be inspected, a specification directory the target tree blocks
+probe from creating, or a Vitest project the root configuration declares as a path string, into
+which the runtime stage can install no overlay. An `instrument` issue carries this package's own
+message about an inspection that did not complete — a specification it could not write after its
+directory exists, or a module that ran no test.
 `formatIssue` renders the value first as `[claimant]`, `[workspace]`, or `[instrument]`, so the
 ownership survives `formatVerdict`. A clean runtime check means every collected test passed, not
 that the module reported itself passed.
@@ -320,17 +321,17 @@ and does not match the contract it is read against, `destroyed` builds a replace
 teardown is permanent, and `deadline` changes the budget or the work it bounds. Neither axis is
 derivable from the other. These are the pairs this package raises:
 
-| Party        | Code        | Raised when                                                                                                                                                                                                                                                                                          |
-| ------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a path the host filesystem refuses to inspect because it exceeds the host's length limit or carries a NUL byte, a claim the tool guard rejects, a candidate naming no scoped project, or a caller-named project whose diagnostic names no file. |
-| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                                                      |
-| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                                                           |
-| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began.                                                                                                                        |
-| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                                                          |
-| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                                                       |
-| `workspace`  | `malformed` | The target tree publishes something probe cannot read: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, or a mutation path whose existing components cannot be inspected.                                       |
-| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                                                       |
-| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                                                      |
+| Party        | Code        | Raised when                                                                                                                                                                                                                                                                                                     |
+| ------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a path the host filesystem refuses to inspect because it exceeds the host's length limit or carries a NUL byte, a claim the tool guard rejects, a candidate naming no scoped project, or a caller-named project whose diagnostic names no file.            |
+| `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                                                                 |
+| `claimant`   | `destroyed` | A probe, a server, or a stage is used after its `destroy`.                                                                                                                                                                                                                                                      |
+| `claimant`   | `deadline`  | `ProbeOptions.deadline` expired while the stage was performing claimant-owned work, so the claim outran the budget. That stage was replaced before the next inspection began.                                                                                                                                   |
+| `workspace`  | `refused`   | A mutation path crosses a symbolic link in the target tree.                                                                                                                                                                                                                                                     |
+| `workspace`  | `missing`   | The target tree does not install a tool probe resolves from it, or publishes no binary under that tool's name.                                                                                                                                                                                                  |
+| `workspace`  | `malformed` | The target tree publishes something probe cannot read or blocks probe from creating the boot workbench: an unparsable manifest, a `bin` entry that is not a path, a TypeScript project its own compiler refuses, an unsupported tool version, or a mutation path whose existing components cannot be inspected. |
+| `instrument` | `malformed` | probe's own tooling could not serve: a boot control that did not report red, a language server frame it could not parse, a schema or verdict of its own it could not validate.                                                                                                                                  |
+| `instrument` | `deadline`  | A stage was not performing claimant-owned work when its budget expired, or a language server did not answer its teardown exchange within the stage's own bound.                                                                                                                                                 |
 
 An `instrument` failure carries the same meaning it carries on `Issue.origin`: the inspection did
 not complete, so nothing was learned about the code. Do not read it as evidence about a candidate.
@@ -411,6 +412,9 @@ stdio transport. Register the resolved JavaScript entry and run it with the harn
 Register that entry rather than a global install, an `npx` invocation, or the `node_modules/.bin`
 shim. The shim is a shell script on POSIX hosts and a batch file on Windows, and spawning the
 JavaScript entry with the current executable is the form that survives both.
+
+When a prerequisite refuses construction, the binary writes the failure as one stderr line in the form
+`[origin] code: message` and exits with status 1.
 
 These facts decide whether a hand-written client works, and each fails silently when it is wrong:
 
@@ -608,8 +612,8 @@ components and refuses a symbolic link at any of them with
 `Path crosses a symbolic link: <path>`; it then refuses any component whose resolved path leaves
 the workspace. The symbolic-link refusal is `origin: 'workspace'`, `code: 'refused'`, because the
 link belongs to the target tree. A native fault while inspecting an existing component is
-`origin: 'workspace'`, `code: 'malformed'`, and retains that fault on `cause`. Nothing this package
-writes or deletes can land outside the target tree for the claim inputs and the tree as inspected.
+`origin: 'workspace'`, `code: 'malformed'`, and retains that fault on `cause`. The
+physical-containment guarantee covers the claim inputs and the target tree as inspected.
 A concurrent process that mutates a path component between the final inspection and the write or
 delete is outside that guarantee.
 
@@ -762,7 +766,7 @@ inspection rather than the common one.
   literal shared with the `Claim` contract, what `verdict.digest` covers, and the flagship claim run
   for its receipt.
 - [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — the formatters, the receipt token's
-  conditions, the generated specification's marker, and the members a refused claim names.
+  conditions, and the generated specification's marker.
 - [`validators.test.ts`](../tests/src/core/validators.test.ts) — every guard against hostile shapes,
   including the draft path the advertised schema admits and the guard refuses.
 - [`errors.test.ts`](../tests/src/core/errors.test.ts) — the failure guard against lookalikes and a
@@ -771,7 +775,7 @@ inspection rather than the common one.
 - [`Probe.test.ts`](../tests/src/server/Probe.test.ts) — arming, admission, deadline expiry and
   stage replacement, and the receipt decision end to end.
 - [`helpers.test.ts`](../tests/src/server/helpers.test.ts) — the server leaves, including every
-  documented example on this page's helper table.
+  documented example on this page's helper table and the members a refused claim names.
 - [`TypeStage.test.ts`](../tests/src/server/stages/TypeStage.test.ts),
   [`LintStage.test.ts`](../tests/src/server/stages/LintStage.test.ts), and
   [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the resident stages
