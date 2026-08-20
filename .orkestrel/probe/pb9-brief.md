@@ -176,3 +176,22 @@ weakening the criterion.
 - Files changed.
 
 No process diary.
+
+## What landed since this brief was written
+
+PB6, PB7, and PB8 all ran. Read the tree, not the brief's picture of it.
+
+- **`guides/probe.md` and `tests/guides.test.ts` exist.** The guides gate sweeps both barrels for a missing `@example`, requires every `Object.keys(server)` name to have a backticked row under `## Surface`, and executes the documented fences. Your change adds `ProbeServer` and removes `stop` from `ProbeServerInterface`, so all three move together — **`guides/probe.md` and `tests/guides.test.ts` are granted to you** for exactly that parity.
+- **`Verdict` gained an optional `reason`**, carried from `Control.reason`.
+- **`isSource` refuses an absolute or workspace-escaping path.**
+- **`formatFinding` renders `[code]` or `[instrument]`** ahead of every finding's location.
+- **`normalizePath` is exported** from `src/server/helpers.ts`; use it rather than writing another rewrite.
+- **`Overlay` is interned**, listed with `OverlayInterface` in the parity `INTERNAL` list. If `ProbeServer` should be interned rather than barrelled, that list is where it goes — but the reconciliation ruled it barrelled, and that ruling stands unless you find a reason it cannot be.
+
+## The one measurement to re-take before you design against it
+
+The reconciliation records `destroy()` at 2853 ms and Vitest's force-exit timer at about 1 ms. Both
+were taken before PB5 landed stage recycling and before PB7's changes. **Re-take the `destroy()`
+figure on this tree as your first step** and state it. The ruling does not change if the number
+moved — 1 ms is not reachable — but the number goes in the guide with its date, and a stale one is
+the defect this campaign exists to stop.
