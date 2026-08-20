@@ -1,4 +1,4 @@
-import { Overlay } from '@src/server'
+import { Overlay } from '../../../src/server/Overlay.js'
 import { describe, expect, it } from 'vitest'
 
 describe('overlay', () => {

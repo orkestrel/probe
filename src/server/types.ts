@@ -32,13 +32,9 @@ export interface Inspection {
  * resident tool that caches by version reads fresh text for a path this overlay holds and reads
  * disk again after `clear`.
  *
- * @example
- * ```ts
- * const overlay = new Overlay()
- * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
- * console.log(overlay.text('/srv/checkout/src/core/greeting.ts'))
- * overlay.clear()
- * ```
+ * `Overlay` implements this contract and stays out of the server barrel, because no published
+ * signature accepts an overlay and each inspection mints its own. There is no example here for the
+ * same reason: a consumer cannot construct one and has nothing to hand it to.
  */
 export interface OverlayInterface {
 	/** Identity of the candidate set this overlay holds. */

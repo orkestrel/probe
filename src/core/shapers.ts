@@ -66,8 +66,10 @@ export const CONTROL_SHAPE = objectShape(
  *
  * @remarks
  * The Model Context Protocol tool publishes `compileSchema(CLAIM_SHAPE)` and admits a call with
- * `compileGuard(CLAIM_SHAPE)`. Deriving both from this one value is what stops the advertised
- * contract and the enforced contract from drifting apart across a release.
+ * `isClaim`, which `validators.ts` holds to admitting and refusing exactly what
+ * `compileGuard(CLAIM_SHAPE)` does. Deriving the advertised schema from this one value, and holding
+ * the hand-written guard to it, is what stops the advertised contract and the enforced contract
+ * from drifting apart across a release.
  *
  * @example
  * ```ts

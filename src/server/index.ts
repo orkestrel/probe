@@ -1,7 +1,6 @@
 export * from './types.js'
 export * from './helpers.js'
 export * from './factories.js'
-export * from './Overlay.js'
 export * from './Probe.js'
 export * from './stages/LintStage.js'
 export * from './stages/RuntimeStage.js'

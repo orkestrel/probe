@@ -15,6 +15,25 @@ import { createVitest } from 'vitest/node'
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 
 describe('runtime stage', () => {
+	// The revision marker lands between the stem and the extension, so a specification generated
+	// from a `.test.ts` path is not itself a `.test.ts` file. Every project's include pattern ends
+	// at that suffix, which is what keeps an abandoned specification out of every suite while
+	// leaving it in the tree the type and lint gates read.
+	it('writes a generated specification no Vitest project collects', () => {
+		const file = createRevisionFile(
+			ROOT,
+			'tmp/probe/greeting.test.ts',
+			`${process.pid}-${randomUUID()}`,
+		)
+		const name = relative(ROOT, file).replaceAll('\\', '/')
+		expect(name.startsWith('tmp/probe/greeting.test.probe-')).toBe(true)
+		expect(name.endsWith('.test.ts')).toBe(false)
+		const config = readFileSync(resolve(ROOT, 'vite.config.ts'), 'utf8')
+		const includes = [...config.matchAll(/include: \['([^']+)'\]/g)].map((match) => match[1] ?? '')
+		expect(includes.length).toBeGreaterThan(0)
+		for (const include of includes) expect(include.endsWith('.test.ts')).toBe(true)
+	})
+
 	it('reports a missing workspace runner during construction', () => {
 		const scratch = createScratch({ prefix: 'probe-runtime-resolution-' })
 		try {

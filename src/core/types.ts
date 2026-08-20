@@ -23,7 +23,7 @@ export type Stage = 'type' | 'lint' | 'runtime'
  *
  * @example
  * ```ts
- * const source: Source = { path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }
+ * const source: Source = { path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }
  * ```
  */
 export interface Source {
@@ -45,8 +45,11 @@ export interface Source {
  * @example
  * ```ts
  * const subject: Case = {
- * 	files: [{ path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }],
- * 	test: { path: 'tests/src/core/greeting.test.ts', text: 'test("greets", () => {})\n' },
+ * 	files: [{ path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }],
+ * 	test: {
+ * 		path: 'tmp/probe/greeting.test.ts',
+ * 		text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 	},
  * }
  * ```
  */
@@ -68,8 +71,11 @@ export interface Case {
  * @example
  * ```ts
  * const control: Control = {
- * 	files: [{ path: 'src/core/greeting.ts', text: 'export const GREETING: number = "hi"\n' }],
- * 	test: { path: 'tests/src/core/greeting.test.ts', text: 'test("greets", () => {})\n' },
+ * 	files: [{ path: 'src/core/greeting.ts', text: "export const GREETING: number = 'hi'\n" }],
+ * 	test: {
+ * 		path: 'tmp/probe/greeting.test.ts',
+ * 		text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 	},
  * 	stage: 'type',
  * 	reason: 'a string literal assigned to a number must not compile',
  * }
@@ -90,14 +96,30 @@ export interface Control extends Case {
  * because the root project admits host globals the scoped projects remove and would report green
  * where the gate reports red. The test files remain on the root project for Vitest and Node globals.
  *
+ * The control's candidate sources must differ from the case's. A control byte-identical to its case
+ * cannot break, so it never produces the `origin: 'code'` finding a receipt requires, and the claim
+ * is unprovable however correct the case is.
+ *
  * @example
  * ```ts
- * const greeting: Source = { path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }
- * const test: Source = { path: 'tests/src/core/greeting.test.ts', text: 'test("greets", () => {})\n' }
  * const claim: Claim = {
  * 	project: 'configs/src/tsconfig.core.json',
- * 	case: { files: [greeting], test },
- * 	control: { files: [greeting], test, stage: 'type', reason: 'the control must not compile' },
+ * 	case: {
+ * 		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }],
+ * 		test: {
+ * 			path: 'tmp/probe/greeting.test.ts',
+ * 			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 		},
+ * 	},
+ * 	control: {
+ * 		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING: number = 'hi'\n" }],
+ * 		test: {
+ * 			path: 'tmp/probe/greeting.test.ts',
+ * 			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 		},
+ * 		stage: 'type',
+ * 		reason: 'a string literal assigned to a number must not compile',
+ * 	},
  * }
  * ```
  */

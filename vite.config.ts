@@ -173,6 +173,22 @@ export const config = (options?: UserConfig): UserConfig =>
 		options ?? {},
 	)
 
+export const guides = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'guides', color: 'green' },
+				include: ['tests/guides.test.ts'],
+				exclude: ['tests/src/**/*.test.ts', 'tests/app/**/*.test.ts', 'tests/setup.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
 export const distribution = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
@@ -209,6 +225,6 @@ export const probe = (options?: UserConfig): UserConfig =>
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcCore, srcServer, srcBin, policy, config, distribution, probe],
+		projects: [srcCore, srcServer, srcBin, policy, config, guides, distribution, probe],
 	},
 })

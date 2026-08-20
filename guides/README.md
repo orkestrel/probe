@@ -3,8 +3,7 @@
 ## By concept
 
 - Package
-  - Spec: Not created. Create this file when the workspace has a public surface:
-    `guides/probe.md`
+  - Spec: [`probe.md`](probe.md)
   - Source:
     - [`src/core`](../src/core)
     - [`src/server`](../src/server)
@@ -17,14 +16,11 @@
 ## By directory
 
 - [`src/core`](../src/core)
-  - Guide: Not created. Create this file when the workspace has a public surface:
-    `guides/probe.md`
+  - Guide: [`probe.md`](probe.md)
   - Tests: [`tests/src/core`](../tests/src/core)
 - [`src/server`](../src/server)
-  - Guide: Not created. Create this file when the workspace has a public surface:
-    `guides/probe.md`
+  - Guide: [`probe.md`](probe.md)
   - Tests: [`tests/src/server`](../tests/src/server)
 - [`src/bin`](../src/bin)
-  - Guide: Not created. Create this file when the workspace has a public surface:
-    `guides/probe.md`
+  - Guide: [`probe.md`](probe.md)
   - Tests: [`tests/src/bin`](../tests/src/bin)

@@ -2,10 +2,12 @@ import * as entry from '@src/server'
 import { describe, expect, it } from 'vitest'
 
 describe('src server entry', () => {
+	// `Overlay` is deliberately absent: no published signature accepts one, and each inspection
+	// mints its own so a resident tool re-reads the paths it holds. `tests/guides.test.ts` names it
+	// in the parity `INTERNAL` list and fails if it returns to this barrel.
 	it('publishes the coordinator, stages, factories, and server leaves', () => {
 		expect(Object.keys(entry).sort()).toStrictEqual([
 			'LintStage',
-			'Overlay',
 			'Probe',
 			'RuntimeStage',
 			'TypeStage',

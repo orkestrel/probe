@@ -121,3 +121,26 @@ change stops that row and is reported; it does not stop the unit.
 - Files changed.
 
 No process diary.
+
+## One row added after PB6
+
+PB6 found this in a file its own rows did not reach, and recorded it against the capability that owns
+it. It is yours.
+
+| Row | The statement, and what the code does | Source |
+| --- | ------------------------------------ | ------ |
+| 47 | `src/server/stages/RuntimeStage.ts:41-46` carries a latency measurement in a source comment with no date. | PB6 report, 2026-08-20 |
+
+This is the defect class the `PROBE.md` ruling exists to stop, surviving in a source comment. Apply the
+same rule `.agents/orchestration.md` § Before you prune fixes for a guide: a number carries the date it
+was taken, or it is re-taken, or it goes. Re-take it on this host and date it, or delete it and say
+what the comment is for without the number.
+
+## What PB6 changed that you must read before starting
+
+PB6 landed a guide, a parity gate, and a barrel change. Three of its findings correct inputs this brief
+inherited:
+
+- **`Overlay` and `OverlayInterface` are now interned**, named in the parity `INTERNAL` list. `Overlay` is no longer barrelled. Row 44's `normalizePath` consolidation still stands, but read the barrel as it is now.
+- **`tests/guides.test.ts` exists** and sweeps both barrels for a missing `@example`. Any export you add or rename must carry one, or that gate fails.
+- **Eleven of fifteen barrelled server helpers lacked an `@example`; all fifteen carry one now.** Row 23's `formatFinding` example is a core helper and is still yours.

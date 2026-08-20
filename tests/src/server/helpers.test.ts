@@ -22,6 +22,56 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 
+// Every `@example` block the eleven documented server helpers carry, run verbatim and asserted
+// against the value each block states. An illustrative `/srv/checkout` root stands for the
+// workspace under test, so a documented value carrying a path is composed the same way the block
+// composes it rather than pinned to one host's separator.
+describe('server helper examples', () => {
+	it('returns the documented value for every documented server-helper example', () => {
+		expect(resolveWorkspaceFile(ROOT, 'src/core/greeting.ts')).toBe(
+			resolve(ROOT, 'src/core/greeting.ts'),
+		)
+		expect(() => resolveWorkspaceFile(ROOT, '../secrets.env')).toThrow(
+			'Path escapes the workspace: ../secrets.env',
+		)
+		expect(relativeWorkspaceFile(ROOT, resolve(ROOT, 'src/core/greeting.ts'))).toBe(
+			'src/core/greeting.ts',
+		)
+		expect(resolveWorkspaceModule(ROOT, 'typescript/package.json')).toBe(
+			readWorkspaceManifest(ROOT, 'typescript').path,
+		)
+		expect(relativeWorkspaceFile(ROOT, resolveWorkspaceBinary(ROOT, 'oxlint'))).toBe(
+			'node_modules/oxlint/bin/oxlint',
+		)
+		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
+			'typescript does not publish the typescript binary',
+		)
+		expect(inferTypeProject('src/core/greeting.ts')).toBe('configs/src/tsconfig.core.json')
+		expect(() => inferTypeProject('tests/src/core/greeting.test.ts')).toThrow(
+			'Cannot infer a scoped TypeScript project for tests/src/core/greeting.test.ts',
+		)
+		expect(inferTestProject('tmp/probe/greeting.test.ts')).toBe('probe')
+		expect(inferTestProject('tests/src/server/helpers.test.ts')).toBe('src:server')
+		expect(inferTestProject('tests/config.test.ts')).toBeUndefined()
+		expect(inferDocumentLanguage('src/core/greeting.ts')).toBe('typescript')
+		expect(inferDocumentLanguage('src/browser/Panel.tsx')).toBe('typescriptreact')
+		expect(
+			relativeWorkspaceFile(
+				ROOT,
+				createRevisionFile(ROOT, 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+			),
+		).toBe('tmp/probe/greeting.test.probe-4821-9f0c.ts')
+		expect(matchesWorkspaceModule('src/core/greeting.ts')).toBe(true)
+		expect(matchesWorkspaceModule('src/styles/tokens.css')).toBe(false)
+		expect(parseContentLength('Content-Length: 128')).toBe(128)
+		expect(parseContentLength('Content-Type: application/json')).toBeUndefined()
+		expect(messageFromUnknown(new Error('The lint stage has been destroyed'))).toBe(
+			'The lint stage has been destroyed',
+		)
+		expect(messageFromUnknown(17)).toBe('17')
+	})
+})
+
 describe('server project inferers', () => {
 	it('infers source and application TypeScript projects and refuses other paths', () => {
 		expect(inferTypeProject('src/core/value.ts')).toBe('configs/src/tsconfig.core.json')

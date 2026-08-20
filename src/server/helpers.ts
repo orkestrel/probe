@@ -14,6 +14,14 @@ import { isArray, isRecord } from '@orkestrel/contract'
  * @param target - A workspace-relative path
  * @returns The absolute contained path
  * @throws When the path resolves outside the workspace
+ *
+ * @example
+ * ```ts
+ * resolveWorkspaceFile('/srv/checkout', 'src/core/greeting.ts')
+ * // '/srv/checkout/src/core/greeting.ts'
+ * resolveWorkspaceFile('/srv/checkout', '../secrets.env')
+ * // throws: Path escapes the workspace: ../secrets.env
+ * ```
  */
 export function resolveWorkspaceFile(workspace: string, target: string): string {
 	const root = resolve(workspace)
@@ -31,6 +39,12 @@ export function resolveWorkspaceFile(workspace: string, target: string): string 
  * @param workspace - The target workspace root
  * @param file - The path a tool reported
  * @returns A forward-slash workspace-relative path
+ *
+ * @example
+ * ```ts
+ * relativeWorkspaceFile('/srv/checkout', '/srv/checkout/src/core/greeting.ts')
+ * // 'src/core/greeting.ts'
+ * ```
  */
 export function relativeWorkspaceFile(workspace: string, file: string): string {
 	return relative(resolve(workspace), resolve(file)).replaceAll('\\', '/')
@@ -43,6 +57,12 @@ export function relativeWorkspaceFile(workspace: string, file: string): string {
  * @param specifier - The module specifier to resolve
  * @returns The installed module entry path
  * @throws When the workspace does not install the module
+ *
+ * @example
+ * ```ts
+ * resolveWorkspaceModule(process.cwd(), 'typescript/package.json') ===
+ * 	readWorkspaceManifest(process.cwd(), 'typescript').path // true
+ * ```
  */
 export function resolveWorkspaceModule(workspace: string, specifier: string): string {
 	const require = createRequire(resolve(workspace, 'package.json'))
@@ -103,6 +123,14 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
  * @param name - The installed package name and binary key
  * @returns The absolute JavaScript entry named by the package's `bin` field
  * @throws When the package does not publish a binary under the requested name
+ *
+ * @example
+ * ```ts
+ * relativeWorkspaceFile(process.cwd(), resolveWorkspaceBinary(process.cwd(), 'oxlint'))
+ * // 'node_modules/oxlint/bin/oxlint'
+ * resolveWorkspaceBinary(process.cwd(), 'typescript')
+ * // throws: typescript does not publish the typescript binary
+ * ```
  */
 export function resolveWorkspaceBinary(workspace: string, name: string): string {
 	const manifest = readWorkspaceManifest(workspace, name)
@@ -127,6 +155,13 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
  * @param path - The workspace-relative candidate source path
  * @returns The workspace-relative scoped project path
  * @throws When the source does not name a configured source or application environment
+ *
+ * @example
+ * ```ts
+ * inferTypeProject('src/core/greeting.ts') // 'configs/src/tsconfig.core.json'
+ * inferTypeProject('tests/src/core/greeting.test.ts')
+ * // throws: Cannot infer a scoped TypeScript project for tests/src/core/greeting.test.ts
+ * ```
  */
 export function inferTypeProject(path: string): string {
 	const [axis, environment] = path.replaceAll('\\', '/').split('/')
@@ -141,6 +176,13 @@ export function inferTypeProject(path: string): string {
  *
  * @param path - The workspace-relative test path
  * @returns The project name, or `undefined` for the root project
+ *
+ * @example
+ * ```ts
+ * inferTestProject('tmp/probe/greeting.test.ts') // 'probe'
+ * inferTestProject('tests/src/server/helpers.test.ts') // 'src:server'
+ * inferTestProject('tests/config.test.ts') // undefined
+ * ```
  */
 export function inferTestProject(path: string): string | undefined {
 	const [root, axis, environment] = path.replaceAll('\\', '/').split('/')
@@ -155,6 +197,12 @@ export function inferTestProject(path: string): string | undefined {
  *
  * @param path - The source path whose extension selects the language
  * @returns The matching JavaScript or TypeScript language identifier
+ *
+ * @example
+ * ```ts
+ * inferDocumentLanguage('src/core/greeting.ts') // 'typescript'
+ * inferDocumentLanguage('src/browser/Panel.tsx') // 'typescriptreact'
+ * ```
  */
 export function inferDocumentLanguage(path: string): string {
 	const extension = extname(path).toLowerCase()
@@ -171,6 +219,15 @@ export function inferDocumentLanguage(path: string): string {
  * @param path - The workspace-relative test path
  * @param revision - The fresh revision identity
  * @returns An absolute sibling file path
+ *
+ * @example
+ * ```ts
+ * relativeWorkspaceFile(
+ * 	'/srv/checkout',
+ * 	createRevisionFile('/srv/checkout', 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+ * )
+ * // 'tmp/probe/greeting.test.probe-4821-9f0c.ts'
+ * ```
  */
 export function createRevisionFile(workspace: string, path: string, revision: string): string {
 	const file = resolveWorkspaceFile(workspace, path)
@@ -184,6 +241,12 @@ export function createRevisionFile(workspace: string, path: string, revision: st
  *
  * @param path - The candidate file path
  * @returns True for script, TypeScript, Vue, and JSON modules; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesWorkspaceModule('src/core/greeting.ts') // true
+ * matchesWorkspaceModule('src/styles/tokens.css') // false
+ * ```
  */
 export function matchesWorkspaceModule(path: string): boolean {
 	return /\.(?:[cm]?[jt]sx?|vue|json)$/.test(path)
@@ -194,6 +257,12 @@ export function matchesWorkspaceModule(path: string): boolean {
  *
  * @param header - The frame header text without its terminating empty line
  * @returns The non-negative content length, or `undefined` for an invalid header
+ *
+ * @example
+ * ```ts
+ * parseContentLength('Content-Length: 128') // 128
+ * parseContentLength('Content-Type: application/json') // undefined
+ * ```
  */
 export function parseContentLength(header: string): number | undefined {
 	const match = /(?:^|\r\n)Content-Length:\s*(\d+)(?:\r\n|$)/i.exec(header)
@@ -208,6 +277,13 @@ export function parseContentLength(header: string): number | undefined {
  *
  * @param value - The value to describe
  * @returns Its message when present, or its string representation
+ *
+ * @example
+ * ```ts
+ * messageFromUnknown(new Error('The lint stage has been destroyed'))
+ * // 'The lint stage has been destroyed'
+ * messageFromUnknown(17) // '17'
+ * ```
  */
 export function messageFromUnknown(value: unknown): string {
 	if (value instanceof Error) return value.message

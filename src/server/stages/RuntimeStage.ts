@@ -166,8 +166,9 @@ export class RuntimeStage implements StageInterface {
 	async #destroy(): Promise<void> {
 		try {
 			// Remove the abandoned specifications first. An inspection the coordinator gave up on keeps
-			// its file until the run it started finally settles, and that file matches the workbench
-			// project's glob, so a developer running the workbench meets a stranger's hung test.
+			// its file until the run it started finally settles, and a file left behind is ordinary
+			// TypeScript in the target's tree: the workspace's own `check` and `lint:check` read it
+			// and report its diagnostics as the consumer's own.
 			for (const file of this.#revisions) {
 				try {
 					if (existsSync(file)) unlinkSync(file)
@@ -448,11 +449,13 @@ export class RuntimeStage implements StageInterface {
 
 	// Removes the generated specifications a dead host left behind. Every inspection deletes its own
 	// file and teardown deletes the ones it abandoned, so a file that outlives both belongs to a
-	// host that was killed. It stays in the target's tree, where it matches the workbench project's
-	// own glob and fails a consumer's gates with a stranger's test. Two things make the sweep safe:
-	// only this stage writes the revision marker, and only with one process identity and one random
-	// UUID behind it, so a developer's own file carrying the marker is left where it is and so is a
-	// live neighbour's specification.
+	// host that was killed. No Vitest project collects it — the revision marker sits between the
+	// stem and the extension, so a specification generated from a `.test.ts` path is not itself a
+	// `.test.ts` file — but it is ordinary TypeScript in the target's tree, so the workspace's own
+	// `check` and `lint:check` report its diagnostics against the consumer. Two things make the
+	// sweep safe: only this stage writes the revision marker, and only with one process identity
+	// and one random UUID behind it, so a developer's own file carrying the marker is left where it
+	// is and so is a live neighbour's specification.
 	#sweep(): void {
 		for (const path of this.#walk()) {
 			const owner =
