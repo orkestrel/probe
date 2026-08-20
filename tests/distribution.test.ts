@@ -86,13 +86,19 @@ describe.sequential('published distribution', () => {
 						resolve(ROOT, 'node_modules', dependency),
 					)
 				}
-				for (const peer of ['oxlint', 'typescript', 'vitest']) {
-					scratch.link(`consumer/node_modules/${peer}`, resolve(ROOT, 'node_modules', peer))
-				}
 				installation = extracted.status === 0
 				evidence = `${extracted.stdout}\n${extracted.stderr}\n${String(extracted.error)}`
 			}
 			if (!installation) throw new Error(`The distribution could not be installed\n${evidence}`)
+
+			// The peers are optional dependencies of this package and resolve from the workspace being
+			// probed, so a consumer that installs only the package cannot drive a stage. Link them on
+			// BOTH paths: the real install succeeds on a networked host and the extraction fallback
+			// runs where a nested install is denied, and a consumer materialized by either route needs
+			// the same toolchain present.
+			for (const peer of ['oxlint', 'typescript', 'vitest']) {
+				scratch.link(`consumer/node_modules/${peer}`, resolve(ROOT, 'node_modules', peer))
+			}
 			scratch.write(
 				'consumer/tsconfig.json',
 				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',

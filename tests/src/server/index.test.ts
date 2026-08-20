@@ -15,6 +15,7 @@ describe('src server entry', () => {
 			'inferDocumentLanguage',
 			'inferTestProject',
 			'inferTypeProject',
+			'loadWorkspaceModule',
 			'matchesWorkspaceModule',
 			'messageFromUnknown',
 			'parseContentLength',

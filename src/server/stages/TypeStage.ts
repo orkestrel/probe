@@ -4,12 +4,11 @@ import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
 	inferTypeProject,
+	loadWorkspaceModule,
 	relativeWorkspaceFile,
 	resolveWorkspaceFile,
-	resolveWorkspaceModule,
 } from '../helpers.js'
 import { Overlay } from '../Overlay.js'
 
@@ -53,7 +52,8 @@ export class TypeStage implements StageInterface {
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		this.#typescript = this.#warm()
+		const typescript = loadWorkspaceModule(this.#workspace, 'typescript')
+		this.#typescript = this.#warm(typescript)
 		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
 		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
 		// rejecting, so an inspection still reports the warming failure.
@@ -143,13 +143,7 @@ export class TypeStage implements StageInterface {
 		this.#overlay.clear()
 	}
 
-	async #warm(): Promise<typeof TypeScript> {
-		const workspaceEntry = resolveWorkspaceModule(this.#workspace, 'typescript')
-		const packageEntry = fileURLToPath(import.meta.resolve('typescript'))
-		if (workspaceEntry !== packageEntry) {
-			throw new Error('The type stage does not share the workspace TypeScript installation')
-		}
-		const typescript = await import('typescript')
+	async #warm(typescript: typeof TypeScript): Promise<typeof TypeScript> {
 		for (const project of this.#projects()) {
 			this.#resident.add(resolveWorkspaceFile(this.#workspace, project))
 			this.#service(typescript, project)

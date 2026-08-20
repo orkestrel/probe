@@ -3,12 +3,23 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { waitForDelay } from '@orkestrel/test'
+import { createScratch } from '@orkestrel/test/server'
 import { TypeStage } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 
 describe('type stage', () => {
+	it('reports a missing workspace compiler during construction', () => {
+		const scratch = createScratch({ prefix: 'probe-type-resolution-' })
+		try {
+			scratch.write('package.json', '{"name":"probe-type-resolution","private":true}\n')
+			expect(() => new TypeStage(scratch.path)).toThrow("Cannot find module 'typescript'")
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('reports a real type error and accepts clean source', { timeout: 60_000 }, async () => {
 		const stage = new TypeStage(ROOT)
 		const test = {

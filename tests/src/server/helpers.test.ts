@@ -5,6 +5,7 @@ import {
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
+	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	messageFromUnknown,
 	parseContentLength,
@@ -91,6 +92,11 @@ describe('server path helpers', () => {
 		expect(() => resolveWorkspaceModule(ROOT, 'missing-probe-package')).toThrow(
 			'Cannot find module',
 		)
+	})
+
+	it('loads installed tool modules from the workspace', () => {
+		expect(loadWorkspaceModule(ROOT, 'typescript').version).toMatch(/^\d+\.\d+\.\d+/)
+		expect(loadWorkspaceModule(ROOT, 'vitest/node').createVitest).toBeTypeOf('function')
 	})
 
 	it('reads installed manifests and refuses absent packages', () => {

@@ -1,4 +1,4 @@
-import type { Plugin } from 'vite'
+import type { Plugin, Rolldown } from 'vite'
 import { parseSync, transformWithOxc, Visitor } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { isBuiltin } from 'node:module'
@@ -13,6 +13,17 @@ import {
 	realpathSync,
 } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+
+export function enforceBuildLog(
+	level: Rolldown.LogLevel,
+	log: Rolldown.RolldownLog,
+	report: Rolldown.LogOrStringHandler,
+): void {
+	if (log.code === 'EMPTY_IMPORT_META') {
+		throw new Error(`[orkestrel-build] ${log.message}`)
+	}
+	report(level, log)
+}
 
 export function hasAsciiUrlControl(value: string): boolean {
 	for (const character of value) {

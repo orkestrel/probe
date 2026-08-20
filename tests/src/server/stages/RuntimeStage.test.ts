@@ -14,6 +14,16 @@ import { createVitest } from 'vitest/node'
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 
 describe('runtime stage', () => {
+	it('reports a missing workspace runner during construction', () => {
+		const scratch = createScratch({ prefix: 'probe-runtime-resolution-' })
+		try {
+			scratch.write('package.json', '{"name":"probe-runtime-resolution","private":true}\n')
+			expect(() => new RuntimeStage(scratch.path)).toThrow("Cannot find module 'vitest/node'")
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it(
 		'reports a failing expectation and accepts a passing expectation',
 		{ timeout: 60_000 },

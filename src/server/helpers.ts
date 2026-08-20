@@ -1,4 +1,6 @@
 import type { WorkspaceManifest } from './types.js'
+import type * as TypeScript from 'typescript'
+import type * as VitestNode from 'vitest/node'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
@@ -44,6 +46,30 @@ export function relativeWorkspaceFile(workspace: string, file: string): string {
 export function resolveWorkspaceModule(workspace: string, specifier: string): string {
 	const require = createRequire(resolve(workspace, 'package.json'))
 	return require.resolve(specifier)
+}
+
+/**
+ * Loads one installed tool module from a target workspace.
+ *
+ * @param workspace - The target workspace root
+ * @param specifier - The module specifier to load
+ * @returns The installed module
+ * @throws When the workspace cannot load the module
+ *
+ * @example
+ * ```ts
+ * const typescript = loadWorkspaceModule(process.cwd(), 'typescript')
+ * console.log(typescript.version)
+ * ```
+ */
+export function loadWorkspaceModule(workspace: string, specifier: 'typescript'): typeof TypeScript
+export function loadWorkspaceModule(workspace: string, specifier: 'vitest/node'): typeof VitestNode
+export function loadWorkspaceModule(
+	workspace: string,
+	specifier: 'typescript' | 'vitest/node',
+): typeof TypeScript | typeof VitestNode {
+	const require = createRequire(resolve(workspace, 'package.json'))
+	return specifier === 'typescript' ? require('typescript') : require('vitest/node')
 }
 
 /**

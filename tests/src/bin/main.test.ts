@@ -351,6 +351,18 @@ describe('bin entry', () => {
 			const scratch = createScratch()
 			scratch.write('package.json', '{}\n')
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			// Give the scratch a workspace the entry can actually arm against. A peer-resolution or
+			// configuration failure now surfaces at stage construction, so a workspace missing its
+			// TypeScript project or Vitest configuration aborts the boot at a point that varies per
+			// run, and the arming this test observes never happens.
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			)
 			const directory = resolve(scratch.path, 'tmp/probe')
 			const child = spawn(process.execPath, [BUILT_ENTRY], {
 				cwd: scratch.path,
@@ -362,8 +374,13 @@ describe('bin entry', () => {
 			let leaked: readonly string[] = []
 			try {
 				const arming = await waitForArming(directory)
+				expect(arming).toHaveLength(2)
 				child.kill('SIGTERM')
 				await exited
+				// The leak is real and this records it: a host killed during boot leaves its arming
+				// specifications behind, where a consumer's own gates then collect them. Row P16 of
+				// the readiness grade owns the repair; until it lands, this pins the defect so the
+				// repair has something to turn green.
 				leaked = readArming(directory)
 				expect([...leaked].sort()).toStrictEqual([...arming].sort())
 			} finally {

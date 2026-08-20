@@ -6,7 +6,7 @@ import type {
 	UserWorkspaceConfig,
 	ViteUserConfig,
 } from 'vitest/config'
-import type { TestProject, TestRunResult, Vitest } from 'vitest/node'
+import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/node'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -15,11 +15,11 @@ import { fileURLToPath } from 'node:url'
 import {
 	createRevisionFile,
 	inferTestProject,
+	loadWorkspaceModule,
 	messageFromUnknown,
 	matchesWorkspaceModule,
 	relativeWorkspaceFile,
 	resolveWorkspaceFile,
-	resolveWorkspaceModule,
 } from '../helpers.js'
 import { Overlay } from '../Overlay.js'
 
@@ -74,7 +74,8 @@ export class RuntimeStage implements StageInterface {
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		this.#vitest = this.#warm()
+		const vitest = loadWorkspaceModule(this.#workspace, 'vitest/node')
+		this.#vitest = this.#warm(vitest.createVitest)
 		// Observe the stored promise here. A stage the coordinator builds to replace a hung one may
 		// never be inspected or destroyed, and an unobserved rejection ends the host process. The
 		// stored promise keeps rejecting, so an inspection still reports the warming failure.
@@ -180,18 +181,12 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	async #warm(): Promise<Vitest> {
-		const workspaceEntry = resolveWorkspaceModule(this.#workspace, 'vitest/node')
-		const packageEntry = fileURLToPath(import.meta.resolve('vitest/node'))
-		if (workspaceEntry !== packageEntry) {
-			throw new Error('The runtime stage does not share the workspace Vitest installation')
-		}
-		const { createVitest } = await import('vitest/node')
+	async #warm(create: typeof createVitest): Promise<Vitest> {
 		const output = new PassThrough()
 		output.resume()
 		// Only standard output frames the Model Context Protocol transport. Preserve worker
 		// diagnostics on standard error while draining standard output into a bounded stream.
-		return createVitest(
+		return create(
 			'test',
 			{
 				root: this.#workspace,
@@ -364,7 +359,8 @@ export class RuntimeStage implements StageInterface {
 		const vitest = await current
 		await vitest.close()
 		if (this.#destroyed) throw new Error('The runtime stage has been destroyed')
-		return this.#warm()
+		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
+		return this.#warm(runner.createVitest)
 	}
 
 	#revalidate(vitest: Vitest): void {
