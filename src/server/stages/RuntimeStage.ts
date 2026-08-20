@@ -146,7 +146,12 @@ export class RuntimeStage implements StageInterface {
 				this.#revisions.delete(file)
 				cleanup = await this.#evict(vitest, file)
 				try {
-					if (existsSync(file)) unlinkSync(file)
+					const contained = resolveWorkspaceFile(
+						this.#workspace,
+						relative(this.#workspace, file),
+						true,
+					)
+					if (existsSync(contained)) unlinkSync(contained)
 				} catch (error) {
 					cleanup = [
 						...cleanup,
@@ -183,7 +188,12 @@ export class RuntimeStage implements StageInterface {
 			// and report its diagnostics as the consumer's own.
 			for (const file of this.#revisions) {
 				try {
-					if (existsSync(file)) unlinkSync(file)
+					const contained = resolveWorkspaceFile(
+						this.#workspace,
+						relative(this.#workspace, file),
+						true,
+					)
+					if (existsSync(contained)) unlinkSync(contained)
 				} catch {}
 			}
 			this.#revisions.clear()
@@ -335,6 +345,8 @@ export class RuntimeStage implements StageInterface {
 			// goes into the file's own marker, so the sweep reads one value from two places.
 			const revision = `${process.pid}-${randomUUID()}`
 			const file = createRevisionFile(this.#workspace, test.path, revision)
+			const target = relative(this.#workspace, file)
+			resolveWorkspaceFile(this.#workspace, target, true)
 			// The caller declared where its test lives, so creating that directory is part of what the
 			// declaration asked for. `tmp` is ignored by version control and the coordinator's boot
 			// tidies away the workbench it created, so the path the convention names is absent in a
@@ -342,6 +354,7 @@ export class RuntimeStage implements StageInterface {
 			// claim of every consumer. A directory the host will not create still refuses, through the
 			// same instrument finding a failed write reports.
 			mkdirSync(dirname(file), { recursive: true })
+			resolveWorkspaceFile(this.#workspace, target, true)
 			// The marker goes in the file rather than in its name alone, because the name is the
 			// caller's path and the text is the caller's test: without it nothing in the tree says
 			// this package wrote the file, and the sweep would have to delete on a name.
@@ -513,7 +526,7 @@ export class RuntimeStage implements StageInterface {
 			if (this.#alive(Number.parseInt(owner, 10))) continue
 			if (!this.#owned(path, revision)) continue
 			try {
-				unlinkSync(path)
+				unlinkSync(resolveWorkspaceFile(this.#workspace, relative(this.#workspace, path), true))
 			} catch {}
 		}
 	}
@@ -522,12 +535,9 @@ export class RuntimeStage implements StageInterface {
 	// can carry the same shape, and deleting it is data loss in their tree. A generated
 	// specification carries the caller's own test text, so the marker this stage appends to it is
 	// what attributes it, and the revision in the name must be the revision in the marker. The
-	// coordinator's boot writes dependencies whose text it authors rather than receives, at the fixed
-	// workbench paths named here, so their own path attributes them.
+	// coordinator's boot writes the same terminal marker on its dependencies, so every deletion uses
+	// the same content-backed ownership rule.
 	#owned(path: string, revision: string): boolean {
-		for (const dependency of ['tmp/probe/arm-type.ts', 'tmp/probe/arm-runtime.ts']) {
-			if (path === createRevisionFile(this.#workspace, dependency, revision)) return true
-		}
 		const outcome = attempt(() => readFileSync(path, 'utf8'))
 		return outcome.success && matchesSpecification(outcome.value, revision)
 	}

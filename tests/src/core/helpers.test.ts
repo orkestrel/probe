@@ -257,7 +257,7 @@ describe('core receipt helper', () => {
 		expect(computeReceipt({ ...base, control: buildControl('type', []) }, 'type')).toBeUndefined()
 	})
 
-	it('decides a receipt on the control code findings and ignores its instrument ones', () => {
+	it('refuses a receipt when an instrument finding shares the declared control stage', () => {
 		const broke: Finding = {
 			origin: 'code',
 			path: 'tests/src/core/greeting.test.ts',
@@ -280,8 +280,6 @@ describe('core receipt helper', () => {
 		const token =
 			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
 
-		// Every verdict below differs from the one before it in the control's findings alone, so
-		// the origin is the only thing deciding the outcome.
 		expect(computeReceipt(base, 'runtime')).toBe(token)
 		expect(
 			computeReceipt({ ...base, control: buildControl('runtime', [unrun]) }, 'runtime'),
@@ -289,10 +287,9 @@ describe('core receipt helper', () => {
 		expect(
 			computeReceipt({ ...base, control: buildControl('runtime', []) }, 'runtime'),
 		).toBeUndefined()
-		// A control that broke and whose stage also faulted still broke where it said it would.
 		expect(
 			computeReceipt({ ...base, control: buildControl('runtime', [unrun, broke]) }, 'runtime'),
-		).toBe(token)
+		).toBeUndefined()
 	})
 
 	it('refuses a receipt when the control does not name every stage', () => {

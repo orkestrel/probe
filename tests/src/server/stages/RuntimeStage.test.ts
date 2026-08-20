@@ -131,6 +131,42 @@ describe('runtime stage', () => {
 		},
 	)
 
+	it('refuses a generated specification beneath a symbolic link', { timeout: 60_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-runtime-containment-' })
+		const outside = createScratch({ prefix: 'probe-runtime-outside-' })
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		mkdirSync(resolve(scratch.path, 'tmp'), { recursive: true })
+		symlinkSync(outside.path, resolve(scratch.path, 'tmp/probe'), 'dir')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: 'tmp/probe/escape.test.ts',
+					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+				},
+			})
+
+			expect(check.findings).toEqual([
+				expect.objectContaining({
+					origin: 'instrument',
+					path: 'tmp/probe/escape.test.ts',
+					message: expect.stringContaining('symbolic link'),
+				}),
+			])
+			expect(readdirSync(outside.path)).toStrictEqual([])
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+			outside.destroy()
+		}
+	})
+
 	it('reports a finding when a test module executes nothing', { timeout: 60_000 }, async () => {
 		const stage = new RuntimeStage(ROOT)
 		try {
@@ -1146,6 +1182,16 @@ describe('runtime stage', () => {
 			`${departed.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, arming), 'export type Signal = string\n')
+		const abandonedRevision = `${departed.pid}-${randomUUID()}`
+		const abandoned = createRevisionFile(
+			scratch.path,
+			'tmp/probe/arm-runtime.ts',
+			abandonedRevision,
+		)
+		scratch.write(
+			relative(scratch.path, abandoned),
+			formatSpecification("export const SIGNAL = 'before'\n", abandonedRevision),
+		)
 		const serving = createRevisionFile(
 			scratch.path,
 			'tmp/probe/arm-runtime.ts',
@@ -1156,7 +1202,8 @@ describe('runtime stage', () => {
 		try {
 			expect(existsSync(orphan), 'a marked specification whose writer is gone').toBe(false)
 			expect(existsSync(live), "a live neighbour's specification").toBe(true)
-			expect(existsSync(arming), 'a boot dependency whose writer is gone').toBe(false)
+			expect(existsSync(arming), "a caller's unmarked file at a boot path").toBe(true)
+			expect(existsSync(abandoned), 'a marked boot dependency whose writer is gone').toBe(false)
 			expect(existsSync(serving), "a live neighbour's boot dependency").toBe(true)
 			expect(existsSync(authored), "a developer's own file outside the workbench").toBe(true)
 			expect(existsSync(drafted), "a developer's own file inside the workbench").toBe(true)

@@ -196,6 +196,23 @@ describe('server path helpers', () => {
 		)
 	})
 
+	it('refuses a symbolic link when resolving a filesystem mutation', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-containment-' })
+		try {
+			scratch.write('real/value.ts', 'export const VALUE = 1\n')
+			scratch.link('link', resolve(scratch.path, 'real'))
+
+			expect(resolveWorkspaceFile(scratch.path, 'link/value.ts')).toBe(
+				resolve(scratch.path, 'link/value.ts'),
+			)
+			expect(() => resolveWorkspaceFile(scratch.path, 'link/value.ts', true)).toThrow(
+				'Path crosses a symbolic link: link/value.ts',
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('accepts a contained file whose name begins with two dots', () => {
 		expect(resolveWorkspaceFile(ROOT, '..hidden.ts')).toBe(resolve(ROOT, '..hidden.ts'))
 		expect(resolveWorkspaceFile(ROOT, '..config/value.ts')).toBe(resolve(ROOT, '..config/value.ts'))

@@ -122,13 +122,9 @@ export function formatVerdict(verdict: Verdict): string {
  * read the project field; inside it the digest is everything after the final `@`. That rule stays
  * total for a workspace-relative project path containing either character.
  *
- * The case and declared-control conditions count findings differently. The declared control stage
- * counts `origin: 'code'` findings alone, because a control whose test never ran and a control whose
- * specification could not be deleted have each disproved nothing, and a receipt issued for either
- * certifies an inspection that did not happen. The case's condition counts every finding,
- * `origin: 'instrument'` included, because a case the stage could not inspect end to end is not a
- * clean case. The case therefore fails on a fault of either origin, and the control passes only on
- * a fault in the candidate's own code at its declared stage while every other stage stays clean.
+ * An `origin: 'instrument'` finding in either phase means the inspection did not complete and
+ * refuses the receipt. The control passes only on a fault in the candidate's own code at its
+ * declared stage while every other stage stays clean.
  *
  * @param verdict - The verdict whose case and control checks decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
@@ -150,10 +146,17 @@ export function computeReceipt(verdict: Verdict, stage: Stage): string | undefin
 	const clean = verdict.checks.every((check) => check.findings.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
 	const broke = declared?.findings.some((finding) => finding.origin === 'code') ?? false
+	const faulted =
+		verdict.checks.some((check) =>
+			check.findings.some((finding) => finding.origin === 'instrument'),
+		) ||
+		verdict.control.some((check) =>
+			check.findings.some((finding) => finding.origin === 'instrument'),
+		)
 	const strayed = verdict.control.some(
 		(check) => check.stage !== stage && check.findings.length > 0,
 	)
-	if (!ran || !clean || !broke || strayed) return undefined
+	if (!ran || !clean || !broke || faulted || strayed) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain
 	return [
 		RECEIPT_PREFIX,

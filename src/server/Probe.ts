@@ -15,11 +15,17 @@ import type { TimeoutInterface } from '@orkestrel/timeout'
 import type { Inspection, StageInterface } from './types.js'
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
+import { basename, relative } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
-import { ProbeError, computeReceipt, createDestroyedError, formatCheck } from '@src/core'
+import {
+	ProbeError,
+	computeReceipt,
+	createDestroyedError,
+	formatCheck,
+	formatSpecification,
+} from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	computeDigest,
@@ -260,15 +266,25 @@ export class Probe implements ProbeInterface {
 			},
 		}
 		try {
-			mkdirSync(directory, { recursive: true })
-			writeFileSync(typeDependency, 'export type Signal = string\n', {
-				encoding: 'utf8',
-				flag: 'wx',
-			})
-			writeFileSync(runtimeDependency, "export const SIGNAL = 'before'\n", {
-				encoding: 'utf8',
-				flag: 'wx',
-			})
+			mkdirSync(resolveWorkspaceFile(this.#workspace, 'tmp/probe', true), { recursive: true })
+			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
+			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true)
+			writeFileSync(
+				typeDependency,
+				formatSpecification('export type Signal = string\n', revision),
+				{
+					encoding: 'utf8',
+					flag: 'wx',
+				},
+			)
+			writeFileSync(
+				runtimeDependency,
+				formatSpecification("export const SIGNAL = 'before'\n", revision),
+				{
+					encoding: 'utf8',
+					flag: 'wx',
+				},
+			)
 			const beforeType = await this.#inspect(typeClaim.case, typeClaim)
 			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
 			const before = [...beforeType, ...beforeRuntime]
@@ -278,7 +294,12 @@ export class Probe implements ProbeInterface {
 					{ code: 'instrument' },
 				)
 			}
-			writeFileSync(typeDependency, 'export type Signal = number\n', 'utf8')
+			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
+			writeFileSync(
+				typeDependency,
+				formatSpecification('export type Signal = number\n', revision),
+				'utf8',
+			)
 			const afterType = await this.#inspect(typeClaim.control, typeClaim)
 			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
 			const tolerant = afterType.find((check) => check.stage === 'runtime')
@@ -294,7 +315,12 @@ export class Probe implements ProbeInterface {
 					{ code: 'instrument', context: { stage: 'runtime' } },
 				)
 			}
-			writeFileSync(runtimeDependency, "export const SIGNAL = 'after'\n", 'utf8')
+			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true)
+			writeFileSync(
+				runtimeDependency,
+				formatSpecification("export const SIGNAL = 'after'\n", revision),
+				'utf8',
+			)
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
 			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
 			if (runtime === undefined || runtime.findings.length === 0) {
@@ -304,11 +330,17 @@ export class Probe implements ProbeInterface {
 				)
 			}
 		} finally {
-			rmSync(typeDependency, { force: true })
-			rmSync(runtimeDependency, { force: true })
+			rmSync(
+				resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true),
+				{ force: true },
+			)
+			rmSync(
+				resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true),
+				{ force: true },
+			)
 			if (created) {
 				try {
-					rmdirSync(directory)
+					rmdirSync(resolveWorkspaceFile(this.#workspace, 'tmp/probe', true))
 				} catch {}
 			}
 		}

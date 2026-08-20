@@ -266,8 +266,8 @@ export interface Project {
  * A verdict exists only when every stage ran on both the case and the control, so `checks`
  * and `control` each hold one entry per stage. A stage that cannot start throws instead, which is
  * why no member here models a missing stage. `receipt` is present only when every stage ran clean
- * on the case, the control reported at least one `origin: 'code'` finding at the stage it declared,
- * and every other control stage stayed clean.
+ * on the case, the control reported an `origin: 'code'` finding at the stage it declared, every
+ * other control stage stayed clean, and neither phase reported an `origin: 'instrument'` finding.
  *
  * `id` identifies this call and `digest` identifies the claim it answered, so two calls over one
  * claim share a digest and differ in their identity. `digest` and `project` are required, because
@@ -338,7 +338,7 @@ export interface Verdict {
 	readonly control: readonly Check[]
 	/** Milliseconds the whole call took, including both the case and the control. */
 	readonly elapsed: number
-	/** The proof token, present only when the case ran clean and the control broke only where it said. */
+	/** The proof token, absent when either phase reports an instrument failure. */
 	readonly receipt?: string
 }
 

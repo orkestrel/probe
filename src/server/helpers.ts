@@ -2,11 +2,11 @@ import type { ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
 import type * as TypeScript from 'typescript'
 import type * as VitestNode from 'vitest/node'
-import { readFileSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { isArray, isRecord } from '@orkestrel/contract'
+import { attempt, isArray, isRecord } from '@orkestrel/contract'
 import { ProbeError } from '@src/core'
 
 /**
@@ -35,8 +35,10 @@ export function normalizePath(path: string): string {
  *
  * @param workspace - The target workspace root
  * @param target - A workspace-relative path
+ * @param mutate - If `true`, refuses a symbolic link in an existing descendant; if `false`,
+ * resolves lexically. Default: `false`
  * @returns The absolute contained path
- * @throws When the path resolves outside the workspace
+ * @throws When the path resolves outside the workspace or mutation would cross a symbolic link
  *
  * @example
  * ```ts
@@ -46,7 +48,7 @@ export function normalizePath(path: string): string {
  * // throws: Path escapes the workspace: ../secrets.env
  * ```
  */
-export function resolveWorkspaceFile(workspace: string, target: string): string {
+export function resolveWorkspaceFile(workspace: string, target: string, mutate = false): string {
 	const root = resolve(workspace)
 	const file = resolve(root, target)
 	const path = relative(root, file)
@@ -55,6 +57,39 @@ export function resolveWorkspaceFile(workspace: string, target: string): string 
 			code: 'invalid',
 			context: { path: target },
 		})
+	}
+	if (!mutate) return file
+	const canonical = realpathSync(root)
+	let descendant = root
+	for (const segment of path.split(sep)) {
+		descendant = resolve(descendant, segment)
+		const outcome = attempt(() => lstatSync(descendant))
+		if (!outcome.success) {
+			const error = outcome.error
+			if (
+				typeof error === 'object' &&
+				error !== null &&
+				'code' in error &&
+				(error.code === 'ENOENT' || error.code === 'ENOTDIR')
+			) {
+				break
+			}
+			throw error
+		}
+		if (outcome.value.isSymbolicLink()) {
+			throw new ProbeError(`Path crosses a symbolic link: ${target}`, {
+				code: 'invalid',
+				context: { path: target },
+			})
+		}
+		const resolved = realpathSync(descendant)
+		const remainder = relative(canonical, resolved)
+		if (remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) {
+			throw new ProbeError(`Path escapes the workspace: ${target}`, {
+				code: 'invalid',
+				context: { path: target },
+			})
+		}
 	}
 	return file
 }
