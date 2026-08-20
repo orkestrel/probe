@@ -1,0 +1,4 @@
+{"revision":"unpinned","runs":10,"completed":10,"negotiated":["2026-07-28"],"connectMedianMs":2263.4,"listMedianMs":5.91,"failures":[]}
+{"revision":"2026-07-28","runs":10,"completed":10,"negotiated":["2026-07-28"],"connectMedianMs":2296.7,"listMedianMs":6.01,"failures":[]}
+{"revision":"2025-11-25","runs":10,"completed":10,"negotiated":["2025-11-25"],"connectMedianMs":2264,"listMedianMs":6.01,"failures":[]}
+{"revision":"2025-06-18","runs":10,"completed":10,"negotiated":["2025-06-18"],"connectMedianMs":2233.2,"listMedianMs":5.48,"failures":[]}
