@@ -128,32 +128,23 @@ From [`types.ts`](../src/server/types.ts).
 | `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                           |
 | `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods). |
 | `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names which inspection it performs. See [`## Methods`](#methods).                         |
-| `TypeStageInterface`   | interface | `StageInterface` plus a readonly `candidates` list and a project-aware `inspect`. See [`## Methods`](#methods).                             |
+| `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                              |
 | `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                                               |
 | `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                                                      |
 | `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                                         |
-
-### Server factories
-
-From [`factories.ts`](../src/server/factories.ts).
-
-| Name                | Kind     | Signature                                          | Behavior                                                                  |
-| ------------------- | -------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
-| `createProbe`       | function | `(options?: ProbeOptions) => ProbeInterface`       | Creates a probe that begins warming its stages at construction.           |
-| `createProbeServer` | function | `(options?: ProbeOptions) => ProbeServerInterface` | Creates the Model Context Protocol stdio server, and the probe it serves. |
 
 ### The engine
 
 The classes, each exported from its own file.
 
-| Name           | Kind  | Implements             | Purpose                                                                                                                                           |
-| -------------- | ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Probe`        | class | `ProbeInterface`       | The coordinator: one queue per stage, one deadline per active inspection, and the receipt decision. [`Probe.ts`](../src/server/Probe.ts)          |
-| `ProbeServer`  | class | `ProbeServerInterface` | The process owner: one probe, this process's stdio, and the signals a harness ends a child with. [`ProbeServer.ts`](../src/server/ProbeServer.ts) |
-| `TypeStage`    | class | `TypeStageInterface`   | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)           |
-| `LintStage`    | class | `StageInterface`       | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)                  |
-| `RuntimeStage` | class | `StageInterface`       | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)           |
-| `Overlay`      | class | `OverlayInterface`     | The candidate set one inspection holds in memory, under an identity minted fresh per instance. [`Overlay.ts`](../src/server/Overlay.ts)           |
+| Name           | Kind  | Implements             | Purpose                                                                                                                                                                                                                                                                     |
+| -------------- | ----- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | `ProbeInterface`       | The coordinator: per-stage queues, active-inspection deadlines, and the receipt decision. Construction begins warming, installs initial listeners, selects the target workspace, and applies the inspection deadline from its options. [`Probe.ts`](../src/server/Probe.ts) |
+| `ProbeServer`  | class | `ProbeServerInterface` | The process owner: construction creates the probe it serves, passes every option to that probe, and binds this process's stdio and termination signals. [`ProbeServer.ts`](../src/server/ProbeServer.ts)                                                                    |
+| `TypeStage`    | class | `TypeStageInterface`   | A resident TypeScript language service per project, reading candidates from memory. [`TypeStage.ts`](../src/server/stages/TypeStage.ts)                                                                                                                                     |
+| `LintStage`    | class | `StageInterface`       | A resident Oxlint language server, driven over the Language Server Protocol. [`LintStage.ts`](../src/server/stages/LintStage.ts)                                                                                                                                            |
+| `RuntimeStage` | class | `StageInterface`       | A resident Vitest service that writes one fresh specification per inspection. [`RuntimeStage.ts`](../src/server/stages/RuntimeStage.ts)                                                                                                                                     |
+| `Overlay`      | class | `OverlayInterface`     | The candidate set one inspection holds in memory, under an identity minted fresh per instance. [`Overlay.ts`](../src/server/Overlay.ts)                                                                                                                                     |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -386,8 +377,8 @@ These facts decide whether a hand-written client works, and each fails silently 
   list is `2026-07-28`, `2025-11-25`, and `2025-06-18`.
 
 The server answers the handshake era and the current revision together, so a client that sends
-`initialize` without `_meta` is served too. `createProbeServer` creates the probe it serves and
-takes every `ProbeOptions` member for it, because `start()` seizes this process's standard input and
+`initialize` without `_meta` is served too. `ProbeServer` creates the probe it serves and takes
+every `ProbeOptions` member for it, because `start()` seizes this process's standard input and
 output: a host that starts one has given the process to it. `destroy()` gives the process back and
 tears the probe down with it.
 
@@ -406,7 +397,7 @@ This claim earns a receipt in this workspace. Run it verbatim.
 
 ```ts
 import type { Claim } from '@orkestrel/probe'
-import { createProbe } from '@orkestrel/probe/server'
+import { Probe } from '@orkestrel/probe/server'
 
 const claim: Claim = {
 	project: 'configs/src/tsconfig.core.json',
@@ -428,7 +419,7 @@ const claim: Claim = {
 	},
 }
 
-const probe = createProbe({ workspace: process.cwd() })
+const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 verdict.digest // '0806fb30f428edb8ea85adfb4b355441'
 verdict.receipt // 'probe:0806fb30f428edb8ea85adfb4b355441:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'

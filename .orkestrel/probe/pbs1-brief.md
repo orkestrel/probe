@@ -2,8 +2,8 @@
 
 ## Role and engine
 
-Role `implementer`. Engine Claude Opus 5, high effort. Sole writer in `/workspace/probe` for the
-duration of this unit.
+Role `sol` implementer. Engine GPT-5.6 Sol, high effort, sandbox `workspace-write`, rooted at
+`/workspace/probe`. You are the sole writer in this checkout for the duration of this unit.
 
 ## Objective
 
@@ -93,6 +93,14 @@ editing this tree, so re-resolve every one.
 - `tests/guides.test.ts` asserts a receipt earned with `tmp/probe` absent. Delete `tmp/probe` before
   any guides-project run: `rm -rf tmp/probe`.
 - Do not run `npm run build`, tree-wide `npm run format`, or the whole `npm test`. Validate scoped.
+- **Your sandbox denies a process one level below a child you spawn, a nested install, a loopback
+  listener, and an `rm -rf`.** Measured in this repository: the Oxlint stage's child processes fail
+  inside it, so `tests/src/server/stages/LintStage.test.ts` and the `Probe` and `ProbeServer` suites
+  cannot pass there however careful you are. Do not try to make them pass and do not change them to
+  suit your sandbox. Run the `src:server` project, report its counts as an **observation** with the
+  exact command, and note which failures are the sandbox. The Orchestrator takes the authoritative
+  reading on the host, where that project is green at 7 files and 128 tests.
+- Use `rmdir` for an empty directory; `rm -rf` is refused before process creation.
 
 ## Execution
 
@@ -118,10 +126,13 @@ Close them in this order and report each command with its exit code and counts.
 2. `rg -n 'candidates' src/server/ tests/src/server/` returns no hit that names the removed member.
 3. `npm run lint:check` exits 0.
 4. `npm run check` exits 0.
-5. `npx vitest run --config vite.config.ts --project src:server` exits 0. Report its counts.
+5. `npx vitest run --config vite.config.ts --project src:server tests/src/server/stages/TypeStage.test.ts`
+   exits 0. Report its counts. The whole `src:server` project is an observation, not a criterion,
+   because your sandbox cannot pass it.
 6. `npx vitest run --config vite.config.ts --project src:bin` exits 0. Report its counts.
-7. `rm -rf tmp/probe && npx vitest run --config vite.config.ts --project guides` exits 0. Report its
-   counts. This is what proves you carried the guide and README with the deletion.
+7. `npx vitest run --config vite.config.ts --project guides` exits 0. Report its counts. This is what
+   proves you carried the guide and README with the deletion. Remove `tmp/probe` with `rmdir` first
+   if it exists and is empty.
 
 ## Deviation contract
 
@@ -132,7 +143,7 @@ on from.
 
 ## Output
 
-Write your report to `tmp/pbs1-report.md` and make it your final message too. It contains: the files
+Write your report to `tmp/codex/pbs1-report.md` and make it your final message too. It contains: the files
 you touched and what changed in each; your ruling on `#overlay.clear()` with the evidence that
 decided it; each acceptance criterion with its exit code and counts; the `test:distribution`
 observation if you took it; and anything you could not close. No process diary.

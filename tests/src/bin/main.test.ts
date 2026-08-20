@@ -84,7 +84,7 @@ describe('bin entry', () => {
 
 	it('starts one probe server and exports nothing', () => {
 		const source = readFileSync(resolve(ROOT, ENTRY), 'utf8')
-		expect(source).toContain('createProbeServer().start()')
+		expect(source).toContain('new ProbeServer().start()')
 		expect(source).not.toContain('export')
 	})
 

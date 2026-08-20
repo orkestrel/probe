@@ -6,6 +6,7 @@ import type { Case, Check, Claim, Project, Stage } from '@src/core'
  * @remarks
  * The coordinator admits one of these per stage at a time. Every stage reads `subject`; the type
  * stage also reads `claim.project`, and the runtime stage reports `claim` when its deadline fires.
+ * A coordinator such as `Probe` mints an inspection when it admits a claim to a stage.
  *
  * @example
  * ```ts
@@ -137,8 +138,7 @@ export interface StageInterface {
  * @remarks
  * The type stage carries members the shared stage contract cannot: the lint and runtime stages
  * read no project, so a project parameter and a project lookup belong here rather than on
- * `StageInterface`. `candidates` reports the paths the inspection in flight holds as text, and is
- * empty between inspections and after teardown.
+ * `StageInterface`.
  *
  * @example
  * ```ts
@@ -147,8 +147,6 @@ export interface StageInterface {
  * ```
  */
 export interface TypeStageInterface extends StageInterface {
-	/** Absolute path of every candidate the inspection in flight holds as text. */
-	readonly candidates: readonly string[]
 	/**
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
@@ -200,7 +198,7 @@ export interface WorkspaceManifest {
  *
  * @example
  * ```ts
- * const server = createProbeServer({ workspace: process.cwd() })
+ * const server = new ProbeServer({ workspace: process.cwd() })
  * server.start()
  * await server.destroy()
  * ```

@@ -256,9 +256,6 @@ describe('type stage', () => {
 						test: { path: testPath, text: "export const TEST_SIGNAL = 'overlay'\n" },
 					}),
 				).rejects.toThrow('Path escapes the workspace: ../outside.ts')
-				// The failing inspection releases every candidate it had recorded, wherever the
-				// escaping source sat in the list.
-				expect(stage.candidates).toStrictEqual([])
 				const later = await stage.inspect({
 					files: [],
 					test: {
@@ -302,18 +299,18 @@ describe('type stage', () => {
 				)
 				// The same import in the next inspection reads the disk text, so nothing the first
 				// inspection recorded survives it: neither the text nor the version that served it.
-				const released = await stage.inspect({
+				const subject = {
 					files: [],
 					test: {
 						path: `tmp/probe/overlay-release-${id}-released.test.ts`,
 						text: `import { SIGNAL } from './overlay-release-${id}.js'\nconst VALUE: 'disk' = SIGNAL\nvoid VALUE\n`,
 					},
-				})
+				}
+				const released = await stage.inspect(subject)
 				expect(overlaid.findings).toStrictEqual([])
 				expect(released.findings).toStrictEqual([])
-				expect(stage.candidates).toStrictEqual([])
 				await stage.destroy()
-				expect(stage.candidates).toStrictEqual([])
+				await expect(stage.inspect(subject)).rejects.toThrow('The type stage has been destroyed')
 			} finally {
 				await stage.destroy()
 				rmSync(candidateFile, { force: true })

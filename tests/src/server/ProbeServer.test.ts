@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createProbeServer } from '@src/server'
+import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -33,7 +33,7 @@ describe('probe server', () => {
 			process.stdin.readableFlowing,
 			'a case before this one already read the standard input of this worker',
 		).toBeNull()
-		const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 		server.start()
 		await server.destroy()
 		expect(process.stdin.isPaused()).toBe(true)
@@ -51,7 +51,7 @@ describe('probe server', () => {
 			const reader = createRecorder<[Buffer]>()
 			process.stdin.resume()
 			process.stdin.on('data', reader.handler)
-			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 			try {
 				server.start()
 				await server.destroy()
@@ -69,7 +69,7 @@ describe('probe server', () => {
 
 	it('returns the process it seized, and settles once', { timeout: 180_000 }, async () => {
 		const input = readInput()
-		const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 		// Construction seizes no stream: a host that never starts the server still owns its own
 		// standard input. It does load the target's own Vitest, which installs one process-wide
 		// termination listener of its own the first time any host in this process loads it. That
@@ -118,7 +118,7 @@ describe('probe server', () => {
 				if (flowing) process.stdin.resume()
 				else process.stdin.pause()
 				expect(process.stdin.isPaused(), 'the test could not set the flow it needs').toBe(!flowing)
-				const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+				const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 				server.start()
 				await server.destroy()
 				expect(process.stdin.isPaused(), `flowing before start: ${String(flowing)}`).toBe(!flowing)
@@ -132,7 +132,7 @@ describe('probe server', () => {
 	it('destroys a server that never started', { timeout: 180_000 }, async () => {
 		const input = readInput()
 		const signals = readSignals()
-		const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 		await expect(server.destroy()).resolves.toBeUndefined()
 		expect(readInput()).toStrictEqual(input)
 		expect(readSignals()).toStrictEqual(signals)
@@ -147,7 +147,7 @@ describe('probe server', () => {
 		async () => {
 			const interrupt = createRecorder<[NodeJS.Signals]>()
 			const terminate = createRecorder<[NodeJS.Signals]>()
-			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 			const signals = readSignals()
 			try {
 				server.start()
@@ -187,7 +187,7 @@ describe('probe server', () => {
 			const reader = createRecorder<[Buffer]>()
 			process.stdin.pause()
 			const input = readInput()
-			const server = createProbeServer({ workspace: ROOT, deadline: 120_000 })
+			const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
 			try {
 				server.start()
 				expect(process.stdin.isPaused(), 'the server resumed a stream the host had paused').toBe(

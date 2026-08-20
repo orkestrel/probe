@@ -42,7 +42,7 @@ install, an `npx` invocation, or the `node_modules/.bin` shim:
 
 ```ts
 import type { Claim } from '@orkestrel/probe'
-import { createProbe } from '@orkestrel/probe/server'
+import { Probe } from '@orkestrel/probe/server'
 
 const claim: Claim = {
 	project: 'configs/src/tsconfig.core.json',
@@ -64,7 +64,7 @@ const claim: Claim = {
 	},
 }
 
-const probe = createProbe({ workspace: process.cwd() })
+const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 console.log(verdict.receipt)
 await probe.destroy()

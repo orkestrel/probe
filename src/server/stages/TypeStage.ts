@@ -71,18 +71,6 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	/**
-	 * Candidate paths the inspection in flight holds as text.
-	 *
-	 * @remarks
-	 * An inspection installs its own overlay and releases it when it ends, whatever ended it, so
-	 * this is empty between inspections and after teardown. Only the paths are reported: the text
-	 * belongs to the case that supplied it.
-	 */
-	get candidates(): readonly string[] {
-		return this.#overlay.paths
-	}
-
-	/**
 	 * Inspects one case, against a caller-named project where the caller names one.
 	 *
 	 * @remarks
@@ -176,7 +164,6 @@ export class TypeStage implements TypeStageInterface {
 		this.#recycled = undefined
 		this.#options.clear()
 		this.#files.clear()
-		this.#overlay.clear()
 	}
 
 	async #warm(typescript: typeof TypeScript): Promise<typeof TypeScript> {
