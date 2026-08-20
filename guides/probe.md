@@ -284,7 +284,7 @@ names the party that must act:
 
 | Code         | Who acts     | Raised when                                                                                                                               |
 | ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `invalid`    | The caller   | An input is refused: a path escaping the workspace, a claim the guard rejects, a test directory that does not exist.                      |
+| `invalid`    | The caller   | An input is refused: a path escaping the workspace, a claim the guard rejects, a test path naming no scoped TypeScript project.           |
 | `destroyed`  | The caller   | A probe, a server, or a stage is used after its `destroy`. Build a replacement; teardown is permanent.                                    |
 | `deadline`   | The caller   | `ProbeOptions.deadline` expired at one stage. That stage was replaced before the next inspection began.                                   |
 | `workspace`  | The target   | The target tree cannot serve: a tool it does not install, a manifest or version it does not publish, a project its compiler cannot parse. |
@@ -329,10 +329,14 @@ one fails at construction rather than at the first `prove`.
    `The runtime stage cannot instrument the string-declared Vitest project <name> because its configuration carries no runtime overlay plugin`.
    The project's `include` pattern is not the mechanism: the stage builds an explicit specification
    for the file it wrote, so a project whose glob matches nothing still serves a claim.
-3. **The directory the declared test path names exists.** The runtime stage writes a real file
-   beside the declared test, and a missing directory reports
-   `The runtime test directory does not exist: <directory>`. Arming creates `tmp/probe/` in the
-   target workspace, so a claim that follows the convention finds it.
+3. **The directory the declared test path names can be created.** The runtime stage writes a real
+   file beside the declared test and creates that file's directory first, recursively, so a claim
+   naming a directory the workspace does not hold still runs. A fresh clone holds no `tmp/probe/`,
+   because `tmp` is ignored by version control, and the first claim declaring a test there creates
+   it. A directory the host refuses to create — a file already occupies the path, or its parent
+   denies writing — reports
+   `The runtime stage could not write the generated specification (<reason>)`, where `<reason>` is
+   the host's own `mkdir` failure.
 4. **A root `tsconfig.json` that resolves at least one input.** The type stage checks the claim's
    test file against the root project, because a test needs the Vitest and Node globals the scoped
    projects remove.
@@ -538,8 +542,8 @@ than the probe's — it decides which process reads the stdio, not when the engi
   service unless the type and runtime stages report the change. The `arm` event fires once those
   controls have reported red and the boot's own files are gone. The controls run at
   `tmp/probe/arm-*.test.ts` against the root `tsconfig.json`, which is why the Vitest project, its
-  composition in the root configuration, and the declared test directory gate the boot rather than
-  the first claim.
+  composition in the root configuration, and a `tmp/probe/` the host lets it create gate the boot
+  rather than the first claim.
 - **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
   workspace module and invalidates the ones whose contents moved; the type stage re-reads a file
   whose modification time moved. A warm service that skipped this would return a confident wrong

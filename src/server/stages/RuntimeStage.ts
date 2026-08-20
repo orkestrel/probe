@@ -10,6 +10,7 @@ import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/no
 import type { Dirent } from 'node:fs'
 import {
 	existsSync,
+	mkdirSync,
 	readFileSync,
 	readdirSync,
 	realpathSync,
@@ -21,12 +22,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
-import {
-	ProbeError,
-	createDestroyedError,
-	formatSpecification,
-	matchesSpecification,
-} from '@src/core'
+import { createDestroyedError, formatSpecification, matchesSpecification } from '@src/core'
 import {
 	captureListeners,
 	createRevisionFile,
@@ -339,12 +335,13 @@ export class RuntimeStage implements StageInterface {
 			// goes into the file's own marker, so the sweep reads one value from two places.
 			const revision = `${process.pid}-${randomUUID()}`
 			const file = createRevisionFile(this.#workspace, test.path, revision)
-			if (!existsSync(dirname(file))) {
-				throw new ProbeError(`The runtime test directory does not exist: ${dirname(file)}`, {
-					code: 'invalid',
-					context: { stage: this.stage, path: test.path },
-				})
-			}
+			// The caller declared where its test lives, so creating that directory is part of what the
+			// declaration asked for. `tmp` is ignored by version control and the coordinator's boot
+			// tidies away the workbench it created, so the path the convention names is absent in a
+			// fresh checkout of a target: a stage that refused over the absence alone refused the first
+			// claim of every consumer. A directory the host will not create still refuses, through the
+			// same instrument finding a failed write reports.
+			mkdirSync(dirname(file), { recursive: true })
 			// The marker goes in the file rather than in its name alone, because the name is the
 			// caller's path and the text is the caller's test: without it nothing in the tree says
 			// this package wrote the file, and the sweep would have to delete on a name.

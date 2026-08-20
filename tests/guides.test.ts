@@ -1,5 +1,5 @@
 import type { Claim } from '@src/core'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as core from '@src/core'
 import * as server from '@src/server'
@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { isConstructor } from '@orkestrel/contract'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
+const WORKBENCH = fileURLToPath(new URL('../tmp/probe', import.meta.url))
 
 // Names this package declares in a source file and deliberately keeps out of its barrels. Interning
 // is for a declaration a consumer cannot construct from values they already hold, and this package
@@ -365,6 +366,13 @@ describe('guides fences', () => {
 	})
 
 	it('earns the receipt the guide documents', { timeout: 300_000 }, async () => {
+		// `tmp` is ignored by version control, so a fresh clone of a consumer's repository holds no
+		// `tmp/probe`, and the flagship claim declares its test there. The deletion belongs before
+		// construction rather than before `prove`: arming creates that directory for its own controls
+		// and tidies it away again, so the claim below runs against exactly what a consumer's first
+		// claim runs against.
+		rmSync(WORKBENCH, { force: true, recursive: true })
+		expect(existsSync(WORKBENCH)).toBe(false)
 		const probe = new Probe({ workspace: ROOT, deadline: 120_000 })
 		try {
 			const verdict = await probe.prove(CLAIM)

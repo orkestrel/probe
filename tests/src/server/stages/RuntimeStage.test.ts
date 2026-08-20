@@ -437,18 +437,74 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it.each([
-		{
-			name: 'missing directory',
-			path: 'tmp/probe/absent/deep/runtime.test.ts',
-			message: 'The runtime test directory does not exist',
+	// `tmp` is ignored by version control and the coordinator's boot tidies away the workbench it
+	// created, so the directory the convention names is absent in a fresh checkout of a target. A
+	// claim declares where its test lives, and this stage writes its specification there.
+	it('creates the directory the declared test path names', { timeout: 60_000 }, async () => {
+		const marker = `runtime-directory-${randomUUID()}`
+		const directory = resolve(ROOT, 'tmp/probe', marker)
+		const stage = new RuntimeStage(ROOT)
+		try {
+			expect(existsSync(directory)).toBe(false)
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: `tmp/probe/${marker}/deep/runtime.test.ts`,
+					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+				},
+			})
+			expect(check.findings).toStrictEqual([])
+			// Both levels, because a single non-recursive `mkdir` serves only a parent that already
+			// exists, and the path a claim declares can be as deep as the claim likes.
+			expect(existsSync(resolve(directory, 'deep'))).toBe(true)
+		} finally {
+			await stage.destroy()
+			rmSync(directory, { force: true, recursive: true })
+		}
+	})
+
+	it(
+		'reports a directory it cannot create as an instrument finding',
+		{ timeout: 60_000 },
+		async () => {
+			const marker = `runtime-blocked-${randomUUID()}`
+			const path = `tmp/probe/${marker}/deep/runtime.test.ts`
+			const blocker = resolve(ROOT, 'tmp/probe', marker)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			// A file where the declared test's directory belongs. Creating the directory is what the
+			// caller's declaration implies, and a host that refuses it leaves the inspection with
+			// nowhere to write, so the stage reports that refusal rather than a clean check.
+			writeFileSync(blocker, '', 'utf8')
+			const stage = new RuntimeStage(ROOT)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path,
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				})
+				expect(check.findings).toEqual([
+					expect.objectContaining({
+						origin: 'instrument',
+						path,
+						message: expect.stringContaining(
+							'The runtime stage could not write the generated specification',
+						),
+					}),
+				])
+				// The host's own failure carries the operation that failed, which is what separates a
+				// directory this stage could not create from a file it could not write.
+				expect(check.findings[0]?.message).toContain('mkdir')
+			} finally {
+				await stage.destroy()
+				rmSync(blocker, { force: true })
+			}
 		},
-		{
-			name: 'write failure',
-			path: `tmp/probe/${'x'.repeat(300)}.test.ts`,
-			message: 'ENAMETOOLONG',
-		},
-	])('reports a $name as an instrument finding', { timeout: 60_000 }, async ({ path, message }) => {
+	)
+
+	it('reports a write failure as an instrument finding', { timeout: 60_000 }, async () => {
+		const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
 		const stage = new RuntimeStage(ROOT)
 		try {
 			const check = await stage.inspect({
@@ -462,7 +518,7 @@ describe('runtime stage', () => {
 				expect.objectContaining({
 					origin: 'instrument',
 					path,
-					message: expect.stringContaining(message),
+					message: expect.stringContaining('ENAMETOOLONG'),
 				}),
 			])
 		} finally {

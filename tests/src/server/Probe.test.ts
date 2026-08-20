@@ -289,19 +289,24 @@ describe.sequential('probe', () => {
 	})
 
 	it(
-		'retains all stage checks when the runtime test directory is missing',
+		'retains all stage checks when the runtime stage cannot write its specification',
 		{ timeout: 60_000 },
 		async () => {
+			const marker = `probe-blocked-${randomUUID()}`
+			const path = `tmp/probe/${marker}/deep/missing-runtime.test.ts`
+			const blocker = resolve(ROOT, 'tmp/probe', marker)
+			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			// A file where the case's declared test directory belongs. The runtime stage creates the
+			// directory a claim declares, so a directory it cannot create is what leaves the stage
+			// with nowhere to write.
+			writeFileSync(blocker, '', 'utf8')
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 			try {
 				const verdict = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
 					case: {
 						files: [{ path: 'src/core/missing-runtime.ts', text: "export const VALUE = 'ok'\n" }],
-						test: {
-							path: 'tmp/probe/absent/deep/missing-runtime.test.ts',
-							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-						},
+						test: { path, text: "import { test } from 'vitest'\ntest('passes', () => {})\n" },
 					},
 					control: {
 						files: [
@@ -328,12 +333,15 @@ describe.sequential('probe', () => {
 				expect(verdict.checks.find((check) => check.stage === 'runtime')?.findings).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
-						path: 'tmp/probe/absent/deep/missing-runtime.test.ts',
-						message: expect.stringContaining('The runtime test directory does not exist'),
+						path,
+						message: expect.stringContaining(
+							'The runtime stage could not write the generated specification',
+						),
 					}),
 				])
 			} finally {
 				await probe.destroy()
+				rmSync(blocker, { force: true })
 			}
 		},
 	)
