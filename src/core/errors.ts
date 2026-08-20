@@ -6,10 +6,12 @@ import { ORIGINS, PROBE_ERROR_CODES } from './constants.js'
  * Reports one probe failure under stable ownership and condition axes.
  *
  * @remarks
- * Every failure this package raises arrives as one of these, so a consumer catching from `prove`,
- * from a stage, or from a workspace leaf branches on {@link Origin} and {@link ProbeErrorCode}
- * rather than on message text. Narrow a caught value with {@link isProbeError} before reading
- * either member.
+ * Every failure raised while serving a claim arrives as one of these, so a consumer catching from
+ * `prove`, from a stage, or from a workspace leaf branches on {@link Origin} and
+ * {@link ProbeErrorCode} rather than on message text. Narrow a caught value with
+ * {@link isProbeError} before reading either member. A pure leaf called directly with a value
+ * `isClaim` would refuse raises the host's own fault unchanged, because those leaves are written to
+ * be total over a validated claim rather than over every value.
  *
  * @example
  * ```ts

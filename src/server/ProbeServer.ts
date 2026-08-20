@@ -30,11 +30,11 @@ import { Probe } from './Probe.js'
  * serving is still attached and still fires afterwards. The transport reads a stream this server
  * owns rather than this process's standard input, which is what makes that possible: the
  * transport's own listeners land on that stream, and the only listeners this server ever puts on
- * `process.stdin` are the three that forward into it. `destroy` pauses the stream only when this
- * server is what set it flowing and nothing else is reading it, so a process that outlives this
- * server reads its own standard input again and receives its own signals. Teardown removes the
- * signal handlers first: it takes seconds when a boot is in flight, and a harness that signals
- * twice means the second one to kill rather than to queue.
+ * `process.stdin` are the `data`, `close`, and `error` forwarders into it. `destroy` pauses the
+ * stream only when this server is what set it flowing and nothing else is reading it, so a process
+ * that outlives this server reads its own standard input again and receives its own signals.
+ * Teardown removes the signal handlers first: it takes seconds when a boot is in flight, and a
+ * harness that signals again means to kill rather than to queue.
  *
  * @example
  * ```ts
@@ -111,7 +111,7 @@ export class ProbeServer implements ProbeServerInterface {
 		process.removeListener('SIGINT', this.#signal)
 		process.removeListener('SIGTERM', this.#signal)
 		this.#transport.stop()
-		// Take back exactly the three listeners `start` attached, by reference. Removing a `data`
+		// Take back exactly the forwarders `start` attached, by reference. Removing a `data`
 		// listener does not pause the stream, so the flow is decided after they are off: pause only
 		// when this server both started the flow and is the last thing reading it. A host that was
 		// already reading its own standard input keeps reading it, a host that began reading while

@@ -60,7 +60,7 @@ export function formatCheck(check: Check): string {
  *
  * @remarks
  * Every stage appears for both the case and the control, so no failing stage can be masked by an
- * earlier one. The last line always states the receipt or its absence, so a reader never has to
+ * earlier one. The closing line always states the receipt or its absence, so a reader never has to
  * infer from silence whether the claim was proven.
  *
  * The heading lines carry everything the receipt binds, each in the name-then-value form the

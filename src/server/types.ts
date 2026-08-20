@@ -220,10 +220,11 @@ export interface ProbeServerInterface {
 	 * Releases the transport, the process listeners, and the probe behind them.
 	 *
 	 * @remarks
-	 * Settling is idempotent: every call after the first returns the first call's promise. The
-	 * server removes exactly the listeners it attached, holding each one as a field rather than
-	 * choosing by absence from a capture, so a host that keeps running after this call reads its own
-	 * standard input again and receives its own signals, and a listener the host registered while
+	 * Settling is idempotent: a call made while teardown is running joins it and returns the same
+	 * promise, and a call made afterwards returns that settled promise. The server removes exactly the
+	 * listeners it attached, holding each one as a field rather than choosing by absence from a
+	 * capture, so a host that keeps running after this call reads its own standard input again and
+	 * receives its own signals, and a listener the host registered while
 	 * the server was serving is still attached and still fires. That covers the stream's flow as
 	 * well as its listeners: standard input is left flowing when it was already flowing before
 	 * `start` and when something else is reading it at release, and a stream nothing had read yet

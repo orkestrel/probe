@@ -336,6 +336,18 @@ describe('guides fences', () => {
 		expect(RECEIPT_SEPARATOR).toBe(':')
 	})
 
+	// The failure table is the guide's own copy of the ownership and condition axes, so it is read
+	// against the tuples the package publishes rather than against a memory of them. Each declared
+	// value appears in the column that carries it, and no row invents a value neither tuple declares.
+	it('names every declared origin and condition in the failure table', () => {
+		const rows = [...extractSection(GUIDE, '## Failures').matchAll(/^\| `([^`]+)` +\| `([^`]+)`/gm)]
+		expect(rows.length).toBeGreaterThan(0)
+		const origins = new Set(rows.map((row) => row[1] ?? ''))
+		const codes = new Set(rows.map((row) => row[2] ?? ''))
+		expect([...origins].sort()).toStrictEqual([...core.ORIGINS].sort())
+		for (const code of codes) expect(core.PROBE_ERROR_CODES).toContain(code)
+	})
+
 	// The guide states what `verdict.digest` covers. `prove` computes it with `computeDigest` over
 	// the case and the control, read against the workspace, so these assertions read the same
 	// function through the same inputs and would break if either sentence went false again.

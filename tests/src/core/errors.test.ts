@@ -1,14 +1,43 @@
+import type { Origin, ProbeErrorCode } from '@src/core'
+import { fileURLToPath } from 'node:url'
 import { PROBE_ERROR_CODES, ProbeError, createDestroyedError, isProbeError } from '@src/core'
+import {
+	inferTypeProject,
+	loadWorkspaceModule,
+	readWorkspaceManifest,
+	resolveWorkspaceBinary,
+	resolveWorkspaceFile,
+	resolveWorkspaceModule,
+} from '@src/server'
+import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 
-// The package's own source text, read as strings rather than as modules, so the adoption sweep
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+
+// The modules whose failures need a resident TypeScript, Oxlint, or Vitest running before they can
+// be raised at all. This project starts none of those, so the adoption sweep reads their text, and
+// their own mirrored proofs drive them: `Probe.test.ts`, `ProbeServer.test.ts`,
+// `TypeStage.test.ts`, `LintStage.test.ts`, and `RuntimeStage.test.ts` each assert the ownership
+// and the condition of the failures their module raises.
+const RESIDENT: readonly string[] = Object.freeze([
+	'../../../src/server/Probe.ts',
+	'../../../src/server/ProbeServer.ts',
+	'../../../src/server/stages/LintStage.ts',
+	'../../../src/server/stages/RuntimeStage.ts',
+	'../../../src/server/stages/TypeStage.ts',
+])
+
+// The resident modules' own source text, read as strings rather than as modules, so the text check
 // below reads what a consumer receives rather than what an import resolves to.
 const SOURCES: Record<string, unknown> = import.meta.glob('../../../src/**/*.ts', {
 	eager: true,
 	query: '?raw',
 	import: 'default',
 })
+
+// One driven failure path: what to call, and the pair the raised value must carry.
+type Drive = readonly [subject: string, origin: Origin, code: ProbeErrorCode, raise: () => unknown]
 
 // Removes the documentation blocks and line comments from one source file. A documented example
 // deliberately shows a plain `Error` as the control its guard refuses, and that is prose about the
@@ -19,6 +48,25 @@ function stripComments(source: string): string {
 		.split('\n')
 		.filter((line) => !line.trimStart().startsWith('//'))
 		.join('\n')
+}
+
+// Runs one failure path and hands back what it raised, so an assertion reads the value a consumer
+// catches. A call that returns instead of raising hands back `undefined`, which no assertion below
+// admits.
+function raiseFailure(action: () => unknown): unknown {
+	try {
+		action()
+		return undefined
+	} catch (error) {
+		return error
+	}
+}
+
+// Renders one raised value as the pair a consumer branches on, or as what it is when the guard
+// refuses it, so a failed assertion names the drift instead of printing `false`.
+function describeFailure(value: unknown): string {
+	if (!isProbeError(value)) return `unclassified ${String(value)}`
+	return `${value.origin}/${value.code}`
 }
 
 describe('probe error', () => {
@@ -119,19 +167,156 @@ describe('probe error', () => {
 		expect(firstGuard(new Error('The prove tool requires a valid claim'))).toBe(false)
 		expect(firstGuard(lookalike)).toBe(false)
 	})
+})
 
-	// Adoption, not definition: the class above is worth nothing to a consumer while a failure path
-	// beside it still raises a bare `Error` that carries no category to branch on.
-	it('raises no uncategorized failure anywhere in the package', () => {
+// Adoption, not definition: the class above is worth nothing to a consumer while a failure path
+// beside it still raises a value that carries no ownership and no condition to branch on. The
+// failure this package raises most often is not one it constructs — it is a dependency's own,
+// caught and translated — so these run the paths and read what came back.
+describe('failure adoption', () => {
+	it('classifies every failure path a test can drive without a resident tool', () => {
+		const workspace = createScratch({ prefix: 'probe-adoption-workspace-' })
+		const outside = createScratch({ prefix: 'probe-adoption-outside-' })
+		try {
+			workspace.write('package.json', '{"name":"target","version":"0.0.0"}\n')
+			workspace.write('node_modules/unparsable/package.json', '{ this is not JSON\n')
+			workspace.write('node_modules/listed/package.json', '["not","a","record"]\n')
+			workspace.write('node_modules/binless/package.json', '{"name":"binless","version":"1.0.0"}\n')
+			workspace.write(
+				'node_modules/oddbin/package.json',
+				'{"name":"oddbin","version":"1.0.0","bin":{"oddbin":7}}\n',
+			)
+			outside.write('secret.ts', 'export const SECRET = 1\n')
+			workspace.link('link', outside.path)
+
+			const drives: readonly Drive[] = [
+				[
+					'a torn-down subject',
+					'claimant',
+					'destroyed',
+					() => {
+						throw createDestroyedError('probe')
+					},
+				],
+				[
+					'a path escaping the workspace',
+					'claimant',
+					'refused',
+					() => resolveWorkspaceFile(workspace.path, '../secrets.env'),
+				],
+				[
+					'a mutation crossing a symbolic link',
+					'claimant',
+					'refused',
+					() => resolveWorkspaceFile(workspace.path, 'link/secret.ts', true),
+				],
+				[
+					'a candidate outside every scoped project',
+					'claimant',
+					'refused',
+					() => inferTypeProject('tests/src/core/greeting.test.ts'),
+				],
+				[
+					'a module the workspace does not install',
+					'workspace',
+					'missing',
+					() => resolveWorkspaceModule(workspace.path, 'definitely-absent-package'),
+				],
+				[
+					'a tool the workspace does not install',
+					'workspace',
+					'missing',
+					() => loadWorkspaceModule(workspace.path, 'typescript'),
+				],
+				[
+					'a manifest the workspace does not publish',
+					'workspace',
+					'missing',
+					() => readWorkspaceManifest(workspace.path, 'definitely-absent-package'),
+				],
+				[
+					'a manifest that is not JSON',
+					'workspace',
+					'malformed',
+					() => readWorkspaceManifest(workspace.path, 'unparsable'),
+				],
+				[
+					'a manifest that is not a record',
+					'workspace',
+					'malformed',
+					() => readWorkspaceManifest(workspace.path, 'listed'),
+				],
+				[
+					'a package publishing no bin field',
+					'workspace',
+					'missing',
+					() => resolveWorkspaceBinary(workspace.path, 'binless'),
+				],
+				[
+					'a package publishing no binary of its own name',
+					'workspace',
+					'missing',
+					() => resolveWorkspaceBinary(ROOT, 'typescript'),
+				],
+				[
+					'a package publishing a bin entry that is not a path',
+					'workspace',
+					'malformed',
+					() => resolveWorkspaceBinary(workspace.path, 'oddbin'),
+				],
+			]
+
+			expect(drives.length).toBeGreaterThan(0)
+			const reported = drives.map((drive) => {
+				const raised = raiseFailure(drive[3])
+				expect(raised, `${drive[0]} raised nothing`).toBeDefined()
+				return `${drive[0]}: ${describeFailure(raised)}`
+			})
+			expect(reported).toStrictEqual(drives.map((drive) => `${drive[0]}: ${drive[1]}/${drive[2]}`))
+			// The translated ones keep the dependency's own fault reachable, so a caller can print
+			// what the host said as well as what probe made of it.
+			const translated = raiseFailure(() => readWorkspaceManifest(workspace.path, 'unparsable'))
+			expect(isProbeError(translated) && translated.cause instanceof Error).toBe(true)
+		} finally {
+			workspace.destroy()
+			outside.destroy()
+		}
+	})
+
+	// The control for the assertion above, drawn from outside the population it covers: the
+	// untranslated shape `readWorkspaceManifest` replaced. A gate that admitted this would report
+	// green over exactly the defect it exists to catch.
+	it('refuses a failure a dependency raised and this package did not translate', () => {
+		const workspace = createScratch({ prefix: 'probe-adoption-control-' })
+		try {
+			workspace.write('node_modules/unparsable/package.json', '{ this is not JSON\n')
+			const untranslated = raiseFailure(() =>
+				JSON.parse(workspace.read('node_modules/unparsable/package.json') ?? ''),
+			)
+			expect(untranslated).toBeInstanceOf(Error)
+			expect(isProbeError(untranslated)).toBe(false)
+			expect(describeFailure(untranslated)).toContain('unclassified')
+		} finally {
+			workspace.destroy()
+		}
+	})
+
+	// The narrow text check, for the modules alone whose failures cannot be raised without a
+	// resident tool this project does not start. Their own mirrored proofs drive those failures for
+	// real; this reads their text for a failure constructed outside the declared contract, which is
+	// the one class a reading can still see.
+	it('constructs no unclassified failure in the resident modules', () => {
 		const paths = Object.keys(SOURCES).sort()
-		expect(paths).toContain('../../../src/core/errors.ts')
-		expect(paths).toContain('../../../src/server/Probe.ts')
+		for (const path of RESIDENT) expect(paths, `${path} was not read`).toContain(path)
 		const bare: string[] = []
-		for (const path of paths) {
+		for (const path of RESIDENT) {
 			const source = SOURCES[path]
 			expect(source, `${path} did not load as text`).toBeTypeOf('string')
 			if (typeof source !== 'string') continue
-			if (stripComments(source).includes('new Error(')) bare.push(path)
+			const constructed = [...stripComments(source).matchAll(/\bthrow new ([A-Za-z_][\w]*)\(/g)]
+			for (const match of constructed) {
+				if (match[1] !== 'ProbeError') bare.push(`${path} ${match[1] ?? ''}`)
+			}
 		}
 		expect(bare).toStrictEqual([])
 	})

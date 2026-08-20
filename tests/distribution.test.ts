@@ -144,10 +144,16 @@ describe.sequential('published distribution', () => {
 					// without it the guard assertion beneath would pass against a single copy.
 					"import { createRequire } from 'node:module'",
 					"const required = createRequire(import.meta.url)('@orkestrel/probe')",
-					"const foreign = new required.ProbeError('cross-copy failure', { code: 'invalid' })",
+					"const foreign = new required.ProbeError('cross-copy failure', { origin: 'workspace', code: 'malformed' })",
 					"if (foreign instanceof core.ProbeError) throw new Error('The two module formats resolved to one class')",
 					"if (!core.isProbeError(foreign)) throw new Error('The guard refused a failure from the required copy')",
+					"if (foreign.origin !== 'workspace' || foreign.code !== 'malformed') throw new Error('The classification did not survive the crossing')",
 					"if (core.isProbeError(new Error('cross-copy failure'))) throw new Error('The guard admitted a plain Error')",
+					// The guard reads the declared tuples rather than the constructor, so a value the other
+					// copy branded with an origin this copy never declared stays outside the type.
+					"const undeclared = new required.ProbeError('cross-copy failure', { origin: 'workspace', code: 'malformed' })",
+					"Object.defineProperty(undeclared, 'origin', { value: 'operator' })",
+					"if (core.isProbeError(undeclared)) throw new Error('The guard admitted an undeclared origin from the required copy')",
 					`const claim = ${claim}`,
 					'const probe = new server.Probe({ workspace: process.cwd(), deadline: 60_000 })',
 					'try {',

@@ -174,7 +174,7 @@ describe('probe server', () => {
 		},
 	)
 
-	// The fourth flow case, and the one that makes the release-time reader count behavioural. The
+	// The flow case that makes the release-time reader count behavioural. The
 	// stream was not flowing when `start` read it, so the flow is this server's to pause, and the
 	// host then started reading it anyway. A teardown that took the host's reader first always read
 	// a reader count of zero here, so the count could never hold a stream open and the rule it
@@ -199,8 +199,8 @@ describe('probe server', () => {
 				process.stdin.on('data', reader.handler)
 				process.stdin.resume()
 				await server.destroy()
-				// This server took back the three listeners it attached and left the host's reader, so
-				// `data` carries one more than the baseline and the other two are back at it.
+				// This server took back the forwarders it attached and left the host's reader, so `data`
+				// carries the host's own listener above the baseline and `close` and `error` are back at it.
 				expect(readInput()).toStrictEqual({ ...input, data: input.data + 1 })
 				expect(process.stdin.listeners('data')).toContain(reader.handler)
 				expect(process.stdin.isPaused()).toBe(false)
