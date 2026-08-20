@@ -17,7 +17,7 @@ function waitForExit(child: ChildProcess): Promise<void> {
 	return new Promise<void>((settle, reject) => {
 		child.once('error', reject)
 		child.once('exit', (code) => {
-			if (code === 0) settle()
+			if (code === 0 || child.killed) settle()
 			else reject(new Error(`Cache reader exited with code ${code}`))
 		})
 	})
@@ -553,6 +553,7 @@ describe.sequential('probe', () => {
 			)
 			const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
 			let cache: string | undefined
+			let reader: ChildProcess | undefined
 			try {
 				const ordinary: Claim = {
 					project: 'configs/src/tsconfig.core.json',
@@ -582,16 +583,21 @@ describe.sequential('probe', () => {
 				rmSync(cache, { force: true })
 				const fifo = spawnSync('mkfifo', [cache])
 				if (fifo.status !== 0) throw new Error('The host cannot create a FIFO for the cache stall')
-				const stalled = probe.prove(ordinary)
-				const outcome = Promise.allSettled([stalled])
-				await waitForDelay(6_500)
-				const closing = probe.destroy()
-				const reader = spawn(process.execPath, [
+				const gate = spawn(process.execPath, [
 					'-e',
-					"const fs = require('node:fs'); fs.readFileSync(process.argv[1]); fs.readFileSync(process.argv[1])",
+					"require('node:fs').readFileSync(process.argv[1])",
 					cache,
 				])
-				await waitForExit(reader)
+				const stalled = probe.prove(ordinary)
+				const outcome = Promise.allSettled([stalled])
+				await waitForExit(gate)
+				await waitForDelay(6_500)
+				const closing = probe.destroy()
+				reader = spawn(process.execPath, [
+					'-e',
+					"const fs = require('node:fs'); const buffer = Buffer.alloc(65536); const file = fs.openSync(process.argv[1], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK); setInterval(() => { try { while (fs.readSync(file, buffer) > 0) {} } catch (error) { if (error.code !== 'EAGAIN') throw error } }, 10)",
+					cache,
+				])
 				expect(await outcome).toMatchObject([
 					{
 						status: 'rejected',
@@ -603,7 +609,11 @@ describe.sequential('probe', () => {
 					},
 				])
 				await closing
+				const exit = waitForExit(reader)
+				reader.kill()
+				await exit
 			} finally {
+				if (reader !== undefined && !reader.killed) reader.kill()
 				if (cache !== undefined) rmSync(cache, { force: true })
 				await probe.destroy()
 				scratch.destroy()
