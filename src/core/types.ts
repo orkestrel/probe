@@ -1,5 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
-import type { ORIGINS, PROBE_ERROR_CODES } from './constants.js'
+import type { PARTIES, PROBE_ERROR_CODES } from './constants.js'
 
 /**
  * Names an inspection a claim passes through.
@@ -134,7 +134,7 @@ export interface Claim {
 }
 
 /**
- * Names the party that must act on a finding or probe failure.
+ * Names who must act on a finding or probe failure.
  *
  * @remarks
  * `claimant` is the caller who wrote the claim: its input, selections, candidate source, and
@@ -142,10 +142,10 @@ export interface Claim {
  *
  * @example
  * ```ts
- * const origin: Origin = 'claimant'
+ * const party: Party = 'claimant'
  * ```
  */
-export type Origin = (typeof ORIGINS)[number]
+export type Party = (typeof PARTIES)[number]
 
 /**
  * Carries one message a stage reported, where it reported it, and whose fault it names.
@@ -179,7 +179,7 @@ export type Origin = (typeof ORIGINS)[number]
  */
 export interface Finding {
 	/** The party that must act on this message. */
-	readonly origin: Origin
+	readonly origin: Party
 	/** Workspace-relative path this message is reported against. */
 	readonly path: string
 	/** The diagnostic or failure message. */
@@ -442,7 +442,7 @@ export interface ProbeInterface {
  * Each condition names a different repair. `refused` changes the rejected value. `missing` creates
  * or installs the named thing. `malformed` repairs the value read against a contract. `destroyed`
  * builds a replacement. `deadline` changes the budget or the work it bounds according to the
- * failure's {@link Origin}.
+ * failure's {@link Party}.
  *
  * @example
  * ```ts
@@ -501,7 +501,7 @@ export interface ProbeErrorContext {
  */
 export interface ProbeErrorOptions {
 	/** The party that must act on this failure. */
-	readonly origin: Origin
+	readonly origin: Party
 	/** The condition that ended the operation. */
 	readonly code: ProbeErrorCode
 	/** Structured detail about the failure. */

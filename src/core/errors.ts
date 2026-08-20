@@ -1,13 +1,13 @@
-import type { Origin, ProbeErrorCode, ProbeErrorContext, ProbeErrorOptions } from './types.js'
+import type { Party, ProbeErrorCode, ProbeErrorContext, ProbeErrorOptions } from './types.js'
 import { holds, isError } from '@orkestrel/contract'
-import { ORIGINS, PROBE_ERROR_CODES } from './constants.js'
+import { PARTIES, PROBE_ERROR_CODES } from './constants.js'
 
 /**
  * Reports one probe failure under stable ownership and condition axes.
  *
  * @remarks
  * Every failure raised while serving a claim arrives as one of these, so a consumer catching from
- * `prove`, from a stage, or from a workspace leaf branches on {@link Origin} and
+ * `prove`, from a stage, or from a workspace leaf branches on {@link Party} and
  * {@link ProbeErrorCode} rather than on message text. Narrow a caught value with
  * {@link isProbeError} before reading either member. A pure leaf called directly with a value
  * `isClaim` would refuse raises the host's own fault unchanged, because those leaves are written to
@@ -27,7 +27,7 @@ import { ORIGINS, PROBE_ERROR_CODES } from './constants.js'
  */
 export class ProbeError extends Error {
 	override readonly name = 'ProbeError'
-	readonly origin: Origin
+	readonly origin: Party
 	readonly code: ProbeErrorCode
 	readonly context?: ProbeErrorContext
 
@@ -55,7 +55,7 @@ export class ProbeError extends Error {
  *
  * @remarks
  * Recognition combines the global own-property brand with the native `Error` base, the subclass
- * prototype, the fixed name, an origin {@link ORIGINS} declares, and a condition
+ * prototype, the fixed name, a party {@link PARTIES} declares, and a condition
  * {@link PROBE_ERROR_CODES} declares. The brand carries recognition across duplicate installations
  * and across an ESM and a CommonJS copy of this package, where the two classes are different values.
  * A plain `Error`, a property-only lookalike, and a branded value carrying an undeclared origin or
@@ -80,7 +80,7 @@ export function isProbeError(value: unknown): value is ProbeError {
 		const origin: unknown = value.origin
 		const code: unknown = value.code
 		return (
-			ORIGINS.some((declared) => declared === origin) &&
+			PARTIES.some((declared) => declared === origin) &&
 			PROBE_ERROR_CODES.some((declared) => declared === code)
 		)
 	})

@@ -5,7 +5,7 @@ import type {
 	Claim,
 	Control,
 	Finding,
-	Origin,
+	Party,
 	Project,
 	Source,
 	Stage,
@@ -21,7 +21,7 @@ import {
 	literalOf,
 	recordOf,
 } from '@orkestrel/contract'
-import { ORIGINS, PROBE_STAGES } from './constants.js'
+import { PARTIES, PROBE_STAGES } from './constants.js'
 
 /**
  * Checks whether a value names a stage.
@@ -140,20 +140,20 @@ export const isClaim: Guard<Claim> = recordOf({
 })
 
 /**
- * Checks whether a value names an origin a finding carries.
+ * Checks whether a value names a party a finding carries.
  *
  * @param value - The value to check
- * @returns True if the value is an origin; false otherwise
+ * @returns True if the value is a party; false otherwise
  *
  * @example
  * ```ts
- * isOrigin('claimant') // true
- * isOrigin('workspace') // true
- * isOrigin('instrument') // true
- * isOrigin('stage') // false
+ * isParty('claimant') // true
+ * isParty('workspace') // true
+ * isParty('instrument') // true
+ * isParty('stage') // false
  * ```
  */
-export const isOrigin: Guard<Origin> = literalOf(ORIGINS)
+export const isParty: Guard<Party> = literalOf(PARTIES)
 
 /**
  * Checks whether a value carries one message, its location, and the origin of the fault it names.
@@ -173,7 +173,7 @@ export const isOrigin: Guard<Origin> = literalOf(ORIGINS)
  * ```
  */
 export const isFinding: Guard<Finding> = recordOf(
-	{ origin: isOrigin, path: isString, message: isString, line: isNumber },
+	{ origin: isParty, path: isString, message: isString, line: isNumber },
 	['line'],
 )
 

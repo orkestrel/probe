@@ -25,6 +25,23 @@ proved itself.
 
 ## Surface
 
+### A name this package shares with `@orkestrel/scaffold`
+
+`@orkestrel/probe` and `@orkestrel/scaffold` each publish a `Finding` type and an `isFinding` guard,
+for different subjects: a probe finding is one message a stage reported about a candidate source,
+and a scaffold finding is one entry in a workspace audit. A module importing from each package
+needs an alias on one side, or TypeScript refuses it with `Duplicate identifier 'Finding'`. Alias
+probe's:
+
+```ts
+import type { Finding as ProbeFinding } from '@orkestrel/probe'
+import { isFinding as isProbeFinding } from '@orkestrel/probe'
+```
+
+The ownership axis carries no such collision: probe names it `Party` and scaffold's `Origin` names
+how an artifact's content is produced, so the packages share no spelling there. Measured on
+2026-08-20 against `@orkestrel/scaffold` 0.0.44.
+
 ### Contracts
 
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an absent
@@ -37,7 +54,7 @@ optional field is absent rather than empty.
 | `Case`              | interface | `{ files, test }` — the candidate sources a claim asserts about and the test that exercises them.                                                     |
 | `Control`           | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                     |
 | `Claim`             | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                     |
-| `Origin`            | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on a finding or a failure.                                                      |
+| `Party`             | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on a finding or a failure.                                                      |
 | `Finding`           | interface | `{ origin, path, message, line? }` — one message a stage reported and the party that must act on it. `line` is absent when the tool reported none.    |
 | `Check`             | interface | `{ stage, elapsed, findings }` — one stage's outcome. An empty `findings` list is the clean result; there is no separate pass flag.                   |
 | `Toolchain`         | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                               |
@@ -57,7 +74,7 @@ From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 | Name                | Kind  | Value / Purpose                                                                                       |
 | ------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
 | `PROBE_STAGES`      | const | `['type', 'lint', 'runtime']` — the stage order a verdict reports, shared by the guard and the token. |
-| `ORIGINS`           | const | `['claimant', 'workspace', 'instrument']` — the parties a finding or a failure can name.              |
+| `PARTIES`           | const | `['claimant', 'workspace', 'instrument']` — the parties a finding or a failure can name.              |
 | `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                       |
 | `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                     |
 | `PROBE_ERROR_CODES` | const | `['refused', 'missing', 'malformed', 'destroyed', 'deadline']` — the conditions the guard admits.     |
@@ -95,7 +112,7 @@ and never throws.
 | Name          | Kind     | Signature                                | Behavior                                                                                                                                                        |
 | ------------- | -------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `isStage`     | function | `(value: unknown) => value is Stage`     | Admits a name the `Stage` type carries.                                                                                                                         |
-| `isOrigin`    | function | `(value: unknown) => value is Origin`    | Admits `'claimant'`, `'workspace'`, or `'instrument'`.                                                                                                          |
+| `isParty`     | function | `(value: unknown) => value is Party`     | Admits `'claimant'`, `'workspace'`, or `'instrument'`.                                                                                                          |
 | `isSource`    | function | `(value: unknown) => value is Source`    | Admits a record with a contained relative `path` and string `text`; refuses absolute and escaping paths.                                                        |
 | `isCase`      | function | `(value: unknown) => value is Case`      | Admits a record whose `files` are sources and whose `test` is one source.                                                                                       |
 | `isControl`   | function | `(value: unknown) => value is Control`   | Admits a case that also carries a `stage` and a non-empty `reason`.                                                                                             |
@@ -309,7 +326,7 @@ and does not match the contract it is read against, `destroyed` builds a replace
 teardown is permanent, and `deadline` changes the budget or the work it bounds. Neither axis is
 derivable from the other. These are the pairs this package raises:
 
-| Origin       | Code        | Raised when                                                                                                                                                                                                                                                    |
+| Party        | Code        | Raised when                                                                                                                                                                                                                                                    |
 | ------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `claimant`   | `refused`   | An input is rejected: a path escaping the workspace, a claim the tool guard rejects, a candidate naming no scoped project, or a caller-named project whose diagnostic names no file.                                                                           |
 | `claimant`   | `missing`   | The declared test path names no configured Vitest project, or names one the root configuration does not define.                                                                                                                                                |

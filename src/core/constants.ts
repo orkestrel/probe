@@ -18,15 +18,15 @@ export const PROBE_STAGES: readonly Stage[] = Object.freeze(['type', 'lint', 'ru
  * The parties that can own action on a finding or probe failure.
  *
  * @remarks
- * One list feeds the origin type and guard, so an origin cannot be admitted by one and refused by
- * another.
+ * One list feeds the `Party` type and its guard, so a party cannot be admitted by one and refused
+ * by another.
  *
  * @example
  * ```ts
- * ORIGINS // ['claimant', 'workspace', 'instrument']
+ * PARTIES // ['claimant', 'workspace', 'instrument']
  * ```
  */
-export const ORIGINS = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
+export const PARTIES = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
 
 /**
  * The conditions that can end a probe operation.

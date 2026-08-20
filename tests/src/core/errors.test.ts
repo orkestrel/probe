@@ -1,4 +1,4 @@
-import type { Origin, ProbeErrorCode } from '@src/core'
+import type { Party, ProbeErrorCode } from '@src/core'
 import { fileURLToPath } from 'node:url'
 import { PROBE_ERROR_CODES, ProbeError, createDestroyedError, isProbeError } from '@src/core'
 import {
@@ -24,7 +24,7 @@ const SOURCES: Record<string, unknown> = import.meta.glob('../../../src/**/*.ts'
 })
 
 // One driven failure path: what to call, and the pair the raised value must carry.
-type Drive = readonly [subject: string, origin: Origin, code: ProbeErrorCode, raise: () => unknown]
+type Drive = readonly [subject: string, origin: Party, code: ProbeErrorCode, raise: () => unknown]
 
 // Removes the documentation blocks and line comments from one source file. A documented example
 // deliberately shows a plain `Error` as the control its guard refuses, and that is prose about the

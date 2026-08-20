@@ -18,7 +18,7 @@ import {
 	isClaim,
 	isControl,
 	isFinding,
-	isOrigin,
+	isParty,
 	isProject,
 	isSource,
 	isStage,
@@ -114,10 +114,10 @@ describe('core guards', () => {
 			elapsed: 17,
 		}
 
-		expect(isOrigin('claimant')).toBe(true)
-		expect(isOrigin('workspace')).toBe(true)
-		expect(isOrigin('instrument')).toBe(true)
-		expect(isOrigin('stage')).toBe(false)
+		expect(isParty('claimant')).toBe(true)
+		expect(isParty('workspace')).toBe(true)
+		expect(isParty('instrument')).toBe(true)
+		expect(isParty('stage')).toBe(false)
 		expect(isFinding(finding)).toBe(true)
 		expect(isFinding({ ...finding, origin: 'stage' })).toBe(false)
 		expect(isFinding(anonymous)).toBe(false)
