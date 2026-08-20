@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { captureError, createRecorder, waitForDelay } from '@orkestrel/test'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
@@ -136,6 +136,18 @@ describe('probe server', () => {
 		await expect(server.destroy()).resolves.toBeUndefined()
 		expect(readInput()).toStrictEqual(input)
 		expect(readSignals()).toStrictEqual(signals)
+	})
+
+	it('refuses a start after teardown', { timeout: 180_000 }, async () => {
+		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
+		await server.destroy()
+		const error = captureError(() => server.start())
+		expect(error).toMatchObject({
+			name: 'ProbeError',
+			origin: 'claimant',
+			code: 'destroyed',
+			message: 'The probe server has been destroyed',
+		})
 	})
 
 	// The two cases below attach after `start`, which is the moment a teardown that removed whatever

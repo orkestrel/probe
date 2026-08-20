@@ -67,12 +67,16 @@ import { Overlay } from '../Overlay.js'
  * `Party` declares. An `origin: 'claimant'` issue is a failure Vitest reported about the candidate.
  * An `origin: 'workspace'` issue names the target tree: a project the root configuration declares
  * as a path string, into which the stage can install no overlay, and a specification path that
- * crosses a symbolic link or whose existing components this host cannot inspect. An
- * `origin: 'instrument'` issue names this package's own machinery: a specification it could not
- * write, run, evict, or delete for a reason the target tree does not own, and a run that reported
- * no test. An unmapped caller test and a test whose named project is absent are claimant failures
- * with `code: 'missing'`, thrown rather than reported, because a test that never ran is no
- * evidence about the candidate.
+ * crosses a symbolic link, whose existing components this host cannot inspect, or whose directory
+ * the target tree blocks probe from creating. An `origin: 'instrument'` issue names this package's
+ * own machinery: a specification it could not run, evict, or delete for a reason the target tree
+ * does not own, and a run that reported no test. An unmapped caller test and a test whose named
+ * project is absent are claimant failures with `code: 'missing'`, thrown rather than reported,
+ * because a test that never ran is no evidence about the candidate.
+ *
+ * The write path's physical-containment guarantee covers the claim inputs and the target tree as
+ * inspected. A concurrent process that mutates a path component between the final inspection and
+ * the write is outside that guarantee.
  *
  * @example
  * ```ts
@@ -370,6 +374,7 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#specification(test: Source): string | Issue {
+		let creating = false
 		const outcome = attempt(() => {
 			// The writing host's own process id leads the revision, so a later host can tell a file
 			// whose writer is gone from one a live host is running right now. Several hosts share one
@@ -386,7 +391,9 @@ export class RuntimeStage implements StageInterface {
 			// fresh checkout of a target: a stage that refused over the absence alone refused the first
 			// claim of every consumer. A directory the host will not create still refuses through the
 			// issue a failed write reports.
+			creating = true
 			mkdirSync(dirname(file), { recursive: true })
+			creating = false
 			resolveWorkspaceFile(this.#workspace, target, true)
 			// The marker goes in the file rather than in its name alone, because the name is the
 			// caller's path and the text is the caller's test: without it nothing in the tree says
@@ -410,7 +417,9 @@ export class RuntimeStage implements StageInterface {
 			origin:
 				outcome.error instanceof ProbeError && outcome.error.origin === 'workspace'
 					? 'workspace'
-					: 'instrument',
+					: creating
+						? 'workspace'
+						: 'instrument',
 			path: test.path,
 			message: `The runtime stage could not write the generated specification (${messageFromUnknown(outcome.error)})`,
 		}

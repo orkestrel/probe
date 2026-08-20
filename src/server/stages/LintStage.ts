@@ -254,6 +254,7 @@ export class LintStage implements StageInterface {
 					text: source.text,
 				},
 			})
+			this.#progress += 1
 		} catch (error) {
 			this.#refusals.get(uri)?.(this.#fault(messageFromUnknown(error), error, source.path))
 		}
@@ -396,7 +397,6 @@ export class LintStage implements StageInterface {
 		if (!('diagnostics' in params) || !Array.isArray(params.diagnostics)) return
 		const publish = this.#publishes.get(params.uri)
 		if (publish === undefined) return
-		this.#progress += 1
 		publish(this.#issues(params.uri, params.diagnostics))
 	}
 

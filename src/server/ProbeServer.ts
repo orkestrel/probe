@@ -8,6 +8,7 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	CLAIM_SHAPE,
 	ProbeError,
+	createDestroyedError,
 	findRefusedPaths,
 	formatVerdict,
 	isClaim,
@@ -77,10 +78,11 @@ export class ProbeServer implements ProbeServerInterface {
 	}
 
 	start(): void {
-		// `#owns` records that this server is serving and `#closing` that it has been torn down. A
-		// second call on either would attach a second set of listeners and forget the first set, and
-		// a call after teardown would write into a stream this server has already destroyed.
-		if (this.#owns !== undefined || this.#closing !== undefined) return
+		// `#owns` records that this server is serving and `#closing` that teardown has begun. A second
+		// call while serving would attach another listener set and forget the first, while a call after
+		// teardown would write into a stream this server has already destroyed.
+		if (this.#closing !== undefined) throw createDestroyedError('probe server')
+		if (this.#owns !== undefined) return
 		// The stream's flow is what this server takes from the process beside the listener sets. Read
 		// it here, before anything attaches, because this is the only moment the
 		// answer exists. Read `readableFlowing` rather than `isPaused()`: a stream nobody has read

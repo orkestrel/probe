@@ -88,6 +88,34 @@ describe('bin entry', () => {
 		expect(source).not.toContain('export')
 	})
 
+	it('reports a construction refusal as one stderr line without a stack', async () => {
+		const scratch = createScratch({ files: { 'package.json': '{}\n' } })
+		const child = spawn(process.execPath, [BUILT_ENTRY], {
+			cwd: scratch.path,
+			stdio: ['ignore', 'pipe', 'pipe'],
+		})
+		const output: Buffer[] = []
+		const errors: Buffer[] = []
+		child.stdout.on('data', (chunk: Buffer) => output.push(chunk))
+		child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+		try {
+			const status = await new Promise<number | null>((resolveClose) => {
+				child.once('close', (code) => resolveClose(code))
+			})
+			const reported = Buffer.concat(errors).toString('utf8')
+			expect(status).toBe(1)
+			expect(Buffer.concat(output).toString('utf8')).toBe('')
+			expect(reported).toBe(
+				'[workspace] missing: typescript does not publish a readable manifest\n',
+			)
+			expect(reported).not.toContain('ProbeError:')
+			expect(reported.trim().split('\n')).toHaveLength(1)
+		} finally {
+			if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+			scratch.destroy()
+		}
+	})
+
 	it(
 		'answers both protocol eras without exposing worker output on stdout',
 		{ timeout: 60_000 },

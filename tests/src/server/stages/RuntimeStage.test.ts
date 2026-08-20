@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	renameSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -507,45 +508,41 @@ describe('runtime stage', () => {
 		}
 	})
 
-	it(
-		'reports a directory it cannot create as an instrument issue',
-		{ timeout: 60_000 },
-		async () => {
-			const marker = `runtime-blocked-${randomUUID()}`
-			const path = `tmp/probe/${marker}/deep/runtime.test.ts`
-			const blocker = resolve(ROOT, 'tmp/probe', marker)
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
-			// A file where the declared test's directory belongs. Creating the directory is what the
-			// caller's declaration implies, and a host that refuses it leaves the inspection with
-			// nowhere to write, so the stage reports that refusal rather than a clean check.
-			writeFileSync(blocker, '', 'utf8')
-			const stage = new RuntimeStage(ROOT)
-			try {
-				const check = await stage.inspect({
-					files: [],
-					test: {
-						path,
-						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-					},
-				})
-				expect(check.issues).toEqual([
-					expect.objectContaining({
-						origin: 'instrument',
-						path,
-						message: expect.stringContaining(
-							'The runtime stage could not write the generated specification',
-						),
-					}),
-				])
-				// The host's own failure carries the operation that failed, which is what separates a
-				// directory this stage could not create from a file it could not write.
-				expect(check.issues[0]?.message).toContain('mkdir')
-			} finally {
-				await stage.destroy()
-				rmSync(blocker, { force: true })
-			}
-		},
-	)
+	it('reports a directory it cannot create as a workspace issue', { timeout: 60_000 }, async () => {
+		const marker = `runtime-blocked-${randomUUID()}`
+		const path = `tmp/probe/${marker}/deep/runtime.test.ts`
+		const blocker = resolve(ROOT, 'tmp/probe', marker)
+		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+		// A file where the declared test's directory belongs. Creating the directory is what the
+		// caller's declaration implies, and a host that refuses it leaves the inspection with
+		// nowhere to write, so the stage reports that refusal rather than a clean check.
+		writeFileSync(blocker, '', 'utf8')
+		const stage = new RuntimeStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path,
+					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+				},
+			})
+			expect(check.issues).toEqual([
+				expect.objectContaining({
+					origin: 'workspace',
+					path,
+					message: expect.stringContaining(
+						'The runtime stage could not write the generated specification',
+					),
+				}),
+			])
+			// The host's own failure carries the operation that failed, which is what separates a
+			// directory this stage could not create from a file it could not write.
+			expect(check.issues[0]?.message).toContain('mkdir')
+		} finally {
+			await stage.destroy()
+			rmSync(blocker, { force: true })
+		}
+	})
 
 	it("refuses a caller's unacceptable target path", { timeout: 60_000 }, async () => {
 		const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
@@ -945,6 +942,11 @@ describe('runtime stage', () => {
 				rmSync(cache, { force: true })
 				const fifo = spawnSync('mkfifo', [cache])
 				if (fifo.status !== 0) throw new Error('The host cannot create a FIFO for the cache gate')
+				const cleanupGate = `${cache}.cleanup`
+				const cleanupFifo = spawnSync('mkfifo', [cleanupGate])
+				if (cleanupFifo.status !== 0) {
+					throw new Error('The host cannot create a second FIFO for the cache gate')
+				}
 
 				const baseline = stage.progress
 				const running = stage.inspect(subject)
@@ -952,9 +954,15 @@ describe('runtime stage', () => {
 				const claimantReader = await open(cache, 'r')
 				const claimant = stage.progress
 				await claimantReader.read(buffer, 0, buffer.length, null)
+				// Each rendezvous owns one FIFO inode. Replace the cache path atomically while the
+				// claimant reader still holds the first inode, so the cleanup reader can attach only
+				// to the second inode and cannot sample the caller's still-open writer.
+				renameSync(cleanupGate, cache)
 				await claimantReader.close()
 				const cleanupReader = await open(cache, 'r')
 				const cleanup = stage.progress
+				// Drain the cleanup inode to end of file before closing its reader, so the stage's
+				// cache write completes rather than racing this proof's teardown.
 				await cleanupReader.readFile()
 				await cleanupReader.close()
 

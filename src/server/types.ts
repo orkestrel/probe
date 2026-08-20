@@ -112,10 +112,11 @@ export interface StageInterface {
 	 * Claimant-owned progress the coordinator compares with its inspection snapshot.
 	 *
 	 * @remarks
-	 * When claimant-owned work begins, raise `progress`. Where this stage performs work of its own
-	 * after the claimant's, such as cleanup or eviction, return `progress` to its pre-inspection
-	 * reading before that work starts, so an expiry during stage-owned work reads level with the
-	 * coordinator's snapshot and is attributed to the instrument rather than to the claimant.
+	 * When claimant-owned work is admitted, raise `progress` before awaiting its result. When this
+	 * stage later performs stage-owned awaited work, return `progress` to its pre-inspection reading
+	 * before that work starts. `RuntimeStage` does this before eviction and cleanup, so an expiry
+	 * during that work reads level with the coordinator's snapshot and is attributed to the
+	 * instrument rather than to the claimant.
 	 */
 	readonly progress: number
 	/**
@@ -220,6 +221,7 @@ export interface ProbeServerInterface {
 	 * @remarks
 	 * Reads newline-delimited JSON requests from standard input, and answers a `SIGINT` or a
 	 * `SIGTERM` by destroying the server. Calling this on a server already serving does nothing.
+	 * Calling it after teardown begins throws a claimant-owned `destroyed` failure.
 	 *
 	 * @returns Nothing
 	 */

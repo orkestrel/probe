@@ -332,7 +332,7 @@ describe.sequential('probe', () => {
 				expect(verdict.checks.find((check) => check.stage === 'lint')?.issues).toStrictEqual([])
 				expect(verdict.checks.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
-						origin: 'instrument',
+						origin: 'workspace',
 						path,
 						message: expect.stringContaining(
 							'The runtime stage could not write the generated specification',

@@ -1,6 +1,7 @@
 import type { Check, Issue, Stage, Verdict } from './types.js'
-import { isRecord } from '@orkestrel/contract'
+import { compileGuard } from '@orkestrel/contract'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
+import { CLAIM_SHAPE } from './shapers.js'
 import { isSource } from './validators.js'
 
 /**
@@ -141,8 +142,8 @@ export function formatVerdict(verdict: Verdict): string {
 export function computeReceipt(verdict: Verdict, stage: Stage): string | undefined {
 	const ran = PROBE_STAGES.every(
 		(name) =>
-			verdict.checks.some((check) => check.stage === name) &&
-			verdict.control.some((check) => check.stage === name),
+			verdict.checks.filter((check) => check.stage === name).length === 1 &&
+			verdict.control.filter((check) => check.stage === name).length === 1,
 	)
 	const clean = verdict.checks.every((check) => check.issues.length === 0)
 	const declared = verdict.control.find((check) => check.stage === stage)
@@ -221,11 +222,10 @@ export function matchesSpecification(text: string, revision: string): boolean {
  * The published claim schema constrains `Source.path` to a non-empty string and nothing else, while
  * `isSource` also refuses an absolute path and one that escapes the workspace. That one member is
  * the whole of the difference between the advertised contract and the enforced one, so a caller
- * refused after satisfying the schema is refused here and nowhere else. Each member is tested with
- * `isSource` itself rather than with a second copy of its rule, and each is tested against a
- * placeholder text so a missing or non-string `text` is reported by the schema instead of blamed on
- * the path. Reports nothing for a value carrying no source member, including one refused for a
- * member this contract does not declare.
+ * refused after satisfying the schema is refused here and nowhere else. The whole input must first
+ * satisfy that schema. Each source is then tested with `isSource` itself rather than with a second
+ * copy of its rule. Reports nothing for a value carrying no source member, including one refused for
+ * a member this contract does not declare.
  *
  * @param value - The rejected tool input
  * @returns The dotted member names, in `case` then `control` order, or an empty list
@@ -242,16 +242,16 @@ export function matchesSpecification(text: string, revision: string): boolean {
  * ```
  */
 export function findRefusedPaths(value: unknown): readonly string[] {
-	if (!isRecord(value)) return []
+	if (!compileGuard(CLAIM_SHAPE)(value)) return []
 	const members: string[] = []
-	for (const phase of ['case', 'control']) {
+	for (const phase of ['case', 'control'] as const) {
 		const subject = value[phase]
-		if (!isRecord(subject)) continue
 		const sources = new Map<string, unknown>([[`${phase}.test`, subject.test]])
-		const files: readonly unknown[] = Array.isArray(subject.files) ? subject.files : []
-		for (const [index, file] of files.entries()) sources.set(`${phase}.files.${index}`, file)
+		for (const [index, file] of subject.files.entries()) {
+			sources.set(`${phase}.files.${index}`, file)
+		}
 		for (const [member, source] of sources) {
-			if (!isRecord(source) || isSource({ path: source.path, text: '' })) continue
+			if (isSource(source)) continue
 			members.push(`${member}.path`)
 		}
 	}

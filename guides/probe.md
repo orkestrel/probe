@@ -124,15 +124,15 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
 From [`types.ts`](../src/server/types.ts).
 
-| Name                   | Kind      | Shape / Purpose                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                                                                                                                                                                                                                                          |
-| `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods).                                                                                                                                                                                                                |
-| `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names the inspection it performs, and its readonly `progress` rises when claimant-owned work begins and returns to its pre-inspection reading before the stage performs work of its own, so an expiry during stage-owned work reads level with the coordinator's snapshot. See [`## Methods`](#methods). |
-| `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                             |
-| `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                                                                                                                                                                                                                                                              |
-| `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                                     |
-| `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                                                                                                                                                                                                                                                        |
+| Name                   | Kind      | Shape / Purpose                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                                                                                                                                                                                                                                                                                                     |
+| `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                           |
+| `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names the inspection it performs, and its readonly `progress` rises when claimant-owned work is admitted. When a stage later awaits work of its own, it returns `progress` to its pre-inspection reading first; `RuntimeStage` does this before eviction and cleanup, so an expiry there reads level with the coordinator's snapshot. See [`## Methods`](#methods). |
+| `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                                                                                        |
+| `WorkspaceManifest`    | interface | `{ path, contents }` — one installed package manifest and the absolute path it was read from.                                                                                                                                                                                                                                                                                                                         |
+| `ProbeServerInterface` | interface | The stdio server that owns this process. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                                                                                                |
+| `ListenerCapture`      | type      | `ReadonlyMap<string, readonly Function[]>` — the listeners one emitter carried for a set of events.                                                                                                                                                                                                                                                                                                                   |
 
 `StageInterface.progress` is the seam a foreign coordinator reads to decide whose budget an expiry
 belongs to, and this is the proof behind it.
@@ -227,10 +227,10 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `ProbeServerInterface`
 
-| Method    | Returns         | Behavior                                                                                                     |
-| --------- | --------------- | ------------------------------------------------------------------------------------------------------------ |
-| `start`   | `void`          | Reads newline-delimited JSON requests from standard input, and answers `SIGINT` and `SIGTERM` by destroying. |
-| `destroy` | `Promise<void>` | Releases the transport, the process listeners, and the probe behind them. Settling is idempotent.            |
+| Method    | Returns         | Behavior                                                                                                                                                                                                |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`   | `void`          | Reads newline-delimited JSON requests from standard input, answers `SIGINT` and `SIGTERM` by destroying, does nothing while already serving, and throws `claimant` / `destroyed` after teardown begins. |
+| `destroy` | `Promise<void>` | Releases the transport, the process listeners, and the probe behind them. Settling is idempotent.                                                                                                       |
 
 ## What a probe proves
 
@@ -377,7 +377,7 @@ fails at construction rather than at `prove`.
   naming a directory the workspace does not hold still runs. A fresh clone holds no `tmp/probe/`,
   because `tmp` is ignored by version control, and a claim declaring a test there creates it. A
   directory the host refuses to create — a file already occupies the path, or its parent denies
-  writing — reports
+  writing — reports an `origin: 'workspace'` issue:
   `The runtime stage could not write the generated specification (<reason>)`, where `<reason>` is
   the host's own `mkdir` failure.
 - **A root `tsconfig.json` that resolves at least one input.** The type stage checks the claim's
@@ -588,7 +588,9 @@ components and refuses a symbolic link at any of them with
 the workspace. The symbolic-link refusal is `origin: 'workspace'`, `code: 'refused'`, because the
 link belongs to the target tree. A native fault while inspecting an existing component is
 `origin: 'workspace'`, `code: 'malformed'`, and retains that fault on `cause`. Nothing this package
-writes or deletes can land outside the target tree, whatever links the tree holds.
+writes or deletes can land outside the target tree for the claim inputs and the tree as inspected.
+A concurrent process that mutates a path component between the final inspection and the write or
+delete is outside that guarantee.
 
 **A read is contained lexically only, and that is the reach to plan for.** A candidate path beneath
 an in-workspace symbolic link resolves to a file outside the workspace, and TypeScript and Oxlint

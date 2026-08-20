@@ -1,5 +1,7 @@
 import type { Check, Issue, Project, Source, Stage, Toolchain, Verdict } from '@src/core'
+import { compileGuard } from '@orkestrel/contract'
 import {
+	CLAIM_SHAPE,
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
 	RECEIPT_SEPARATOR,
@@ -331,6 +333,45 @@ describe('core receipt helper', () => {
 		}
 	})
 
+	it('refuses a receipt when either phase repeats a stage', () => {
+		const broke: Issue = {
+			origin: 'claimant',
+			path: 'src/core/control.ts',
+			message: 'not assignable',
+		}
+		const checks: readonly Check[] = PROBE_STAGES.map((stage) => ({
+			stage,
+			elapsed: 1,
+			issues: [],
+		}))
+		const control = buildControl('type', [broke])
+		const base: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			checks,
+			control,
+			elapsed: 7,
+		}
+
+		expect(
+			computeReceipt(
+				{ ...base, checks: [...checks, { stage: 'type', elapsed: 1, issues: [] }] },
+				'type',
+			),
+		).toBeUndefined()
+		expect(
+			computeReceipt(
+				{
+					...base,
+					control: [...control, { stage: 'type', elapsed: 1, issues: [broke] }],
+				},
+				'type',
+			),
+		).toBeUndefined()
+	})
+
 	it('refuses a receipt when the control also breaks at an undeclared stage', () => {
 		const base: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
@@ -516,6 +557,13 @@ describe('core claim refusal', () => {
 		// A missing text, a member this contract does not declare, and a value that is no claim at
 		// all are all refusals the schema itself reports, so blaming a path for one would name the
 		// wrong member.
+		const missingPath = {
+			project: 'configs/src/tsconfig.core.json',
+			case: { files: [{ text: '' }], test: source },
+			control,
+		}
+		expect(compileGuard(CLAIM_SHAPE)(missingPath)).toBe(false)
+		expect(findRefusedPaths(missingPath)).toStrictEqual([])
 		expect(
 			findRefusedPaths({
 				project: 'configs/src/tsconfig.core.json',

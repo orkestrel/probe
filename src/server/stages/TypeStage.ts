@@ -116,6 +116,7 @@ export class TypeStage implements TypeStageInterface {
 		try {
 			this.#record(subject.test, overlay)
 			for (const source of subject.files) this.#record(source, overlay)
+			this.#progress += 1
 			const issues: Issue[] = []
 			const projects = new Set<string>()
 			const root = this.#service(typescript, 'tsconfig.json')
@@ -230,7 +231,6 @@ export class TypeStage implements TypeStageInterface {
 	// what stops an abandoned inspection reaching a disposed service and building a replacement
 	// this stage would then own past its own teardown.
 	async #unblock(): Promise<void> {
-		this.#progress += 1
 		await setImmediate()
 		if (this.#destroyed) throw createDestroyedError('type stage')
 	}

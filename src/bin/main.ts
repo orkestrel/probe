@@ -1,3 +1,10 @@
+import { isProbeError } from '@src/core'
 import { ProbeServer } from '@src/server'
 
-new ProbeServer().start()
+try {
+	new ProbeServer().start()
+} catch (error) {
+	if (!isProbeError(error)) throw error
+	console.error(`[${error.origin}] ${error.code}: ${error.message.split(/\r?\n|\r/u).join(' ')}`)
+	process.exitCode = 1
+}

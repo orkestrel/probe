@@ -54,6 +54,7 @@ const SERVER = [
 	"\t\t\tif (existsSync('frail')) process.exit(7)",
 	'\t\t\tconst uri = message.params.textDocument.uri',
 	'\t\t\tconst text = message.params.textDocument.text',
+	"\t\t\tif (text.includes('PROBE_SILENT')) writeFileSync('admitted', uri)",
 	"\t\t\tif (text.includes('PROBE_CLOSES_INPUT')) deferred = uri",
 	"\t\t\tif (!text.includes('PROBE_SILENT')) {",
 	"\t\t\t\tsend({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } })",
@@ -276,6 +277,34 @@ describe('lint stage', () => {
 			scratch.destroy()
 		}
 	})
+
+	it(
+		'raises progress after admitting a document whose diagnostics are held',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch({ files: FIXTURE })
+			const stage = new LintStage(scratch.path)
+			const path = 'tests/src/server/lint-progress.test.ts'
+			const source = { path, text: `${PASSING}// PROBE_SILENT\n` }
+			const baseline = stage.progress
+			const held = stage.inspect({ files: [], test: source })
+			void held.catch(() => {})
+			try {
+				const deadline = performance.now() + 10_000
+				while (scratch.read('admitted') === undefined && performance.now() < deadline) {
+					await waitForDelay(20)
+				}
+				// The protocol peer records `didOpen` and withholds `publishDiagnostics`, so this reads
+				// the gauge after admission and before the result exists.
+				expect(scratch.read('admitted')).toContain('lint-progress.test.ts')
+				expect(stage.progress).toBeGreaterThan(baseline)
+			} finally {
+				await stage.destroy()
+				await expect(held).rejects.toThrow('The lint stage has been destroyed')
+				scratch.destroy()
+			}
+		},
+	)
 
 	it(
 		'reports nothing for a path the target workspace excludes from linting',
