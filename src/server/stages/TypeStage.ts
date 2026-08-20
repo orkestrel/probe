@@ -4,6 +4,7 @@ import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import {
 	computeDigest,
 	inferTypeProject,
@@ -25,7 +26,10 @@ import { Overlay } from '../Overlay.js'
  * the language-service host answers existence, reads, and versions from it, so a candidate that
  * exists only as text is importable and a candidate that shadows a disk file is checked as the
  * text the case supplied. A project outside the declared set holds one recycled slot, so a caller
- * varying the project cannot grow the resident set.
+ * varying the project cannot grow the resident set. A language service checks one candidate
+ * synchronously, so the stage hands the host's event loop back at each candidate boundary: a
+ * caller's deadline is answered within one candidate's check rather than after the whole
+ * inspection, and an inspection abandoned at that deadline stops at the next boundary.
  *
  * @example
  * ```ts
@@ -108,12 +112,14 @@ export class TypeStage implements TypeStageInterface {
 			const findings: Finding[] = []
 			const root = this.#service(typescript, 'tsconfig.json')
 			findings.push(...this.#findings(typescript, root, subject.test, 'tsconfig.json'))
+			await this.#unblock()
 			for (const source of subject.files) {
 				const resolved = resolveWorkspaceFile(this.#workspace, source.path)
 				const selected =
 					project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, resolved))
 				const service = this.#service(typescript, selected)
 				findings.push(...this.#findings(typescript, service, source, selected))
+				await this.#unblock()
 			}
 			return {
 				stage: this.stage,
@@ -195,6 +201,19 @@ export class TypeStage implements TypeStageInterface {
 			}
 		}
 		return projects
+	}
+
+	// Hands the host's event loop back after one candidate's check, and refuses an inspection this
+	// stage was torn down during. A language service checks a candidate synchronously, so an
+	// inspection that never yielded held the loop for its whole duration: the coordinator's
+	// deadline could not fire against this stage, and the lint child's frames and the runtime
+	// worker's messages queued behind it until the last candidate finished, which reported one
+	// stage's overrun against another. Yielding bounds that hold to one candidate. The refusal is
+	// what stops an abandoned inspection reaching a disposed service and building a replacement
+	// this stage would then own past its own teardown.
+	async #unblock(): Promise<void> {
+		await setImmediate()
+		if (this.#destroyed) throw new Error('The type stage has been destroyed')
 	}
 
 	// Resolution happens here rather than in the overlay, because the workspace a candidate's

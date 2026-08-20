@@ -1,13 +1,14 @@
 import type { Check, Verdict } from '@src/core'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { computeReceipt } from '@src/core'
-import { RuntimeStage } from '@src/server'
+import { RuntimeStage, createRevisionFile } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
 
@@ -856,4 +857,47 @@ describe('runtime stage', () => {
 			}
 		},
 	)
+
+	it('removes the specifications a dead host left behind, at construction', async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+		)
+		// A real process that has already exited, so the identity in the orphan's name is dead on
+		// this host rather than assumed dead. A host killed mid-inspection leaves exactly this file,
+		// and it then matches the consumer's own workbench glob and fails their gates.
+		const departed = spawnSync(process.execPath, ['--version'])
+		expect(departed.status).toBe(0)
+		const orphan = createRevisionFile(
+			scratch.path,
+			'tmp/probe/orphan.test.ts',
+			`${departed.pid}-${randomUUID()}`,
+		)
+		const specification = "import { test } from 'vitest'\ntest('leaks', () => {})\n"
+		scratch.write(relative(scratch.path, orphan), specification)
+		// Three controls the sweep must leave alone. The live one is the load-bearing one: several
+		// hosts share one workspace routinely, and a sweep reading the marker rather than the
+		// identity deletes a neighbour's specification while its run is reading it.
+		const live = createRevisionFile(
+			scratch.path,
+			'tmp/probe/live.test.ts',
+			`${process.pid}-${randomUUID()}`,
+		)
+		scratch.write(relative(scratch.path, live), specification)
+		scratch.write('tmp/probe/keeper.test.ts', specification)
+		scratch.write('tmp/probe/notes.probe-draft.ts', 'export const NOTE = 1\n')
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			expect(existsSync(orphan)).toBe(false)
+			expect(existsSync(live)).toBe(true)
+			expect(existsSync(resolve(scratch.path, 'tmp/probe/keeper.test.ts'))).toBe(true)
+			expect(existsSync(resolve(scratch.path, 'tmp/probe/notes.probe-draft.ts'))).toBe(true)
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
 })

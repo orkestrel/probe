@@ -1,4 +1,4 @@
-import type { Claim, ProbeEventMap, Toolchain, Verdict } from '@src/core'
+import type { Claim, ProbeEventMap, Source, Toolchain, Verdict } from '@src/core'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -53,6 +53,62 @@ const ORDERED = [
 	'\t}',
 	'})',
 ].join('\n')
+
+// A protocol-faithful Oxlint language server that can be made to publish nothing. The `stall-lint`
+// marker file silences every document, which is what holds the probe's own boot control past its
+// deadline; the text marker `PROBE_SILENT` silences one document, which holds a claim's candidate
+// while the boot controls still answer.
+const STALLING = [
+	"import { existsSync } from 'node:fs'",
+	'let buffer = Buffer.alloc(0)',
+	'setTimeout(() => process.exit(0), 300_000)',
+	'function send(message) {',
+	'\tconst content = JSON.stringify(message)',
+	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
+	'}',
+	"process.stdin.on('data', (chunk) => {",
+	'\tbuffer = Buffer.concat([buffer, chunk])',
+	'\twhile (true) {',
+	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
+	'\t\tif (boundary < 0) return',
+	"\t\tconst header = buffer.subarray(0, boundary).toString('ascii')",
+	'\t\tconst match = /Content-Length: (\\d+)/i.exec(header)',
+	'\t\tif (match === null) return',
+	'\t\tconst length = Number(match[1])',
+	'\t\tconst start = boundary + 4',
+	'\t\tif (buffer.length < start + length) return',
+	"\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))",
+	'\t\tbuffer = buffer.subarray(start + length)',
+	"\t\tif (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })",
+	"\t\tif (message.method === 'textDocument/didOpen') {",
+	'\t\t\tconst uri = message.params.textDocument.uri',
+	"\t\t\tconst stalled = existsSync('stall-lint') || message.params.textDocument.text.includes('PROBE_SILENT')",
+	"\t\t\tif (!stalled) send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } })",
+	'\t\t}',
+	"\t\tif (message.method === 'shutdown') send({ jsonrpc: '2.0', id: message.id, result: null })",
+	"\t\tif (message.method === 'exit') process.exit(0)",
+	'\t}',
+	'})',
+].join('\n')
+
+// Builds one candidate whose type check costs about a second: 100 exclusions applied one after
+// another to a 10,000-member template-literal union, measured at 12.8 ms per exclusion in this
+// workspace. Volume is what makes the cost predictable, because the compiler pays per exclusion, so
+// a claim carrying enough of these outruns a deadline by a margin no host's speed closes. The
+// candidate is clean: the work is the point, and a diagnostic would report something else.
+function createHeavySource(index: number): Source {
+	const rows = [
+		'type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9',
+		'type Pair = `${Digit}${Digit}`',
+		'type Quad = `${Pair}${Pair}`',
+		'type Step0 = Quad',
+	]
+	for (let step = 1; step <= 100; step += 1) {
+		rows.push(`type Step${step} = Exclude<Step${step - 1}, '${String(step).padStart(4, '0')}'>`)
+	}
+	rows.push(`export const HEAVY_${index}: Step100 = '9999'`)
+	return { path: `src/core/probe-heavy-${index}.ts`, text: `${rows.join('\n')}\n` }
+}
 
 describe.sequential('probe', () => {
 	it(
@@ -386,7 +442,61 @@ describe.sequential('probe', () => {
 		},
 	)
 
-	it('bounds a lint stage that does not publish diagnostics', { timeout: 60_000 }, async () => {
+	it('replaces a type stage its deadline destroyed', { timeout: 180_000 }, async () => {
+		const expirations = createRecorder<[Claim]>()
+		const probe = new Probe({
+			workspace: ROOT,
+			deadline: 6_000,
+			on: { expire: expirations.handler },
+		})
+		const test = {
+			path: 'tmp/probe/heavy-type.test.ts',
+			text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+		}
+		// Thirty candidates is about 38 seconds of compiler work behind a 6-second deadline. The
+		// stage hands the host's event loop back between candidates, so the expiry lands at the
+		// first boundary after the deadline rather than after the whole claim: the wait is one
+		// candidate, and the margin is what keeps a faster host from finishing inside the budget.
+		const files: readonly Source[] = Array.from({ length: 30 }, (_unused, index) =>
+			createHeavySource(index),
+		)
+		const heavy: Claim = {
+			project: 'configs/src/tsconfig.core.json',
+			case: { files, test },
+			control: {
+				files,
+				test,
+				stage: 'type',
+				reason: 'the candidate outruns the deadline the coordinator allows one stage',
+			},
+		}
+		const clean = { path: 'src/core/after-type-expiry.ts', text: "export const VALUE = 'ok'\n" }
+		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+		try {
+			await expect(probe.prove(heavy)).rejects.toThrow('The type stage exceeded 6000 ms')
+			expect(expirations.calls).toStrictEqual([[heavy]])
+			// The claim that follows is the point: a stage the expiry only destroyed refuses it, and
+			// the refusal names a stage this caller never asked about.
+			const served = await probe.prove({
+				project: 'configs/src/tsconfig.core.json',
+				case: { files: [clean], test },
+				control: {
+					files: [
+						{ path: 'src/core/after-type-expiry.ts', text: "export const VALUE: number = 'bad'\n" },
+					],
+					test,
+					stage: 'type',
+					reason: 'the source assigns a string to a number',
+				},
+			})
+			expect(served.receipt).toBeTypeOf('string')
+			expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+		} finally {
+			await probe.destroy()
+		}
+	})
+
+	it('replaces a lint stage its deadline destroyed', { timeout: 60_000 }, async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
 		scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
@@ -395,10 +505,7 @@ describe.sequential('probe', () => {
 			'node_modules/oxlint/package.json',
 			'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
 		)
-		scratch.write(
-			'node_modules/oxlint/fixture.js',
-			"let buffer = Buffer.alloc(0)\nsetTimeout(() => process.exit(0), 30_000)\nprocess.stdin.on('data', (chunk) => {\n\tbuffer = Buffer.concat([buffer, chunk])\n\twhile (true) {\n\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')\n\t\tif (boundary < 0) return\n\t\tconst header = buffer.subarray(0, boundary).toString('ascii')\n\t\tconst match = /Content-Length: (\\d+)/i.exec(header)\n\t\tif (match === null) return\n\t\tconst length = Number(match[1])\n\t\tconst start = boundary + 4\n\t\tif (buffer.length < start + length) return\n\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))\n\t\tbuffer = buffer.subarray(start + length)\n\t\tif (message.method === 'initialize') {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'textDocument/didOpen' && !message.params.textDocument.uri.includes('/src/core/')) {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri: message.params.textDocument.uri, diagnostics: [] } })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'shutdown') {\n\t\t\tconst content = JSON.stringify({ jsonrpc: '2.0', id: message.id, result: null })\n\t\t\tprocess.stdout.write(`Content-Length: ${Buffer.byteLength(content)}\\r\\n\\r\\n${content}`)\n\t\t}\n\t\tif (message.method === 'exit') process.exit(0)\n\t}\n})\n",
-		)
+		scratch.write('node_modules/oxlint/fixture.js', STALLING)
 		scratch.write(
 			'tsconfig.json',
 			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
@@ -422,20 +529,24 @@ describe.sequential('probe', () => {
 					probe.prove({
 						project: 'tsconfig.json',
 						case: {
-							files: [{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1\n' }],
+							files: [
+								{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' },
+							],
 							test: {
 								path: 'tmp/probe/stalled-lint.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
 						},
 						control: {
-							files: [{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1\n' }],
+							files: [
+								{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' },
+							],
 							test: {
 								path: 'tmp/probe/stalled-lint.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
 							stage: 'lint',
-							reason: 'the language server does not publish diagnostics for ignored source',
+							reason: 'the language server publishes no diagnostics for this candidate',
 						},
 					}),
 					waitForDelay(7_000).then(() => {
@@ -443,11 +554,121 @@ describe.sequential('probe', () => {
 					}),
 				]),
 			).rejects.toThrow('The lint stage exceeded 6000 ms')
+			// The claim that follows is the point: the fixture answers every candidate that does not
+			// carry the marker, so a stage the expiry replaced serves it and a stage the expiry only
+			// destroyed refuses it. Without the replacement this call reports the destruction of a
+			// stage the caller never asked about.
+			const served = await probe.prove({
+				project: 'tsconfig.json',
+				case: {
+					files: [{ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' }],
+					test: {
+						path: 'tmp/probe/served-lint.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+				},
+				control: {
+					files: [{ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' }],
+					test: {
+						path: 'tmp/probe/served-lint.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+					stage: 'lint',
+					reason: 'this control is deliberately clean',
+				},
+			})
+			expect(served.checks.map((check) => check.stage).sort()).toStrictEqual([
+				'lint',
+				'runtime',
+				'type',
+			])
+			expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
 		} finally {
-			await Promise.race([probe.destroy(), waitForDelay(5_000)])
+			await probe.destroy()
 			scratch.destroy()
 		}
 	})
+
+	it(
+		'names arming in a boot expiry and arms again for the next claim',
+		{ timeout: 180_000 },
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+			scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
+			scratch.write(
+				'node_modules/oxlint/package.json',
+				'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
+			)
+			scratch.write('node_modules/oxlint/fixture.js', STALLING)
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			// The marker silences every document, so the boot control's own lint inspection outruns the
+			// deadline and arming fails the way a slow workspace makes it fail.
+			scratch.write('stall-lint', '')
+			const armings = createRecorder<[Toolchain]>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 6_000,
+				on: { arm: armings.handler },
+			})
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [{ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' }],
+					test: {
+						path: 'tmp/probe/rearmed.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+				},
+				control: {
+					files: [{ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' }],
+					test: {
+						path: 'tmp/probe/rearmed.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+					stage: 'lint',
+					reason: 'this control is deliberately clean',
+				},
+			}
+			try {
+				// A boot expiry and a claim's own stage expiry carry one message unless the boot names
+				// itself, so a caller reading `The lint stage exceeded 6000 ms` cannot tell whether its
+				// candidate was slow or the instrument never served. Both calls name arming: the first
+				// reports the boot the constructor started, the second reports the boot it ran itself.
+				await expect(probe.prove(claim)).rejects.toThrow(
+					'The probe could not arm: The lint stage exceeded 6000 ms',
+				)
+				await expect(probe.prove(claim)).rejects.toThrow(
+					'The probe could not arm: The lint stage exceeded 6000 ms',
+				)
+				expect(armings.count).toBe(0)
+				rmSync(resolve(scratch.path, 'stall-lint'), { force: true })
+				// The workspace is repaired while the host keeps running, which is the whole claim of
+				// the repair: the next call arms and answers rather than reporting a boot that failed
+				// before the repair landed.
+				const served = await probe.prove(claim)
+				expect(armings.count).toBe(1)
+				expect(served.checks.map((check) => check.stage).sort()).toStrictEqual([
+					'lint',
+					'runtime',
+					'type',
+				])
+				expect(served.checks.flatMap((check) => check.findings)).toStrictEqual([])
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('carries boot findings into one observed arming refusal', { timeout: 60_000 }, async () => {
 		const scratch = createScratch()

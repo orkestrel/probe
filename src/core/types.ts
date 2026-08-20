@@ -301,8 +301,8 @@ export interface Verdict {
  * @remarks
  * `arm` fires when the boot control has reported red and the service will answer calls; a probe
  * arriving before it awaits that step rather than starting a second one. `expire` fires when the
- * coordinator's own deadline killed a worker, which is the only way a synchronous infinite loop is
- * ever reported.
+ * coordinator's own deadline destroyed a stage and a replacement took its place, which is the only
+ * way a synchronous infinite loop is ever reported.
  *
  * @example
  * ```ts
@@ -314,7 +314,7 @@ export type ProbeEventMap = {
 	readonly arm: readonly [toolchain: Toolchain]
 	/** A claim was answered. */
 	readonly prove: readonly [verdict: Verdict]
-	/** The coordinator's runtime deadline fired and its worker was recycled before this event. */
+	/** The coordinator's deadline fired at one stage and that stage was replaced before this event. */
 	readonly expire: readonly [claim: Claim]
 	/** A fault surfaced for observation. */
 	readonly error: readonly [error: unknown]
@@ -345,7 +345,7 @@ export interface ProbeOptions {
 	readonly error?: EmitterErrorHandler
 	/** Target workspace root. Default: the current working directory. */
 	readonly workspace?: string
-	/** Milliseconds one active stage inspection may take; an expired runtime worker is recycled. */
+	/** Milliseconds one active stage inspection may take; an expired stage is replaced. */
 	readonly deadline?: number
 }
 

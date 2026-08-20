@@ -11,12 +11,13 @@ const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately and can read whether that child is still alive. Three
+// the real child the stage owns privately and can read whether that child is still alive. Four
 // marker files select how it ends: `frail` exits with a code on the first document,
-// `unanswered-shutdown` exits without replying to `shutdown`, and `unanswered-initialize` exits
-// without replying to `initialize`. Two markers in a document's own text select how it answers that
-// document: `PROBE_SILENT` publishes nothing, and `PROBE_CLOSES_INPUT` closes the server's own
-// standard input when that document is closed.
+// `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` exits
+// without replying to `initialize`, and `ignored-exit` answers `shutdown` and then stays alive
+// through `exit`, which is the one ending the protocol leaves to the client to force. Two markers
+// in a document's own text select how it answers that document: `PROBE_SILENT` publishes nothing,
+// and `PROBE_CLOSES_INPUT` closes the server's own standard input when that document is closed.
 const SERVER = [
 	"import { closeSync, existsSync, writeFileSync } from 'node:fs'",
 	'let buffer = Buffer.alloc(0)',
@@ -63,7 +64,7 @@ const SERVER = [
 	"\t\t\tif (existsSync('unanswered-shutdown')) process.exit(0)",
 	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: null })",
 	'\t\t}',
-	"\t\tif (message.method === 'exit') process.exit(0)",
+	"\t\tif (message.method === 'exit' && !existsSync('ignored-exit')) process.exit(0)",
 	'\t}',
 	'})',
 ].join('\n')
@@ -583,6 +584,33 @@ describe('lint stage', () => {
 				expect(isProcessLive(owned)).toBe(false)
 			} finally {
 				answering.destroy()
+			}
+		},
+	)
+
+	it(
+		'settles teardown against a language server that answers shutdown and ignores exit',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch({ files: { ...FIXTURE, 'ignored-exit': '' } })
+			try {
+				const stage = new LintStage(scratch.path)
+				await stage.inspect({
+					files: [],
+					test: { path: 'tests/src/server/lint-ignored-exit.test.ts', text: PASSING },
+				})
+				const owned = readFixtureServer(scratch)
+				const asked = performance.now()
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				// The conversation is the whole of the defect: the server answers `shutdown`, so
+				// teardown believes it is ending, and then ignores `exit` and lives out the host's
+				// life. A bounded wait plus a signal is what makes the child's death this stage's
+				// decision rather than the server's.
+				expect(performance.now() - asked).toBeLessThan(5_000)
+				await expectReleased(stage)
+				expect(isProcessLive(owned)).toBe(false)
+			} finally {
+				scratch.destroy()
 			}
 		},
 	)

@@ -7,9 +7,10 @@ import type {
 	ViteUserConfig,
 } from 'vitest/config'
 import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/node'
+import type { Dirent } from 'node:fs'
 import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
@@ -187,6 +188,7 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	async #warm(create: typeof createVitest): Promise<Vitest> {
+		this.#sweep()
 		const output = new PassThrough()
 		output.resume()
 		// Only standard output frames the Model Context Protocol transport. Preserve worker
@@ -292,7 +294,11 @@ export class RuntimeStage implements StageInterface {
 
 	#specification(test: Source): string | Finding {
 		const outcome = attempt(() => {
-			const file = createRevisionFile(this.#workspace, test.path, randomUUID())
+			// The writing host's own process id leads the revision, so a later host can tell a file
+			// whose writer is gone from one a live host is running right now. Several hosts share one
+			// workspace routinely — this package's own suite is one — and a sweep reading the name
+			// alone deletes a neighbour's specification out from under its run.
+			const file = createRevisionFile(this.#workspace, test.path, `${process.pid}-${randomUUID()}`)
 			if (!existsSync(dirname(file))) {
 				throw new Error(`The runtime test directory does not exist: ${dirname(file)}`)
 			}
@@ -426,12 +432,68 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#snapshot(): ReadonlyMap<string, string> {
-		const directories = [resolve(this.#workspace)]
 		const modules = new Map<string, string>()
+		for (const path of this.#walk()) {
+			if (!matchesWorkspaceModule(path)) continue
+			try {
+				const digest = createHash('sha256').update(readFileSync(path)).digest('hex')
+				modules.set(path, digest)
+			} catch {}
+		}
+		for (const path of this.#overlay.paths) {
+			modules.set(path, `overlay:${this.#overlay.revision}`)
+		}
+		return modules
+	}
+
+	// Removes the generated specifications a dead host left behind. Every inspection deletes its own
+	// file and teardown deletes the ones it abandoned, so a file that outlives both belongs to a
+	// host that was killed. It stays in the target's tree, where it matches the workbench project's
+	// own glob and fails a consumer's gates with a stranger's test. Two things make the sweep safe:
+	// only this stage writes the revision marker, and only with one process identity and one random
+	// UUID behind it, so a developer's own file carrying the marker is left where it is and so is a
+	// live neighbour's specification.
+	#sweep(): void {
+		for (const path of this.#walk()) {
+			const owner =
+				/\.probe-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.|$)/u.exec(
+					basename(path),
+				)?.[1]
+			if (owner === undefined || this.#alive(Number.parseInt(owner, 10))) continue
+			try {
+				unlinkSync(path)
+			} catch {}
+		}
+	}
+
+	// Whether the host that wrote one specification is still running. Signal 0 delivers nothing and
+	// reports reachability alone. A host this process may not signal reports `EPERM` and is read as
+	// alive, and a non-positive identity names a process group rather than a process, so both leave
+	// the file where it is: the safe direction is to keep a file this stage cannot account for.
+	#alive(id: number): boolean {
+		if (!Number.isSafeInteger(id) || id <= 0) return true
+		try {
+			process.kill(id, 0)
+			return true
+		} catch (error) {
+			return error instanceof Error && 'code' in error && error.code === 'EPERM'
+		}
+	}
+
+	// Yields every file the target workspace holds, skipping the trees no inspection reads: version
+	// control, build output, and installed packages. A directory this host cannot list is skipped
+	// rather than raised: the walk runs at construction and before every inspection, and one
+	// unreadable directory in a consumer's tree is not a reason to refuse the workspace.
+	*#walk(): Generator<string> {
+		const directories = [resolve(this.#workspace)]
 		while (directories.length > 0) {
 			const directory = directories.pop()
 			if (directory === undefined) break
-			for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			let entries: readonly Dirent[] = []
+			try {
+				entries = readdirSync(directory, { withFileTypes: true })
+			} catch {}
+			for (const entry of entries) {
 				if (entry.name === '.git' || entry.name === 'dist' || entry.name === 'node_modules') {
 					continue
 				}
@@ -440,17 +502,9 @@ export class RuntimeStage implements StageInterface {
 					directories.push(path)
 					continue
 				}
-				if (!entry.isFile() || !matchesWorkspaceModule(path)) continue
-				try {
-					const digest = createHash('sha256').update(readFileSync(path)).digest('hex')
-					modules.set(path, digest)
-				} catch {}
+				if (entry.isFile()) yield path
 			}
 		}
-		for (const path of this.#overlay.paths) {
-			modules.set(path, `overlay:${this.#overlay.revision}`)
-		}
-		return modules
 	}
 
 	#findings(result: TestRunResult, file: string, original: string): readonly Finding[] {

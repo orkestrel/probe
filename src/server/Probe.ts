@@ -19,7 +19,12 @@ import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import { computeReceipt, formatCheck } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
-import { computeDigest, readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
+import {
+	computeDigest,
+	messageFromUnknown,
+	readWorkspaceManifest,
+	resolveWorkspaceFile,
+} from './helpers.js'
 import { LintStage } from './stages/LintStage.js'
 import { RuntimeStage } from './stages/RuntimeStage.js'
 import { TypeStage } from './stages/TypeStage.js'
@@ -32,8 +37,10 @@ import { TypeStage } from './stages/TypeStage.js'
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
  * report their respective changes. One queue per stage admits inspections in arrival order, one at
  * a time, so a stage never serves two claims at once and the deadline covers active work rather
- * than queue wait. Each active stage inspection has a coordinator-owned deadline. A runtime expiry
- * abandons and replaces its worker before the next queued inspection begins.
+ * than queue wait. Each active stage inspection has a coordinator-owned deadline. An expiry at any
+ * stage abandons that stage and replaces it before the next queued inspection begins, so one slow
+ * claim costs that claim rather than the process. A failed boot is replaced the same way: the next
+ * claim runs the controls again rather than inheriting a refusal.
  *
  * @example
  * ```ts
@@ -47,13 +54,13 @@ export class Probe implements ProbeInterface {
 	readonly #deadline: number
 	readonly #emitter: Emitter<ProbeEventMap>
 	readonly #toolchain: Toolchain
-	readonly #type: TypeStage
-	readonly #lint: LintStage
+	#type: TypeStage
+	#lint: LintStage
 	#runtime: RuntimeStage
 	readonly #typeQueue: QueueInterface<Inspection, Check>
 	readonly #lintQueue: QueueInterface<Inspection, Check>
 	readonly #runtimeQueue: QueueInterface<Inspection, Check>
-	readonly #arming: Promise<void>
+	#arming: Promise<void>
 	#closing: Promise<void> | undefined
 	#destroyed = false
 
@@ -88,18 +95,24 @@ export class Probe implements ProbeInterface {
 				this.#inspectStage(
 					this.#type,
 					this.#type.inspect(inspection.subject, inspection.claim.project),
+					inspection.claim,
 				),
 		})
 		this.#lintQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
 			retries: 0,
 			handler: (inspection) =>
-				this.#inspectStage(this.#lint, this.#lint.inspect(inspection.subject)),
+				this.#inspectStage(this.#lint, this.#lint.inspect(inspection.subject), inspection.claim),
 		})
 		this.#runtimeQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
 			retries: 0,
-			handler: (inspection) => this.#runRuntime(inspection.subject, inspection.claim),
+			handler: (inspection) =>
+				this.#inspectStage(
+					this.#runtime,
+					this.#runtime.inspect(inspection.subject),
+					inspection.claim,
+				),
 		})
 		this.#arming = this.#arm()
 		// Observe the stored promise here. Nothing else reads it until `prove` or `destroy`, and a
@@ -119,7 +132,7 @@ export class Probe implements ProbeInterface {
 	async prove(claim: Claim): Promise<Verdict> {
 		try {
 			this.#support()
-			await this.#arming
+			await this.#ready()
 			if (this.#destroyed) throw new Error('The probe has been destroyed')
 			const started = performance.now()
 			const id = randomUUID()
@@ -158,7 +171,44 @@ export class Probe implements ProbeInterface {
 		return this.#closing
 	}
 
+	// Awaits the arming attempt in flight and starts one replacement for an attempt that failed.
+	// Arming runs the boot controls through the same stages a claim uses, so the failure that ends
+	// it is usually the workspace's — a stage that outran the deadline, a project that had no
+	// Vitest environment yet — and those are repaired while this process keeps running. One
+	// replacement per call bounds the cost: a workspace that still cannot arm pays one boot and
+	// reports it, rather than looping. A caller that already started the replacement is joined
+	// rather than replaced, so several callers waiting on one failed boot start one boot between
+	// them.
+	async #ready(): Promise<void> {
+		const attempt = this.#arming
+		try {
+			await attempt
+			return
+		} catch (error) {
+			if (this.#destroyed) throw error
+		}
+		if (this.#arming === attempt) {
+			this.#arming = this.#arm()
+			void this.#arming.catch(() => {})
+		}
+		await this.#arming
+	}
+
 	async #arm(): Promise<void> {
+		try {
+			await this.#boot()
+		} catch (error) {
+			// A boot failure and a claim's own stage failure are otherwise one message: the controls
+			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
+			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
+			throw new Error(`The probe could not arm: ${messageFromUnknown(error)}`, { cause: error })
+		}
+		// The boot control's own files are gone before this line, so a listener is told the
+		// instrument serves only after the workspace holds nothing the control wrote.
+		this.#emitter.emit('arm', this.#toolchain)
+	}
+
+	async #boot(): Promise<void> {
 		const id = randomUUID()
 		const directory = resolveWorkspaceFile(this.#workspace, 'tmp/probe')
 		const typeDependency = resolveWorkspaceFile(this.#workspace, `tmp/probe/arm-type-${id}.ts`)
@@ -244,9 +294,6 @@ export class Probe implements ProbeInterface {
 				} catch {}
 			}
 		}
-		// The `finally` above runs before this line, so the control's own files are gone by the
-		// time a listener is told the instrument serves.
-		this.#emitter.emit('arm', this.#toolchain)
 	}
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
@@ -262,7 +309,11 @@ export class Probe implements ProbeInterface {
 		return Promise.all(admitted)
 	}
 
-	async #inspectStage(stage: StageInterface, operation: Promise<Check>): Promise<Check> {
+	async #inspectStage(
+		stage: StageInterface,
+		operation: Promise<Check>,
+		claim: Claim,
+	): Promise<Check> {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
@@ -271,42 +322,30 @@ export class Probe implements ProbeInterface {
 				this.#expiry(timeout, `The ${stage.stage} stage exceeded ${this.#deadline} ms`),
 			])
 		} catch (error) {
-			if (timeout.expired) void stage.destroy().catch(() => {})
-			throw error
-		} finally {
-			timeout.clear()
-		}
-	}
-
-	async #runRuntime(subject: Case, claim: Claim): Promise<Check> {
-		const stage = this.#runtime
-		const timeout = createTimeout({ ms: this.#deadline })
-		timeout.start()
-		try {
-			return await Promise.race([
-				stage.inspect(subject),
-				this.#expiry(timeout, `The runtime stage exceeded ${this.#deadline} ms`),
-			])
-		} catch (error) {
 			if (!timeout.expired) throw error
-			const recycled = await this.#recycle(stage)
-			if (recycled) this.#emitter.emit('expire', claim)
+			// The recovery runs before this handler returns, so the replacement is installed before
+			// the queue admits the next inspection and the claim behind this one meets a stage that
+			// serves rather than one that reports a stranger's expiry.
+			if (await this.#recycle(stage)) this.#emitter.emit('expire', claim)
 			throw error
 		} finally {
 			timeout.clear()
 		}
 	}
 
-	async #recycle(stage: RuntimeStage): Promise<boolean> {
+	// Replaces the stage one expired deadline destroyed, so a single slow claim costs that claim
+	// rather than the process. A resident server whose type, lint, or runtime stage stays destroyed
+	// answers every later claim with the destruction of a stage that caller never asked about.
+	async #recycle(stage: StageInterface): Promise<boolean> {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
 			// Teardown of a hung stage can reject or outlive its own deadline, and the replacement
-			// must be installed either way: `#runtime` otherwise stays destroyed for the life of
-			// the process and every later claim reports that instead of its own evidence.
+			// must be installed either way: the field otherwise stays destroyed for the life of the
+			// process and every later claim reports that instead of its own evidence.
 			await Promise.race([
 				stage.destroy(),
-				this.#expiry(timeout, `The runtime stage recovery exceeded ${this.#deadline} ms`),
+				this.#expiry(timeout, `The ${stage.stage} stage recovery exceeded ${this.#deadline} ms`),
 			])
 		} catch {
 			// The failure belongs to the stage being replaced, and the replacement below is the
@@ -314,9 +353,22 @@ export class Probe implements ProbeInterface {
 		} finally {
 			timeout.clear()
 		}
-		if (this.#destroyed || this.#runtime !== stage) return false
-		this.#runtime = new RuntimeStage(this.#workspace)
-		return true
+		if (this.#destroyed) return false
+		// Identity, not kind: a second expiry racing this one names the stage this call already
+		// replaced, and rebuilding on that report would discard a live stage the queues are using.
+		if (stage === this.#type) {
+			this.#type = new TypeStage(this.#workspace)
+			return true
+		}
+		if (stage === this.#lint) {
+			this.#lint = new LintStage(this.#workspace)
+			return true
+		}
+		if (stage === this.#runtime) {
+			this.#runtime = new RuntimeStage(this.#workspace)
+			return true
+		}
+		return false
 	}
 
 	// Rejects when the deadline fires, so a race against it settles even when the operation it

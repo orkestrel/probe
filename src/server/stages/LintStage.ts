@@ -1,8 +1,10 @@
 import type { Case, Check, Finding, Source, Stage } from '@src/core'
 import type { StageInterface } from '../types.js'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { TimeoutInterface } from '@orkestrel/timeout'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
+import { createTimeout } from '@orkestrel/timeout'
 import {
 	inferDocumentLanguage,
 	messageFromUnknown,
@@ -101,8 +103,26 @@ export class LintStage implements StageInterface {
 			child.once('exit', () => resolve())
 			child.once('close', () => resolve())
 		})
-		await this.#retire(child)
-		await released
+		await this.#release(child, released)
+	}
+
+	// Ends the conversation under a deadline and signals the child when that deadline passes. The
+	// protocol leaves the ending to the server: a server that answers `shutdown` and then ignores
+	// `exit` has broken no rule, and one that answers neither is unreachable rather than dead. Both
+	// leave teardown waiting for the life of the host and leak the child with it, so this bounds
+	// the whole exchange at two seconds and then takes the ending back. `SIGKILL` cannot be
+	// handled, so the child ends and its own `exit` event settles the wait.
+	async #release(child: ChildProcessWithoutNullStreams, released: Promise<void>): Promise<void> {
+		const timeout = createTimeout({ ms: 2_000 })
+		timeout.start()
+		try {
+			await Promise.race([this.#retire(child).then(() => released), this.#expiry(timeout)])
+		} catch {
+			child.kill('SIGKILL')
+			await released
+		} finally {
+			timeout.clear()
+		}
 	}
 
 	// Asks the language server to shut down and signals it when that conversation fails. A server
@@ -115,6 +135,18 @@ export class LintStage implements StageInterface {
 		} catch {
 			child.kill('SIGKILL')
 		}
+	}
+
+	// Rejects when the teardown deadline fires, so a race against it settles even when the server
+	// it waits on answers nothing.
+	#expiry(timeout: TimeoutInterface): Promise<never> {
+		return new Promise<never>((_resolve, reject) => {
+			timeout.signal.addEventListener(
+				'abort',
+				() => reject(new Error(`The Oxlint language server did not exit within ${timeout.ms} ms`)),
+				{ once: true },
+			)
+		})
 	}
 
 	async #warm(): Promise<ChildProcessWithoutNullStreams> {
