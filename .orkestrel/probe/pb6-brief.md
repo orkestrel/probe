@@ -88,6 +88,23 @@ The guide must also carry what the receipt ruling obliges — read
 - The revision-file cleanup comment claims a glob match that does not exist. Name the gates the orphan
   enters and drop the glob claim; the sweep itself is right.
 
+## `PROBE.md` is dissolved into your work
+
+`.orkestrel/probe/probe-md-ruling.md` rules that `PROBE.md` does not survive as a third document. It
+is 71,917 bytes, unpublished, gated by nothing, and already drifting — the readiness grade records it
+reproducing a `Verdict` declaration that unit PB4 changes underneath it.
+
+You own the migration:
+
+- Product truth — what a probe proves, the prerequisites, the receipt's meaning and limits, and any
+  measurement that still holds — moves into `guides/probe.md`, **with its date**. A measurement
+  reproduced without its date is the drift this ruling exists to stop.
+- Campaign narrative stays in `.orkestrel/probe/`, which already holds it.
+- Then delete `PROBE.md`. Nothing imports it, ships it, or tests it.
+
+Report anything you judged not worth keeping, and why. Losing a true statement silently is the failure
+mode here.
+
 ## Standing conditions
 
 - Units PB3, PB4, and PB5 land before you. PB4 changes `Verdict` and the token format — **write every
