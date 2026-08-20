@@ -1,4 +1,4 @@
-import type { Case, Check, Claim, Stage } from '@src/core'
+import type { Case, Check, Claim, Project, Stage } from '@src/core'
 
 /**
  * Carries one queued inspection: the case a stage reads and the claim it belongs to.
@@ -123,6 +123,45 @@ export interface StageInterface {
 	 * @returns A promise that settles after the resident tool releases its resources
 	 */
 	destroy(): Promise<void>
+}
+
+/**
+ * Inspects TypeScript source against a caller-named project and reports what that project is.
+ *
+ * @remarks
+ * The type stage carries two members the shared stage contract cannot: the lint and runtime stages
+ * read no project, so a project parameter and a project lookup belong here rather than on
+ * `StageInterface`. `candidates` reports the paths the inspection in flight holds as text, and is
+ * empty between inspections and after teardown.
+ *
+ * @example
+ * ```ts
+ * const project = await stage.resolve('configs/src/tsconfig.core.json')
+ * const check = await stage.inspect(subject, project.path)
+ * ```
+ */
+export interface TypeStageInterface extends StageInterface {
+	/** Absolute path of every candidate the inspection in flight holds as text. */
+	readonly candidates: readonly string[]
+	/**
+	 * Inspects one case, against a caller-named project where the caller names one.
+	 *
+	 * @param subject - The candidate sources and test to inspect
+	 * @param project - The workspace-relative TypeScript project the candidate sources are checked
+	 * against. Default: the scoped project each candidate path infers
+	 * @returns One outcome for this stage
+	 * @throws When the resident compiler cannot start or the stage has already been destroyed
+	 */
+	inspect(subject: Case, project?: string): Promise<Check>
+	/**
+	 * Resolves one project to the path and digest the stage applies for it.
+	 *
+	 * @param project - The workspace-relative TypeScript project to resolve
+	 * @returns The resolved workspace-relative path and the digest of its compiler options
+	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
+	 * been destroyed
+	 */
+	resolve(project: string): Promise<Project>
 }
 
 /**

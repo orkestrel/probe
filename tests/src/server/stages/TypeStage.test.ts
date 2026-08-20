@@ -391,3 +391,78 @@ describe('type stage', () => {
 		await expect(stage.destroy()).resolves.toBeUndefined()
 	})
 })
+
+describe('type stage project resolution', () => {
+	it('resolves every spelling of one project to one path and one digest', async () => {
+		const stage = new TypeStage(ROOT)
+		try {
+			const declared = await stage.resolve('configs/src/tsconfig.core.json')
+			const spelled = await stage.resolve('./configs/src/../src/tsconfig.core.json')
+			const root = await stage.resolve('tsconfig.json')
+
+			expect(declared.path).toBe('configs/src/tsconfig.core.json')
+			expect(declared.digest).toMatch(/^[0-9a-f]{32}$/)
+			expect(spelled).toStrictEqual(declared)
+			// Without this the pair above passes for a digest that reads nothing at all, because
+			// two spellings of one file would agree under any constant.
+			expect(root.digest).not.toBe(declared.digest)
+			expect(root.path).toBe('tsconfig.json')
+		} finally {
+			await stage.destroy()
+		}
+	})
+
+	it('moves the digest with the extends chain under a byte-identical project file', async () => {
+		const id = randomUUID()
+		const directory = `tmp/probe/type-extends-${id}`
+		const child = '{"extends":"./base.json","files":["../../../../src/core/index.ts"]}\n'
+		const strict = '{"compilerOptions":{"strict":true,"skipLibCheck":true,"types":[]}}\n'
+		const lenient = '{"compilerOptions":{"strict":false,"skipLibCheck":true,"types":[]}}\n'
+		for (const [name, parent] of [
+			['first', strict],
+			['second', lenient],
+		] as const) {
+			mkdirSync(resolve(ROOT, directory, name), { recursive: true })
+			writeFileSync(resolve(ROOT, directory, name, 'base.json'), parent, 'utf8')
+			writeFileSync(resolve(ROOT, directory, name, 'tsconfig.json'), child, 'utf8')
+		}
+		const stage = new TypeStage(ROOT)
+		try {
+			const first = await stage.resolve(`${directory}/first/tsconfig.json`)
+			const second = await stage.resolve(`${directory}/second/tsconfig.json`)
+
+			expect(readFileSync(resolve(ROOT, directory, 'first/tsconfig.json'), 'utf8')).toBe(
+				readFileSync(resolve(ROOT, directory, 'second/tsconfig.json'), 'utf8'),
+			)
+			expect(first.digest).not.toBe(second.digest)
+
+			// The pair above sits at two paths, and a parsed project carries its own file path, so
+			// that inequality alone cannot say the parent moved it. Realign the second parent and
+			// read the same path again on a stage holding no parse of it: the project file and its
+			// path are fixed, and its parent's `strict` is the only thing that moved.
+			writeFileSync(resolve(ROOT, directory, 'second/base.json'), strict, 'utf8')
+			const replacement = new TypeStage(ROOT)
+			try {
+				const realigned = await replacement.resolve(`${directory}/second/tsconfig.json`)
+				expect(realigned.path).toBe(second.path)
+				expect(realigned.digest).not.toBe(second.digest)
+			} finally {
+				await replacement.destroy()
+			}
+		} finally {
+			await stage.destroy()
+			rmSync(resolve(ROOT, directory), { recursive: true, force: true })
+		}
+	})
+
+	it('refuses to resolve a project that escapes the workspace or has been torn down', async () => {
+		const stage = new TypeStage(ROOT)
+		await expect(stage.resolve('../outside/tsconfig.json')).rejects.toThrow(
+			'Path escapes the workspace: ../outside/tsconfig.json',
+		)
+		await stage.destroy()
+		await expect(stage.resolve('configs/src/tsconfig.core.json')).rejects.toThrow(
+			'The type stage has been destroyed',
+		)
+	})
+})

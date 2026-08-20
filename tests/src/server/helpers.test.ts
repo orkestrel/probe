@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { createScratch } from '@orkestrel/test/server'
 import {
+	computeDigest,
 	createRevisionFile,
 	inferDocumentLanguage,
 	inferTestProject,
@@ -8,6 +10,7 @@ import {
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	messageFromUnknown,
+	normalizeValue,
 	parseContentLength,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
@@ -143,5 +146,80 @@ describe('server wire helpers', () => {
 		expect(messageFromUnknown('failed')).toBe('failed')
 		expect(messageFromUnknown({ message: 'failed' })).toBe('failed')
 		expect(messageFromUnknown(17)).toBe('17')
+	})
+})
+
+describe('server digest leaves', () => {
+	it('rewrites contained absolute paths, leaves escaping ones, and sorts record keys', () => {
+		expect(normalizeValue(ROOT, resolve(ROOT, 'src/core/index.ts'))).toBe('src/core/index.ts')
+		expect(normalizeValue(ROOT, ROOT)).toBe('.')
+		expect(normalizeValue(ROOT, 'src/core/index.ts')).toBe('src/core/index.ts')
+		// A path outside the workspace has no relative spelling that names the same file from
+		// another checkout, so rewriting it would replace a true absolute with a false relative.
+		expect(normalizeValue(ROOT, resolve(ROOT, '../outside/value.ts'))).toBe(
+			resolve(ROOT, '../outside/value.ts'),
+		)
+		expect(
+			normalizeValue(ROOT, { strict: true, rootDir: resolve(ROOT, 'src/core') }),
+		).toStrictEqual({ rootDir: 'src/core', strict: true })
+		expect(normalizeValue(ROOT, [resolve(ROOT, 'src/core'), 17, null, true])).toStrictEqual([
+			'src/core',
+			17,
+			null,
+			true,
+		])
+		expect(
+			Object.keys(normalizeValue(ROOT, { second: 1, first: 2, third: 3 }) ?? {}),
+		).toStrictEqual(['first', 'second', 'third'])
+	})
+
+	it('digests one project identically at two absolute workspace roots', () => {
+		const scratch = createScratch({ prefix: 'probe-digest-' })
+		try {
+			const typescript = loadWorkspaceModule(ROOT, 'typescript')
+			const project =
+				'{"compilerOptions":{"strict":true,"rootDir":"./src","outDir":"./dist"},"files":["./src/value.ts"]}\n'
+			const roots = ['first', 'second'].map((name) => {
+				scratch.write(`${name}/tsconfig.json`, project)
+				scratch.write(`${name}/src/value.ts`, 'export const VALUE = 1\n')
+				return resolve(scratch.path, name)
+			})
+			const parsed = roots.map((root) => {
+				const file = resolve(root, 'tsconfig.json')
+				const config = typescript.readConfigFile(file, typescript.sys.readFile)
+				return typescript.parseJsonConfigFileContent(
+					config.config,
+					typescript.sys,
+					root,
+					undefined,
+					file,
+				).options
+			})
+			const [first, second] = parsed
+			const [firstRoot, secondRoot] = roots
+			if (first === undefined || second === undefined) throw new Error('The projects did not parse')
+			if (firstRoot === undefined || secondRoot === undefined) {
+				throw new Error('The scratch roots were not created')
+			}
+			// A root containing neither checkout leaves every absolute member absolute, so this is
+			// what the digest reads when the normalization is not applied.
+			const outside = resolve(scratch.path, 'outside')
+
+			expect(first).not.toStrictEqual(second)
+			expect(computeDigest(firstRoot, first)).toBe(computeDigest(secondRoot, second))
+			expect(computeDigest(firstRoot, first)).toMatch(/^[0-9a-f]{32}$/)
+			// The control: without the rewrite the same commit read at two paths digests
+			// differently, so a receipt could never be checked away from the tree that minted it.
+			expect(computeDigest(outside, first)).not.toBe(computeDigest(outside, second))
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('moves the digest for a changed value and holds it for a reordered one', () => {
+		expect(computeDigest(ROOT, { strict: true })).not.toBe(computeDigest(ROOT, { strict: false }))
+		expect(computeDigest(ROOT, { first: 1, second: 2 })).toBe(
+			computeDigest(ROOT, { second: 2, first: 1 }),
+		)
 	})
 })

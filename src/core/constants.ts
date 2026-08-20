@@ -37,6 +37,8 @@ export const FINDING_ORIGINS: readonly FindingOrigin[] = Object.freeze(['code', 
  *
  * @example
  * ```ts
+ * const receipt =
+ * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
  * receipt.startsWith(RECEIPT_PREFIX) // true
  * ```
  */
@@ -45,10 +47,15 @@ export const RECEIPT_PREFIX = 'probe'
 /**
  * The character joining a receipt's tokens.
  *
+ * @remarks
+ * A project path can contain this character, so the project field goes last and a reader rejoins
+ * every field from index 6 onward with this separator rather than expecting a fixed count.
+ *
  * @example
  * ```ts
- * const receipt = 'probe:01J8Z0:type:typescript@6.0.3:oxlint@1.78.0:vitest@4.1.10'
- * receipt.split(RECEIPT_SEPARATOR).length // 6
+ * const receipt =
+ * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * receipt.split(RECEIPT_SEPARATOR).length // 7
  * ```
  */
 export const RECEIPT_SEPARATOR = ':'

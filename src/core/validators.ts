@@ -6,6 +6,7 @@ import type {
 	Control,
 	Finding,
 	FindingOrigin,
+	Project,
 	Source,
 	Stage,
 	Toolchain,
@@ -186,6 +187,27 @@ export const isToolchain: Guard<Toolchain> = recordOf({
 })
 
 /**
+ * Checks whether a value names one resolved TypeScript project and what it contained.
+ *
+ * @remarks
+ * Rejects an empty path and an empty digest. A verdict names the project that judged it, so a
+ * blank member here would report a project the type stage never applied.
+ *
+ * @param value - The value to check
+ * @returns True if the value is a project; false otherwise
+ *
+ * @example
+ * ```ts
+ * isProject({ path: 'configs/src/tsconfig.core.json', digest: '3b674fdf121c85ef' }) // true
+ * isProject({ path: 'configs/src/tsconfig.core.json', digest: '' }) // false
+ * ```
+ */
+export const isProject: Guard<Project> = recordOf({
+	path: isNonEmptyString,
+	digest: isNonEmptyString,
+})
+
+/**
  * Checks whether a value carries a complete verdict.
  *
  * @remarks
@@ -198,14 +220,17 @@ export const isToolchain: Guard<Toolchain> = recordOf({
  *
  * @example
  * ```ts
- * isVerdict({ id: '01J8Z0', toolchain, checks: [], control: [], elapsed: 337 }) // true
- * isVerdict({ id: '01J8Z0', toolchain, checks: [], control: [] }) // false
+ * const basis = { id: '01J8Z0', digest: '6ca20c3b', toolchain, project, elapsed: 337 }
+ * isVerdict({ ...basis, checks: [], control: [] }) // true
+ * isVerdict({ ...basis, checks: [] }) // false
  * ```
  */
 export const isVerdict: Guard<Verdict> = recordOf(
 	{
 		id: isString,
+		digest: isString,
 		toolchain: isToolchain,
+		project: isProject,
 		checks: arrayOf(isCheck),
 		control: arrayOf(isCheck),
 		elapsed: isNumber,

@@ -108,7 +108,9 @@ describe('runtime stage', () => {
 			]
 			const verdict: Verdict = {
 				id: 'context-skip',
+				digest: 'context-skip-claim',
 				toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
+				project: { path: 'tsconfig.json', digest: 'context-skip-project' },
 				checks: [...clean, check],
 				control: [control],
 				elapsed: 0,
@@ -118,7 +120,9 @@ describe('runtime stage', () => {
 			expect(computeReceipt(verdict, 'runtime')).toBeUndefined()
 			expect(
 				computeReceipt({ ...verdict, checks: [...clean, { ...check, findings: [] }] }, 'runtime'),
-			).toBe('probe:context-skip:runtime:typescript@test:oxlint@test:vitest@test')
+			).toBe(
+				'probe:context-skip-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@context-skip-project',
+			)
 		} finally {
 			await stage.destroy()
 		}
@@ -153,7 +157,9 @@ describe('runtime stage', () => {
 				})
 				const base: Verdict = {
 					id: 'receipt-origin',
+					digest: 'receipt-origin-claim',
 					toolchain: { typescript: 'test', oxlint: 'test', vitest: 'test' },
+					project: { path: 'tsconfig.json', digest: 'receipt-origin-project' },
 					checks: [
 						{ stage: 'type', elapsed: 0, findings: [] },
 						{ stage: 'lint', elapsed: 0, findings: [] },
@@ -162,7 +168,8 @@ describe('runtime stage', () => {
 					control: [failed],
 					elapsed: 0,
 				}
-				const token = 'probe:receipt-origin:runtime:typescript@test:oxlint@test:vitest@test'
+				const token =
+					'probe:receipt-origin-claim:runtime:typescript@test:oxlint@test:vitest@test:tsconfig.json@receipt-origin-project'
 
 				// The stage marks a test it never ran as its own fault and a failed expectation as
 				// the candidate's, which is what the three outcomes below are read from.

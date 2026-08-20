@@ -24,6 +24,7 @@ describe('src core entry', () => {
 			'isControl',
 			'isFinding',
 			'isOrigin',
+			'isProject',
 			'isSource',
 			'isStage',
 			'isToolchain',

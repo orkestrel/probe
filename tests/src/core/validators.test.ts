@@ -1,4 +1,14 @@
-import type { Case, Check, Claim, Control, Finding, Source, Toolchain, Verdict } from '@src/core'
+import type {
+	Case,
+	Check,
+	Claim,
+	Control,
+	Finding,
+	Project,
+	Source,
+	Toolchain,
+	Verdict,
+} from '@src/core'
 import { compileGuard } from '@orkestrel/contract'
 import {
 	CLAIM_SHAPE,
@@ -9,6 +19,7 @@ import {
 	isControl,
 	isFinding,
 	isOrigin,
+	isProject,
 	isSource,
 	isStage,
 	isToolchain,
@@ -35,9 +46,15 @@ describe('core guards', () => {
 			oxlint: '1.78.0',
 			vitest: '4.1.10',
 		}
+		const project: Project = {
+			path: 'configs/src/tsconfig.core.json',
+			digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+		}
 		const verdict: Verdict = {
-			id: '01J8Z0',
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain,
+			project,
 			checks: [check],
 			control: [check],
 			elapsed: 17,
@@ -59,6 +76,8 @@ describe('core guards', () => {
 		expect(isCheck({ ...check, elapsed: '17' })).toBe(false)
 		expect(isToolchain(toolchain)).toBe(true)
 		expect(isToolchain({ ...toolchain, vitest: 4 })).toBe(false)
+		expect(isProject(project)).toBe(true)
+		expect(isProject({ ...project, digest: '' })).toBe(false)
 		expect(isVerdict(verdict)).toBe(true)
 		expect(isVerdict({ ...verdict, receipt: 1 })).toBe(false)
 	})
@@ -72,8 +91,13 @@ describe('core guards', () => {
 		const { origin: _, ...anonymous } = finding
 		const check: Check = { stage: 'runtime', elapsed: 1, findings: [finding] }
 		const verdict: Verdict = {
-			id: '01J8Z0',
-			toolchain: { typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' },
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
+			project: {
+				path: 'configs/src/tsconfig.core.json',
+				digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+			},
 			checks: [check],
 			control: [check],
 			elapsed: 17,
@@ -151,6 +175,38 @@ describe('core guards', () => {
 		for (const [index, value] of hostileValues.entries()) {
 			expect(isClaim(value), `hostile value ${index}`).toBe(compiled(value))
 		}
+	})
+
+	it('refuses a verdict that omits what judged it or names it blankly', () => {
+		const check: Check = { stage: 'lint', elapsed: 17, findings: [] }
+		const project: Project = {
+			path: 'configs/src/tsconfig.core.json',
+			digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+		}
+		const verdict: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
+			project,
+			checks: [check],
+			control: [check],
+			elapsed: 17,
+		}
+		const { digest: _digest, ...withoutDigest } = verdict
+		const { project: _project, ...withoutProject } = verdict
+
+		expect(isProject(project)).toBe(true)
+		expect(isProject({ ...project, path: '' })).toBe(false)
+		expect(isProject({ ...project, digest: '' })).toBe(false)
+		expect(isProject({ path: project.path })).toBe(false)
+		// The verdict guards the server's own output, so a verdict that cannot say what judged it
+		// must be refused at the boundary rather than shipped to a reader who trusts the token.
+		expect(isVerdict(verdict)).toBe(true)
+		expect(isVerdict(withoutDigest)).toBe(false)
+		expect(isVerdict(withoutProject)).toBe(false)
+		expect(isVerdict({ ...verdict, project: { ...project, path: '' } })).toBe(false)
+		expect(isVerdict({ ...verdict, project: { ...project, digest: '' } })).toBe(false)
+		expect(isVerdict({ ...verdict, digest: 17 })).toBe(false)
 	})
 
 	it('keeps the frozen stage sequence in execution order', () => {

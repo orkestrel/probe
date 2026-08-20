@@ -2,9 +2,10 @@ import type { WorkspaceManifest } from './types.js'
 import type * as TypeScript from 'typescript'
 import type * as VitestNode from 'vitest/node'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { isRecord } from '@orkestrel/contract'
+import { isArray, isRecord } from '@orkestrel/contract'
 
 /**
  * Resolves a path inside a target workspace and rejects traversal outside it.
@@ -219,4 +220,68 @@ export function messageFromUnknown(value: unknown): string {
 		return value.message
 	}
 	return String(value)
+}
+
+/**
+ * Rewrites every workspace-contained absolute path in a value to its workspace-relative form and
+ * sorts every record's keys.
+ *
+ * @remarks
+ * A parsed TypeScript project carries the absolute root it was parsed at, so the same commit
+ * checked out at two paths produces two values that describe one configuration. Rewriting those
+ * members makes the value portable and stops a host path leaking into anything derived from it. A
+ * path that escapes the workspace is left as it stands, because rewriting it would name a file
+ * outside the tree by a relative spelling. Key order is the parser's, not the configuration's, so
+ * sorting removes a difference that means nothing.
+ *
+ * @param workspace - The target workspace root
+ * @param value - The value to rewrite
+ * @returns The value with contained absolute paths made relative and every record key sorted
+ *
+ * @example
+ * ```ts
+ * normalizeValue('/srv/checkout', { rootDir: '/srv/checkout/src/core', strict: true })
+ * // { rootDir: 'src/core', strict: true }
+ * ```
+ */
+export function normalizeValue(workspace: string, value: unknown): unknown {
+	const root = resolve(workspace)
+	if (typeof value === 'string') {
+		if (!isAbsolute(value)) return value
+		const path = relative(root, resolve(value))
+		if (path === '') return '.'
+		if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) return value
+		return path.replaceAll('\\', '/')
+	}
+	if (isArray(value)) return value.map((entry) => normalizeValue(workspace, entry))
+	if (isRecord(value)) {
+		const record: Record<string, unknown> = {}
+		for (const key of Object.keys(value).sort()) record[key] = normalizeValue(workspace, value[key])
+		return record
+	}
+	return value
+}
+
+/**
+ * Computes the canonical digest of one value as it stands in a target workspace.
+ *
+ * @remarks
+ * Digests the normalized value rather than the value itself, so one commit read at two absolute
+ * roots produces one digest and a digest carries no host path. The result is the leading 32 hex
+ * characters of a SHA-256 over the normalized JSON.
+ *
+ * @param workspace - The target workspace root the value's paths are read against
+ * @param value - The value to digest
+ * @returns 32 lowercase hex characters
+ *
+ * @example
+ * ```ts
+ * computeDigest('/srv/checkout', { strict: true }).length // 32
+ * ```
+ */
+export function computeDigest(workspace: string, value: unknown): string {
+	return createHash('sha256')
+		.update(JSON.stringify(normalizeValue(workspace, value)))
+		.digest('hex')
+		.slice(0, 32)
 }

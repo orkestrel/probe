@@ -19,7 +19,7 @@ import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import { computeReceipt, formatCheck } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
-import { readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
+import { computeDigest, readWorkspaceManifest, resolveWorkspaceFile } from './helpers.js'
 import { LintStage } from './stages/LintStage.js'
 import { RuntimeStage } from './stages/RuntimeStage.js'
 import { TypeStage } from './stages/TypeStage.js'
@@ -123,11 +123,20 @@ export class Probe implements ProbeInterface {
 			if (this.#destroyed) throw new Error('The probe has been destroyed')
 			const started = performance.now()
 			const id = randomUUID()
+			// Resolve the project before any inspection runs, so a project this workspace cannot parse
+			// fails the claim outright rather than after three stages have paid for it.
+			const project = await this.#type.resolve(claim.project)
+			const digest = computeDigest(this.#workspace, {
+				case: claim.case,
+				control: claim.control,
+			})
 			const checks = Object.freeze(await this.#inspect(claim.case, claim))
 			const control = Object.freeze(await this.#inspect(claim.control, claim))
 			const basis: Verdict = {
 				id,
+				digest,
 				toolchain: this.#toolchain,
+				project,
 				checks,
 				control,
 				elapsed: Math.round(performance.now() - started),

@@ -205,6 +205,31 @@ export interface Toolchain {
 }
 
 /**
+ * Names the TypeScript project that judged a verdict's candidate sources.
+ *
+ * @remarks
+ * A verdict is an assertion about code under one compiler configuration, and the same code passes
+ * under one project and fails under another, so a verdict that omits the project states less than
+ * it appears to. `path` names which project file, in the resolved workspace-relative spelling
+ * rather than the caller's. `digest` names what that project contained, because a receipt travels
+ * away from the workspace that minted it and a path alone is a claim about a name.
+ *
+ * @example
+ * ```ts
+ * const project: Project = {
+ * 	path: 'configs/src/tsconfig.core.json',
+ * 	digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+ * }
+ * ```
+ */
+export interface Project {
+	/** Resolved workspace-relative path of the project file the type stage applied. */
+	readonly path: string
+	/** Digest of that project's resolved compiler options, workspace-relative and key-sorted. */
+	readonly digest: string
+}
+
+/**
  * Carries the full result of one claim: every stage, for both the case and its control.
  *
  * @remarks
@@ -213,6 +238,11 @@ export interface Toolchain {
  * why no member here models a missing stage. `receipt` is present only when every stage ran clean
  * on the case and the control reported at least one `origin: 'code'` finding at the stage it
  * declared.
+ *
+ * `id` identifies this call and `digest` identifies the claim it answered, so two calls over one
+ * claim share a digest and differ in their identity. `digest` and `project` are required, because
+ * the type stage always runs and a claim always names a project, so no verdict exists without
+ * either value.
  *
  * @example
  * ```ts
@@ -223,8 +253,13 @@ export interface Toolchain {
  * 	line: 1,
  * }
  * const verdict: Verdict = {
- * 	id: '01J8Z0',
- * 	toolchain: { typescript: '6.0.3', oxlint: '1.78.0', vitest: '4.1.10' },
+ * 	id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+ * 	digest: '6ca20c3bff623031d3955b9d1a76d71d',
+ * 	toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
+ * 	project: {
+ * 		path: 'configs/src/tsconfig.core.json',
+ * 		digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+ * 	},
  * 	checks: [
  * 		{ stage: 'type', elapsed: 61, findings: [] },
  * 		{ stage: 'lint', elapsed: 17, findings: [] },
@@ -236,15 +271,20 @@ export interface Toolchain {
  * 		{ stage: 'runtime', elapsed: 254, findings: [] },
  * 	],
  * 	elapsed: 337,
- * 	receipt: 'probe:01J8Z0:type:typescript@6.0.3:oxlint@1.78.0:vitest@4.1.10',
+ * 	receipt:
+ * 		'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
  * }
  * ```
  */
 export interface Verdict {
 	/** The revision identity this verdict was produced for, fresh per call. */
 	readonly id: string
+	/** Digest of the case and control this verdict answers. */
+	readonly digest: string
 	/** The tool versions that produced it. */
 	readonly toolchain: Toolchain
+	/** The TypeScript project the candidate sources were judged against. */
+	readonly project: Project
 	/** One outcome per stage for the claim's case. */
 	readonly checks: readonly Check[]
 	/** One outcome per stage for the claim's control. */

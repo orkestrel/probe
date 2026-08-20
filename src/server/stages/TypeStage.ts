@@ -1,10 +1,11 @@
-import type { Case, Check, Finding, Source, Stage } from '@src/core'
-import type { OverlayInterface, StageInterface } from '../types.js'
+import type { Case, Check, Finding, Project, Source, Stage } from '@src/core'
+import type { OverlayInterface, TypeStageInterface } from '../types.js'
 import type * as TypeScript from 'typescript'
 import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
+	computeDigest,
 	inferTypeProject,
 	loadWorkspaceModule,
 	relativeWorkspaceFile,
@@ -33,7 +34,7 @@ import { Overlay } from '../Overlay.js'
  * await stage.destroy()
  * ```
  */
-export class TypeStage implements StageInterface {
+export class TypeStage implements TypeStageInterface {
 	readonly #workspace: string
 	readonly #typescript: Promise<typeof TypeScript>
 	readonly #services = new Map<string, LanguageService>()
@@ -121,6 +122,32 @@ export class TypeStage implements StageInterface {
 			}
 		} finally {
 			overlay.clear()
+		}
+	}
+
+	/**
+	 * Resolves one project to the path and digest this stage applies for it.
+	 *
+	 * @remarks
+	 * Reads the parse this stage itself applies, filling its cache when the project is not already
+	 * resident, so the reported digest is the configuration the inspection is judged under rather
+	 * than a second parse a caller ran. The returned record is a value copy, so a later eviction
+	 * does not move it.
+	 *
+	 * @param project - The workspace-relative TypeScript project to resolve
+	 * @returns The resolved workspace-relative path and the digest of its compiler options
+	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
+	 * been destroyed
+	 */
+	async resolve(project: string): Promise<Project> {
+		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		const typescript = await this.#typescript
+		if (this.#destroyed) throw new Error('The type stage has been destroyed')
+		const resolved = resolveWorkspaceFile(this.#workspace, project)
+		this.#service(typescript, project)
+		return {
+			path: relativeWorkspaceFile(this.#workspace, resolved),
+			digest: computeDigest(this.#workspace, this.#options.get(resolved) ?? {}),
 		}
 	}
 
