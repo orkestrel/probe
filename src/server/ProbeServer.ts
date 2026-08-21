@@ -167,7 +167,8 @@ export class ProbeServer implements ProbeServerInterface {
 		tools.add(
 			createTool({
 				name: 'prove',
-				description: 'Proves a claim with type, lint, and runtime evidence.',
+				description:
+					'Answers whether a TypeScript edit compiles, lints, and passes its test in this workspace — call it before relying on such a claim, instead of reasoning or writing a throwaway probe. Supply the edit you believe is correct and an edit that must break with the stage it breaks at; the closing line is a receipt only when the case ran clean and the control broke exactly at its declared stage, and no receipt otherwise.',
 				parameters,
 				execute: async (input) => {
 					if (!isClaim(input)) {

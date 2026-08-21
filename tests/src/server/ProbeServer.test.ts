@@ -1,5 +1,9 @@
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import { createStdioServer } from '@orkestrel/mcp/server'
 import { captureError, createRecorder, waitForDelay } from '@orkestrel/test'
+import { createToolManager } from '@orkestrel/tool'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
@@ -225,4 +229,25 @@ describe('probe server', () => {
 			}
 		},
 	)
+
+	// Probe's teardown relies on the installed `@orkestrel/mcp` detach: the transport removes its
+	// own `data`, `close`, and `error` listeners from the stream it was given when it stops.
+	// `ProbeServer` composes a transport this same way over a stream it owns, so this pins the
+	// installed behavior at that composition seam directly, without going through the server.
+	it('detaches the transport listeners from the stream it was given', { timeout: 180_000 }, () => {
+		const stream = new PassThrough()
+		const server = createMCPServer({
+			identity: { name: 'probe', version: '0.0.0' },
+			tools: createToolManager(),
+		})
+		const transport = createStdioServer(createMCPLegacy(server), { input: stream })
+		expect(stream.listenerCount('data')).toBe(0)
+		transport.start()
+		expect(stream.listenerCount('data')).toBeGreaterThan(0)
+		const result = transport.stop()
+		expect(result).toBeUndefined()
+		expect(stream.listenerCount('data')).toBe(0)
+		expect(stream.listenerCount('close')).toBe(0)
+		expect(stream.listenerCount('error')).toBe(0)
+	})
 })
