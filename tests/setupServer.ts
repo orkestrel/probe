@@ -1,7 +1,7 @@
-import { lstatSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
 
 // Reads, on the host the suite is running on, whether a create fails because the host refuses a
 // name whose final component is longer than the filesystem accepts. The code the failure carries is
@@ -37,28 +37,14 @@ function probeRefusedTargets(): boolean {
  */
 export const REFUSED_RUNTIME_TARGETS: boolean = probeRefusedTargets()
 
-// Reads, on the host the suite is running on, whether a directory link the workspace walker reads
-// as a symbolic link can be created at all. The walker's reading is `lstatSync().isSymbolicLink()`,
-// and two calls satisfy it: a plain symbolic link, which needs a privilege a host can withhold, and
-// a directory junction, which stands in where it does. A host that creates neither cannot build the
-// condition a proof about a linked path needs, so such a proof is inapplicable there rather than
-// failing. The link goes into an owned scratch directory, so nothing survives the reading.
-function probeDirectoryLinks(): boolean {
-	const scratch = createScratch({ prefix: 'probe-directory-link-' })
-	try {
-		const target = resolve(scratch.path, 'target')
-		mkdirSync(target)
-		const link = resolve(scratch.path, 'link')
-		if (!attempt(() => symlinkSync(target, link, 'dir')).success) {
-			if (!attempt(() => symlinkSync(target, link, 'junction')).success) return false
-		}
-		return lstatSync(link).isSymbolicLink()
-	} finally {
-		scratch.destroy()
-	}
-}
-
 /**
  * Whether this host creates a directory link the workspace walker reads as a symbolic link.
+ *
+ * @remarks `supportsDirectoryLinks` creates one junction, which is the call that lands on a host
+ * withholding the privilege a plain symbolic link needs, and answers true only when the link reports
+ * as a symbolic link, resolves to a directory, and reaches the destination's contents. The walker's
+ * own reading is `lstatSync().isSymbolicLink()`, and every proof gated here also traverses the link,
+ * so the stricter answer is the one they need. A host answering false cannot build the linked path
+ * those proofs are about, so each is inapplicable there rather than failing.
  */
-export const DIRECTORY_LINKS: boolean = probeDirectoryLinks()
+export const DIRECTORY_LINKS: boolean = supportsDirectoryLinks()
