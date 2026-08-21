@@ -81,6 +81,7 @@
 		"test:guides": "vitest run --config vite.config.ts --no-cache --reporter=dot --project guides",
 		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
+		"bench": "vitest bench --config vite.config.ts --no-cache --project probe",
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core && npm run build:src:server && npm run build:src:bin",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
