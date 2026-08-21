@@ -168,7 +168,7 @@ export class ProbeServer implements ProbeServerInterface {
 			createTool({
 				name: 'prove',
 				description:
-					'Answers whether a TypeScript edit compiles, lints, and passes its test in this workspace — call it before relying on such a claim, instead of reasoning or writing a throwaway probe. Supply the edit you believe is correct and an edit that must break with the stage it breaks at; the closing line is a receipt only when the case ran clean and the control broke exactly at its declared stage, and no receipt otherwise. For a performance claim, measure before proving: write a guarded bench block — if (import.meta.env.MODE === "benchmark") — beside the probe test, run the workspace bench script, and record only magnitudes; a settled ratio then proves here as an ordinary runtime claim.',
+					"Answers whether a TypeScript edit compiles, lints, and passes its test in this workspace — call it before relying on such a claim, instead of reasoning or writing a throwaway probe. Supply the edit you believe is correct and an edit that must break with the stage it breaks at; the closing line is a receipt only when the case ran clean and the control broke exactly at its declared stage, and no receipt otherwise. For a performance claim, measure before proving: write a guarded bench block — if (import.meta.env.MODE === 'benchmark') — beside the probe test, run the workspace bench script, and record only magnitudes; a settled ratio then proves here as an ordinary runtime claim.",
 				parameters,
 				execute: async (input) => {
 					if (!isClaim(input)) {
