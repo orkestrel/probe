@@ -235,6 +235,9 @@ The public call-signature members of each behavioral interface, one table per in
 
 ## What a probe proves
 
+Measure a performance claim first through a guarded bench block beside the probe test, run by the
+`test:bench` script; a settled magnitude then proves through `prove` as an ordinary runtime claim.
+
 A `Claim` is a question with a falsifier attached. Its `case` is the edit you believe is correct.
 Its `control` is the same edit deliberately broken, plus the `stage` you say the breakage lands at
 and the `reason` in your own words. Both are judged under the TypeScript project the claim's

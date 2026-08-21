@@ -406,7 +406,10 @@ describe('bin entry', () => {
 			await client.connect()
 			expect(client.connected).toBe(true)
 			expect(client.version).toBeDefined()
-			expect((await client.tools()).map((tool) => tool.name)).toStrictEqual(['prove'])
+			const tools = await client.tools()
+			expect(tools.map((tool) => tool.name)).toStrictEqual(['prove'])
+			expect(tools[0]?.description).toContain('measure before proving')
+			expect(tools[0]?.description).toContain("import.meta.env.MODE === 'benchmark'")
 			const outcome = await client.call('prove', claim)
 			expect(outcome.resultType).toBe('complete')
 			if (outcome.resultType !== 'complete') return
@@ -464,7 +467,10 @@ describe('bin entry', () => {
 				await client.connect()
 				expect(client.connected).toBe(true)
 				expect(client.version).toBe('2025-06-18')
-				expect((await client.tools()).map((tool) => tool.name)).toStrictEqual(['prove'])
+				const tools = await client.tools()
+				expect(tools.map((tool) => tool.name)).toStrictEqual(['prove'])
+				expect(tools[0]?.description).toContain('measure before proving')
+				expect(tools[0]?.description).toContain("import.meta.env.MODE === 'benchmark'")
 				const outcome = await client.call('prove', claim)
 				expect(outcome.resultType).toBe('complete')
 				if (outcome.resultType !== 'complete') return
