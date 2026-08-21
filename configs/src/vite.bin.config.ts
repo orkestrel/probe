@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import { srcBin } from '../../vite.config.ts'
 
-// The `probe` executable build — a single ESM lib file, no declarations (an
+// The `scaffold` executable build — a single ESM lib file, no declarations (an
 // executable ships no types), with the `#!/usr/bin/env node` shebang re-emitted through
 // `output.banner` (rolldown strips shebangs from source during bundling), and
 // `output.paths` rewriting the externalized `@src/*` specifiers to the built sibling

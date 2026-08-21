@@ -4,8 +4,8 @@ import { srcServer, resolveWorkspacePath } from '../../vite.config.ts'
 
 // vite-plugin-dts rolls this face into one declaration, and the roll-up reaches
 // src/core through a relative source path the tarball does not carry. The rewrite
-// that follows externalizes core through the package's own published root export,
-// on the final roll-up only.
+// below externalizes core through the package's own published root export, on the
+// final roll-up only.
 export default defineConfig(
 	srcServer({
 		plugins: [
