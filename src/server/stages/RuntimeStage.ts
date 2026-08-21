@@ -18,7 +18,7 @@ import {
 	writeFileSync,
 } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
@@ -33,6 +33,7 @@ import {
 	createRevisionFile,
 	describeUnknown,
 	inferTestProject,
+	isRefusedName,
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	normalizePath,
@@ -69,11 +70,12 @@ import { Overlay } from '../Overlay.js'
  * as a path string, into which the stage can install no overlay, and a specification path that
  * crosses a symbolic link, whose existing components this host cannot inspect, or whose directory
  * the target tree blocks probe from creating. An `origin: 'instrument'` issue names this package's
- * own machinery: a specification it could not write after its directory exists, or one it could
- * not run, evict, or delete, in each case for a reason the target tree does not own, and a run
- * that reported no test. An unmapped caller test and a test whose named project is absent are claimant failures with
- * `code: 'missing'`, thrown rather than reported, because a test that never ran is no evidence
- * about the candidate.
+ * own machinery: a specification it could not write after its directory exists and the host did not
+ * refuse the caller's own name, or one it could not run, evict, or delete, in each case for a
+ * reason the target tree does not own, and a run that reported no test. An unmapped caller test and
+ * a test whose named project is absent are claimant failures with `code: 'missing'`, and a declared
+ * test path the host refuses to create is a claimant failure with `code: 'refused'`. Each is thrown
+ * rather than reported, because a test that never ran is no evidence about the candidate.
  *
  * The write path's physical-containment guarantee covers the claim inputs and the target tree as
  * inspected. A concurrent process that mutates a path component between the final inspection and
@@ -152,7 +154,17 @@ export class RuntimeStage implements StageInterface {
 					issues: [specification],
 				}
 			}
-			const file = specification
+			// Vitest stores a specification under the exact identifier it is handed, while its deletion
+			// handler rewrites the path it is given to forward slashes before looking that key up. So on
+			// a host whose separator is a backslash the native spelling is stored and never found again:
+			// the eviction below misses, Vitest keeps the module in its file map, and every later run
+			// returns it among that run's own results. The module a failed arming left behind then
+			// reports as a claimant issue against a clean case and refuses its receipt. Hand Vitest one
+			// identifier for the specification, its results, and its eviction. Read the host separator
+			// rather than the platform name, for the reason `#invalidate` gives. The file itself is
+			// written and deleted through the native path `relative` and `realpathSync` return from this
+			// one.
+			const file = sep === '\\' ? normalizePath(specification) : specification
 			this.#specifications += 1
 			this.#revisions.add(file)
 			let issues: readonly Issue[] = []
@@ -376,6 +388,10 @@ export class RuntimeStage implements StageInterface {
 
 	#specification(test: Draft): string | Issue {
 		let creating = false
+		// The sibling path the write aimed at, kept where the classification below can read it. That
+		// path is composed inside the attempt because it carries a revision minted there, and the
+		// classification needs the path itself rather than the fault's own text.
+		let generated: string | undefined
 		const outcome = attempt(() => {
 			// The writing host's own process id leads the revision, so a later host can tell a file
 			// whose writer is gone from one a live host still holds. Several hosts share one
@@ -384,6 +400,7 @@ export class RuntimeStage implements StageInterface {
 			// goes into the file's own marker, so the sweep reads one value from two places.
 			const revision = `${process.pid}-${randomUUID()}`
 			const file = createRevisionFile(this.#workspace, test.path, revision)
+			generated = file
 			const target = relative(this.#workspace, file)
 			resolveWorkspaceFile(this.#workspace, target, true)
 			// The caller declared where its test lives, so creating that directory is part of what the
@@ -413,6 +430,21 @@ export class RuntimeStage implements StageInterface {
 				context: { ...outcome.error.context, path: test.path },
 				cause: outcome.error.cause,
 			})
+		}
+		// A create the host refused is the caller's name, not this package's machinery and not the
+		// target tree. The directory exists by this point, so an ordinary absent file would have been
+		// created; what remains is a name the host will not accept. `creating` bounds this to the
+		// final write, leaving a directory the tree blocks to the workspace issue below.
+		if (!creating && generated !== undefined && isRefusedName(generated, outcome.error)) {
+			throw new ProbeError(
+				`The runtime stage cannot write a specification beside a test path the host refuses (${describeUnknown(outcome.error)})`,
+				{
+					origin: 'claimant',
+					code: 'refused',
+					context: { stage: this.stage, path: test.path },
+					cause: outcome.error,
+				},
+			)
 		}
 		return {
 			origin:
@@ -540,9 +572,17 @@ export class RuntimeStage implements StageInterface {
 		for (const [path, digest] of modules) this.#modules.set(path, digest)
 	}
 
+	// Vite keys its module graph on the forward-slash spelling of a resolved id, and `invalidateFile`
+	// looks that key up exactly. `#walk` builds each path with `join` and the overlay holds paths
+	// `resolve` produced, so on a host whose separator is a backslash the native spelling matches no
+	// key, the invalidation is dropped without an error, and the resident runner serves the previous
+	// module. Read the host separator rather than the platform name, and rewrite only where it is a
+	// backslash: a backslash is a legal filename character on a host whose separator is a forward
+	// slash, so rewriting there would turn a key Vite holds into one it does not.
 	#invalidate(vitest: Vitest, path: string): void {
-		vitest.invalidateFile(path)
-		vitest.watcher.invalidates.add(path)
+		const id = sep === '\\' ? normalizePath(path) : path
+		vitest.invalidateFile(id)
+		vitest.watcher.invalidates.add(id)
 	}
 
 	#snapshot(): ReadonlyMap<string, string> {

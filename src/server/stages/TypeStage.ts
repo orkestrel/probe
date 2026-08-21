@@ -1,7 +1,13 @@
 import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
 import type { OverlayInterface, TypeStageInterface } from '../types.js'
 import type * as TypeScript from 'typescript'
-import type { CompilerOptions, Diagnostic, IScriptSnapshot, LanguageService } from 'typescript'
+import type {
+	CompilerOptions,
+	Diagnostic,
+	DiagnosticMessageChain,
+	IScriptSnapshot,
+	LanguageService,
+} from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
@@ -10,6 +16,7 @@ import {
 	computeDigest,
 	inferTypeProject,
 	loadWorkspaceModule,
+	normalizePath,
 	relativeWorkspaceFile,
 	resolveWorkspaceFile,
 } from '../helpers.js'
@@ -248,33 +255,35 @@ export class TypeStage implements TypeStageInterface {
 		const path = resolveWorkspaceFile(this.#workspace, project)
 		const existing = this.#services.get(path)
 		if (existing !== undefined) return existing
-		const config = typescript.readConfigFile(path, typescript.sys.readFile)
+		// The compiler builds a project diagnostic's own file name in the forward-slash spelling and
+		// then asserts it equals the path the caller handed in. So a native path reaches this seam,
+		// a malformed project makes the compiler construct that diagnostic, and the assertion fails
+		// as a raw `Debug Failure` naming this host's directory layout, outside this package's
+		// failure contract. Hand the compiler the forward-slash spelling, which it accepts on every
+		// host, and it returns the diagnostic instead. Every cache here stays keyed by the native
+		// `path`, so nothing this stage stores or reports moves with it.
+		const spelling = normalizePath(path)
+		const config = typescript.readConfigFile(spelling, typescript.sys.readFile)
 		if (config.error !== undefined) {
-			throw new ProbeError(
-				typescript.flattenDiagnosticMessageText(config.error.messageText, '\n'),
-				{
-					origin: 'workspace',
-					code: 'malformed',
-					context: { stage: this.stage, project },
-				},
-			)
+			throw new ProbeError(this.#translate(typescript, config.error.messageText, path), {
+				origin: 'workspace',
+				code: 'malformed',
+				context: { stage: this.stage, project },
+			})
 		}
 		const parsed = typescript.parseJsonConfigFileContent(
 			config.config,
 			typescript.sys,
-			dirname(path),
+			dirname(spelling),
 			undefined,
-			path,
+			spelling,
 		)
 		if (parsed.errors.length > 0) {
-			throw new ProbeError(
-				typescript.flattenDiagnosticMessageText(parsed.errors[0]?.messageText ?? '', '\n'),
-				{
-					origin: 'workspace',
-					code: 'malformed',
-					context: { stage: this.stage, project },
-				},
-			)
+			throw new ProbeError(this.#translate(typescript, parsed.errors[0]?.messageText, path), {
+				origin: 'workspace',
+				code: 'malformed',
+				context: { stage: this.stage, project },
+			})
 		}
 		this.#options.set(path, parsed.options)
 		this.#files.set(path, parsed.fileNames)
@@ -301,6 +310,24 @@ export class TypeStage implements TypeStageInterface {
 		this.#services.set(path, service)
 		if (!this.#resident.has(path)) this.#recycle(path)
 		return service
+	}
+
+	// Renders one project diagnostic in the terms this package reports a path in. The compiler names
+	// the project by the absolute path this stage handed it, and it spells that path either way: the
+	// native spelling where it echoes what it was given, the forward-slash spelling where it derived
+	// the path itself. So a caller reads whichever spelling the diagnostic happened to take, and on a
+	// host whose separator is a backslash that is this host's own directory layout rather than the
+	// project the caller named. Normalizing the message first makes one replacement cover both
+	// spellings, and the caller reads the workspace-relative project it asked for.
+	#translate(
+		typescript: typeof TypeScript,
+		message: string | DiagnosticMessageChain | undefined,
+		path: string,
+	): string {
+		return normalizePath(typescript.flattenDiagnosticMessageText(message, '\n')).replaceAll(
+			normalizePath(path),
+			relativeWorkspaceFile(this.#workspace, path),
+		)
 	}
 
 	#configure(service: LanguageService, project: string): void {

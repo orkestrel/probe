@@ -2,10 +2,10 @@ import type { ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
 import type * as TypeScript from 'typescript'
 import type * as VitestNode from 'vitest/node'
-import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { attempt, compileGuard, isArray, isRecord } from '@orkestrel/contract'
 import { CLAIM_SHAPE, ProbeError, isDraft } from '@src/core'
 
@@ -116,6 +116,54 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		})
 	}
 	return file
+}
+
+/**
+ * Reports whether a fault means the host refuses the name a caller supplied for a file to create.
+ *
+ * @remarks
+ * A host reports one refusal with a code of its own and several unrelated conditions with one
+ * shared code, so the code alone does not separate a name the host will not accept from a file
+ * that is merely absent. `ENAMETOOLONG` names the refusal outright. `ERR_INVALID_ARG_VALUE` names
+ * every argument Node rejects, so it names the refusal only for a path carrying the NUL byte Node
+ * refuses; the same code arrives for a bad `flag` and a bad encoding, which say nothing about the
+ * name. An `ENOENT` raised while the parent stats as a directory names the refusal too, because an
+ * ordinary absent file beneath an existing directory would have been created instead; a Windows
+ * host reports an overlong component and a character its filesystem reserves that way. Measured on
+ * 2026-08-21 on Windows 11 with Node v24.18.1 over NTFS, `writeFileSync` reported `ENOENT` for a
+ * 300-character final component and never reported `ENAMETOOLONG`.
+ *
+ * This reads the fault the host reported rather than applying a length or character policy of its
+ * own, so a host that accepts a name another host refuses is not second-guessed and no platform
+ * branch decides the answer. Every read of the fault is guarded, so it is total over every value a
+ * published caller can supply: a proxy whose `has` trap throws, a value whose `code` getter throws,
+ * a fault carrying no code, and a parent this host cannot stat each report false.
+ *
+ * @param file - The path whose creation failed
+ * @param error - The fault the failed operation raised
+ * @returns True when the fault means the host refuses this name; false otherwise
+ *
+ * @example
+ * ```ts
+ * try {
+ * 	writeFileSync('tmp/probe/greeting\0.test.ts', '')
+ * } catch (error) {
+ * 	isRefusedName('tmp/probe/greeting\0.test.ts', error) // true
+ * }
+ * isRefusedName('tmp/probe/greeting.test.ts', new Error('the runtime stage was destroyed')) // false
+ * ```
+ */
+export function isRefusedName(file: string, error: unknown): boolean {
+	if (typeof error !== 'object' || error === null) return false
+	const fault = error
+	const reading = attempt(() => ('code' in fault ? fault.code : undefined))
+	if (!reading.success) return false
+	const code = reading.value
+	if (code === 'ENAMETOOLONG') return true
+	if (code === 'ERR_INVALID_ARG_VALUE') return file.includes('\0')
+	if (code !== 'ENOENT') return false
+	const parent = attempt(() => statSync(dirname(file), { throwIfNoEntry: false }))
+	return parent.success && parent.value !== undefined && parent.value.isDirectory()
 }
 
 /**

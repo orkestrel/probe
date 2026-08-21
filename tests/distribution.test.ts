@@ -27,7 +27,7 @@ describe.sequential('published distribution', () => {
 		try {
 			const packed = spawnSync(
 				process.execPath,
-				[npm, 'pack', '--json', '--pack-destination', scratch.path],
+				[npm, 'pack', '--json', '--ignore-scripts', '--pack-destination', scratch.path],
 				{
 					cwd: ROOT,
 					encoding: 'utf8',

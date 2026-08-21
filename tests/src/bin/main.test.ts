@@ -13,6 +13,15 @@ import { describe, expect, it } from 'vitest'
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const ENTRY = 'src/bin/main.ts'
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
+// The program that gives the entry a real terminal, by running it inside a pseudo-terminal session.
+// A proof needing one spawns this exact path, and skips where the path names no file: Git Bash on
+// Windows ships no `script` program, so the fixture these proofs drive is absent there. The skip
+// cites that absent binary and claims nothing about other terminals the host can build — a host
+// with no `script` can still have programs that present a pseudo-terminal, and a proof driving one
+// of those is a fixture this file does not have rather than a proof this host cannot hold. Reading
+// the spawned path keeps the condition a statement about this filesystem rather than about the
+// platform name.
+const TERMINAL = '/usr/bin/script'
 const ARMING_TIMEOUT = 30_000
 // The wall clock a graceful teardown is given, from the signal to the child's exit. A boot-time
 // teardown awaits the boot in flight, which measured 2.3 s on the host `guides/probe.md` § Cost
@@ -24,6 +33,18 @@ const DELIVERIES = [
 	{ signal: 'SIGTERM', phase: 'service' },
 	{ signal: 'SIGINT', phase: 'service' },
 ] as const
+
+// A bare child that answers a termination signal the way the entry does: a handler that exits 0. It
+// announces on its standard output that the handler is installed, so a parent signals it only after
+// the handler is in place, and the timer holds it open until the signal arrives.
+const HANDLED = [
+	"for (const name of ['SIGTERM', 'SIGINT']) process.on(name, () => process.exit(0))",
+	"process.stdout.write('armed')",
+	'setTimeout(() => {}, 10_000)',
+].join('\n')
+// The same child with no handler. It cannot exit 0 on a signal, which is what makes it the control
+// for the reading that follows.
+const UNHANDLED = ["process.stdout.write('armed')", 'setTimeout(() => {}, 10_000)'].join('\n')
 
 function readWorkbench(directory: string): readonly string[] {
 	try {
@@ -59,6 +80,26 @@ async function waitForArmed(directory: string): Promise<void> {
 		await waitForDelay(10)
 	} while (performance.now() < deadline)
 	throw new Error(`Timed out waiting for the boot to end in ${directory}`)
+}
+
+// Reads how this host ends a child that `child.kill` signals, phrased the way the entry's own exit
+// is read. A host that delivers the signal to the child runs whatever handler the child installed,
+// and the child exits under its own code; a host that terminates the child instead reports the
+// signal and runs no handler. `child.kill` is the door the proofs below use, and the door decides,
+// so this reading comes through the same one.
+async function readSignalEnding(
+	signal: NodeJS.Signals,
+	program: string,
+): Promise<{ readonly code: number | null; readonly signal: string | null }> {
+	const child = spawn(process.execPath, ['-e', program], { stdio: ['ignore', 'pipe', 'ignore'] })
+	const ended = new Promise<{ code: number | null; signal: string | null }>((settle) => {
+		child.once('exit', (code, ending) => settle({ code, signal: ending }))
+	})
+	await new Promise<void>((armed) => {
+		child.stdout.once('data', () => armed())
+	})
+	child.kill(signal)
+	return await ended
 }
 
 // Builds a target the entry can really arm against: a peer-resolution or configuration failure
@@ -117,7 +158,7 @@ describe('bin entry', () => {
 		}
 	})
 
-	it(
+	it.skipIf(!existsSync(TERMINAL))(
 		'answers both protocol eras without exposing worker output on stdout',
 		{ timeout: 60_000 },
 		async () => {
@@ -223,7 +264,7 @@ describe('bin entry', () => {
 			const directory = resolve(ROOT, 'tmp/probe/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(
-				'/usr/bin/script',
+				TERMINAL,
 				['-qfec', 'stty -echo; exec "$PROBE_NODE" "$PROBE_ENTRY"', '/dev/null'],
 				{
 					cwd: ROOT,
@@ -442,95 +483,99 @@ describe('bin entry', () => {
 		},
 	)
 
-	it('preserves worker diagnostics on stderr', { timeout: 60_000 }, async () => {
-		const modern = {
-			'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-			'io.modelcontextprotocol/clientCapabilities': {},
-			'io.modelcontextprotocol/clientInfo': { name: 'probe-test', version: '1.0.0' },
-		}
-		const request = {
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'tools/call',
-			params: {
-				name: 'prove',
-				arguments: {
-					project: 'configs/src/tsconfig.core.json',
-					case: {
-						files: [{ path: 'src/core/stderr.ts', text: "export const VALUE = 'ok'\n" }],
-						test: {
-							path: 'tmp/probe/bin/stderr-runtime.test.ts',
-							text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
-						},
-					},
-					control: {
-						files: [{ path: 'src/core/stderr.ts', text: "export const VALUE: number = 'bad'\n" }],
-						test: {
-							path: 'tmp/probe/bin/stderr-runtime.test.ts',
-							text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
-						},
-						stage: 'type',
-						reason: 'the source assigns a string to a number',
-					},
-				},
-				_meta: modern,
-			},
-		}
-		const directory = resolve(ROOT, 'tmp/probe/bin')
-		mkdirSync(directory, { recursive: true })
-		const diagnostic = resolve(directory, 'worker-stderr.txt')
-		const child = spawn(
-			'/usr/bin/script',
-			['-qfec', 'stty -echo; exec "$PROBE_NODE" "$PROBE_ENTRY" 2>"$PROBE_STDERR"', '/dev/null'],
-			{
-				cwd: ROOT,
-				stdio: ['pipe', 'pipe', 'pipe'],
-				env: {
-					...process.env,
-					PROBE_ENTRY: BUILT_ENTRY,
-					PROBE_NODE: process.execPath,
-					PROBE_STDERR: diagnostic,
-				},
-			},
-		)
-		const output = createInterface({ input: child.stdout })
-		try {
-			await waitForDelay(250)
-			child.stdin.write(JSON.stringify(request) + '\n')
-			let response: unknown
-			for await (const line of output) {
-				const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
-				if (frame.trim() === '') continue
-				response = JSON.parse(frame)
-				break
+	it.skipIf(!existsSync(TERMINAL))(
+		'preserves worker diagnostics on stderr',
+		{ timeout: 60_000 },
+		async () => {
+			const modern = {
+				'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+				'io.modelcontextprotocol/clientCapabilities': {},
+				'io.modelcontextprotocol/clientInfo': { name: 'probe-test', version: '1.0.0' },
 			}
-			expect(response).toMatchObject({
+			const request = {
+				jsonrpc: '2.0',
 				id: 1,
-				result: {
-					content: [
-						expect.objectContaining({
-							type: 'text',
-							text: expect.stringMatching(/^probe .+receipt probe:/s),
-						}),
-					],
+				method: 'tools/call',
+				params: {
+					name: 'prove',
+					arguments: {
+						project: 'configs/src/tsconfig.core.json',
+						case: {
+							files: [{ path: 'src/core/stderr.ts', text: "export const VALUE = 'ok'\n" }],
+							test: {
+								path: 'tmp/probe/bin/stderr-runtime.test.ts',
+								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
+							},
+						},
+						control: {
+							files: [{ path: 'src/core/stderr.ts', text: "export const VALUE: number = 'bad'\n" }],
+							test: {
+								path: 'tmp/probe/bin/stderr-runtime.test.ts',
+								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
+							},
+							stage: 'type',
+							reason: 'the source assigns a string to a number',
+						},
+					},
+					_meta: modern,
 				},
-			})
-			expect(readFileSync(diagnostic, 'utf8')).toContain('worker-stderr-marker')
-		} finally {
-			output.close()
-			if (child.exitCode === null) {
-				const exited = new Promise<void>((resolveExit) => {
-					child.once('exit', () => resolveExit())
-				})
-				child.kill('SIGTERM')
-				await exited
 			}
-			rmSync(diagnostic, { force: true })
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const diagnostic = resolve(directory, 'worker-stderr.txt')
+			const child = spawn(
+				TERMINAL,
+				['-qfec', 'stty -echo; exec "$PROBE_NODE" "$PROBE_ENTRY" 2>"$PROBE_STDERR"', '/dev/null'],
+				{
+					cwd: ROOT,
+					stdio: ['pipe', 'pipe', 'pipe'],
+					env: {
+						...process.env,
+						PROBE_ENTRY: BUILT_ENTRY,
+						PROBE_NODE: process.execPath,
+						PROBE_STDERR: diagnostic,
+					},
+				},
+			)
+			const output = createInterface({ input: child.stdout })
 			try {
-				rmdirSync(directory)
-			} catch {}
-		}
-	})
+				await waitForDelay(250)
+				child.stdin.write(JSON.stringify(request) + '\n')
+				let response: unknown
+				for await (const line of output) {
+					const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
+					if (frame.trim() === '') continue
+					response = JSON.parse(frame)
+					break
+				}
+				expect(response).toMatchObject({
+					id: 1,
+					result: {
+						content: [
+							expect.objectContaining({
+								type: 'text',
+								text: expect.stringMatching(/^probe .+receipt probe:/s),
+							}),
+						],
+					},
+				})
+				expect(readFileSync(diagnostic, 'utf8')).toContain('worker-stderr-marker')
+			} finally {
+				output.close()
+				if (child.exitCode === null) {
+					const exited = new Promise<void>((resolveExit) => {
+						child.once('exit', () => resolveExit())
+					})
+					child.kill('SIGTERM')
+					await exited
+				}
+				rmSync(diagnostic, { force: true })
+				try {
+					rmdirSync(directory)
+				} catch {}
+			}
+		},
+	)
 
 	// The signals, and the moments a harness delivers one in. The boot-time delivery is the
 	// load-bearing half: teardown awaits the boot in flight, so it takes seconds, and every
@@ -540,7 +585,24 @@ describe('bin entry', () => {
 		it(
 			`leaves the target clean when ${delivery.signal} reaches the entry during ${delivery.phase}`,
 			{ timeout: 120_000 },
-			async () => {
+			async (context) => {
+				// The control comes first: a child holding no handler cannot exit 0 on the signal, so an
+				// instrument reporting a handled ending for that one would be reading nothing about the
+				// handler.
+				expect(await readSignalEnding(delivery.signal, UNHANDLED)).not.toStrictEqual({
+					code: 0,
+					signal: null,
+				})
+				const ending = await readSignalEnding(delivery.signal, HANDLED)
+				// The graceful teardown this proof is about starts in the entry's own signal handler, so
+				// a host that terminates a signalled child instead of delivering the signal cannot build
+				// the condition through this door. The skip leaves the graceful path unmeasured here and
+				// claims nothing about the entry: what such a host leaves in the target is swept at the
+				// next boot, which the orphan-sweep proofs cover.
+				context.skip(
+					ending.code !== 0,
+					`this host ends a child holding its own ${delivery.signal} handler as ${ending.signal === null ? `code ${ending.code}` : `signal ${ending.signal}`}, so child.kill runs no handler here and the entry's graceful teardown cannot be reached`,
+				)
 				const scratch = createScratch()
 				writeTarget(scratch)
 				const directory = resolve(scratch.path, 'tmp/probe')

@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { captureError, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { TypeStage } from '@src/server'
+import { TypeStage, normalizePath } from '@src/server'
 import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
@@ -515,5 +515,80 @@ describe('type stage project resolution', () => {
 		await expect(stage.resolve('configs/src/tsconfig.core.json')).rejects.toThrow(
 			'The type stage has been destroyed',
 		)
+	})
+
+	it('refuses a project whose JSON the compiler cannot parse', { timeout: 60_000 }, async () => {
+		const project = 'projects/tsconfig.broken.json'
+		const scratch = createScratch({ prefix: 'probe-type-broken-' })
+		try {
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[]},"files":["src/core/value.ts"]}\n',
+			)
+			scratch.write('src/core/value.ts', 'export const VALUE = 1\n')
+			// The colon this project omits is a syntax fault the compiler reports against the project
+			// file itself, and a diagnostic naming a file is what makes the compiler compare its own
+			// spelling of that file against the path it was handed.
+			scratch.write(project, '{"compilerOptions" {"strict":true}}\n')
+			const stage = new TypeStage(scratch.path)
+			try {
+				const failure: unknown = await stage.resolve(project).catch((error: unknown) => error)
+				expect(failure).toMatchObject({
+					origin: 'workspace',
+					code: 'malformed',
+					context: { stage: 'type', project },
+					message: expect.stringContaining("':' expected."),
+				})
+				expect(isProbeError(failure)).toBe(true)
+				const message = failure instanceof Error ? failure.message : String(failure)
+				// A `Debug Failure` is the compiler's own assertion escaping this package's failure
+				// contract, and a backslash is this host's directory layout rather than anything the
+				// caller named.
+				expect(message).not.toContain('Debug Failure')
+				expect(message).not.toContain('\\')
+			} finally {
+				await stage.destroy()
+			}
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('names the caller-named project in its own diagnostic', { timeout: 60_000 }, async () => {
+		const project = 'projects/tsconfig.empty.json'
+		const scratch = createScratch({ prefix: 'probe-type-empty-' })
+		try {
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[]},"files":["src/core/value.ts"]}\n',
+			)
+			scratch.write('src/core/value.ts', 'export const VALUE = 1\n')
+			// This project parses and matches no input, and the diagnostic that reports it quotes the
+			// absolute path the stage handed the compiler.
+			scratch.write(project, '{}\n')
+			const stage = new TypeStage(scratch.path)
+			try {
+				const failure: unknown = await stage.resolve(project).catch((error: unknown) => error)
+				expect(failure).toMatchObject({
+					origin: 'workspace',
+					code: 'malformed',
+					context: { stage: 'type', project },
+					message: expect.stringContaining(`No inputs were found in config file '${project}'`),
+				})
+				const message = failure instanceof Error ? failure.message : String(failure)
+				// The workspace-relative spelling is a substring of the absolute one, so the preceding
+				// assertion passes for an untranslated message too. This is what separates them.
+				expect(message).not.toContain(normalizePath(scratch.path))
+				expect(message).not.toContain('\\')
+			} finally {
+				await stage.destroy()
+			}
+		} finally {
+			scratch.destroy()
+		}
 	})
 })

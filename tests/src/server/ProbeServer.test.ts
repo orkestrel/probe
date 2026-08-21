@@ -233,7 +233,9 @@ describe('probe server', () => {
 	// Probe's teardown relies on the installed `@orkestrel/mcp` detach: the transport removes its
 	// own `data`, `close`, and `error` listeners from the stream it was given when it stops.
 	// `ProbeServer` composes a transport this same way over a stream it owns, so this pins the
-	// installed behavior at that composition seam directly, without going through the server.
+	// installed behavior at that composition seam directly, without going through the server. The
+	// same detach through the server's own public door, against the real `process.stdin` it seizes,
+	// is what 'returns the process it seized, and settles once' pins.
 	it('detaches the transport listeners from the stream it was given', { timeout: 180_000 }, () => {
 		const stream = new PassThrough()
 		const server = createMCPServer({

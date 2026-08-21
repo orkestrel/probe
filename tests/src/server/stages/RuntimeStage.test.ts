@@ -1,6 +1,7 @@
 import type { Check, Verdict } from '@src/core'
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
@@ -23,8 +24,30 @@ import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
 import { RuntimeStage, createRevisionFile } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
+import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+
+// Reads whether this host leaves a FIFO at a filesystem path a caller names. Vitest writes its
+// results cache twice inside one inspection — as the caller's run ends, and again as the stage
+// evicts that run — and a FIFO standing at that path parks each write until this file reads it,
+// which is what puts a reader on either side of the stage's progress accounting. A marker the
+// generated specification writes reaches the first window on its own and cannot reach the second,
+// because the specification has returned by the time the stage cleans up; that is the whole reason
+// the cleanup sample needs this gate and the claimant sample does not. `mkfifo` reports success on
+// a host whose emulation layer accepts the call and leaves no path behind, so the reading is the
+// path rather than the exit code. The FIFO goes into an owned scratch directory, so nothing
+// survives the reading.
+function readFIFOGate(name: string): boolean {
+	const scratch = createScratch({ prefix: 'probe-runtime-gate-' })
+	try {
+		const path = resolve(scratch.path, name)
+		if (spawnSync('mkfifo', [path]).status !== 0) return false
+		return existsSync(path) && lstatSync(path).isFIFO()
+	} finally {
+		scratch.destroy()
+	}
+}
 
 describe('runtime stage', () => {
 	// The revision marker lands between the stem and the extension, so a specification generated
@@ -99,7 +122,12 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it(
+	// Gated on the host reading rather than on a platform name, here and in the two proofs that
+	// follow it: a host that creates no directory link the walker reads as a symbolic link cannot
+	// build the linked path each of them is about. The link is a junction, which is the call that
+	// lands on a host withholding the privilege a plain symbolic link needs and which the walker
+	// reads identically.
+	it.runIf(DIRECTORY_LINKS)(
 		'names the declared test path when the workspace is reached through a symbolic link',
 		{ timeout: 60_000 },
 		async () => {
@@ -116,7 +144,7 @@ describe('runtime stage', () => {
 			// so the generated specification only maps back to the declared test path when both sides
 			// are compared through their real form.
 			const alias = resolve(scratch.path, 'alias')
-			symlinkSync(resolve(scratch.path, 'real'), alias, 'dir')
+			symlinkSync(resolve(scratch.path, 'real'), alias, 'junction')
 			const stage = new RuntimeStage(alias)
 			try {
 				const check = await stage.inspect({
@@ -140,41 +168,45 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it('refuses a generated specification beneath a symbolic link', { timeout: 60_000 }, async () => {
-		const scratch = createScratch({ prefix: 'probe-runtime-containment-' })
-		const outside = createScratch({ prefix: 'probe-runtime-outside-' })
-		scratch.write('package.json', '{"type":"module"}\n')
-		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-		scratch.write(
-			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
-		)
-		mkdirSync(resolve(scratch.path, 'tmp'), { recursive: true })
-		symlinkSync(outside.path, resolve(scratch.path, 'tmp/probe'), 'dir')
-		const stage = new RuntimeStage(scratch.path)
-		try {
-			const check = await stage.inspect({
-				files: [],
-				test: {
-					path: 'tmp/probe/escape.test.ts',
-					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-				},
-			})
+	it.runIf(DIRECTORY_LINKS)(
+		'refuses a generated specification beneath a symbolic link',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-runtime-containment-' })
+			const outside = createScratch({ prefix: 'probe-runtime-outside-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			mkdirSync(resolve(scratch.path, 'tmp'), { recursive: true })
+			symlinkSync(outside.path, resolve(scratch.path, 'tmp/probe'), 'junction')
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/escape.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+					},
+				})
 
-			expect(check.issues).toEqual([
-				expect.objectContaining({
-					origin: 'workspace',
-					path: 'tmp/probe/escape.test.ts',
-					message: expect.stringContaining('symbolic link'),
-				}),
-			])
-			expect(readdirSync(outside.path)).toStrictEqual([])
-		} finally {
-			await stage.destroy()
-			scratch.destroy()
-			outside.destroy()
-		}
-	})
+				expect(check.issues).toEqual([
+					expect.objectContaining({
+						origin: 'workspace',
+						path: 'tmp/probe/escape.test.ts',
+						message: expect.stringContaining('symbolic link'),
+					}),
+				])
+				expect(readdirSync(outside.path)).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+				outside.destroy()
+			}
+		},
+	)
 
 	it('reports an issue when a test module executes nothing', { timeout: 60_000 }, async () => {
 		const stage = new RuntimeStage(ROOT)
@@ -544,27 +576,34 @@ describe('runtime stage', () => {
 		}
 	})
 
-	it("refuses a caller's unacceptable target path", { timeout: 60_000 }, async () => {
-		const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
-		const stage = new RuntimeStage(ROOT)
-		try {
-			await expect(
-				stage.inspect({
-					files: [],
-					test: {
-						path,
-						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-					},
-				}),
-			).rejects.toMatchObject({
-				origin: 'claimant',
-				code: 'refused',
-				context: { path },
-			})
-		} finally {
-			await stage.destroy()
-		}
-	})
+	// Gated on the host reading rather than on a platform name: a host whose filesystem accepts a
+	// 300-character component creates the file the stage asks for, so there is no refusal to report
+	// and this proof is inapplicable there.
+	it.runIf(REFUSED_RUNTIME_TARGETS)(
+		"refuses a caller's unacceptable target path",
+		{ timeout: 60_000 },
+		async () => {
+			const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
+			const stage = new RuntimeStage(ROOT)
+			try {
+				await expect(
+					stage.inspect({
+						files: [],
+						test: {
+							path,
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					}),
+				).rejects.toMatchObject({
+					origin: 'claimant',
+					code: 'refused',
+					context: { path },
+				})
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
 
 	it(
 		'runs a directly imported candidate without changing its disk file',
@@ -901,10 +940,72 @@ describe('runtime stage', () => {
 		},
 	)
 
+	// The claimant half of the progress accounting, on a rendezvous every host can build: the
+	// generated specification writes a marker and then parks until this file releases it, so the
+	// reading is taken with the caller's run demonstrably still in flight. Nothing here is gated,
+	// because every host runs the specification the stage writes for it.
+	it("raises progress while the caller's run is in flight", { timeout: 60_000 }, async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+		)
+		scratch.write('tmp/probe/.keep', '')
+		const stage = new RuntimeStage(scratch.path)
+		const ready = resolve(scratch.path, 'tmp/probe/progress-ready')
+		const release = resolve(scratch.path, 'tmp/probe/progress-release')
+		const baseline = stage.progress
+		// The marker and the release both sit beside the generated specification, which the stage
+		// writes into the same directory as the test path the case declares.
+		const running = stage.inspect({
+			files: [],
+			test: {
+				path: 'tmp/probe/progress.test.ts',
+				text: "import { existsSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks until released', { timeout: 60_000 }, async () => { writeFileSync(new URL('progress-ready', import.meta.url), ''); const release = new URL('progress-release', import.meta.url); while (!existsSync(release)) await new Promise((settle) => setTimeout(settle, 10)) })\n",
+			},
+		})
+		void running.catch(() => {})
+		try {
+			const budget = performance.now() + 30_000
+			while (!existsSync(ready) && performance.now() < budget) await waitForDelay(10)
+			expect(existsSync(ready), 'the generated specification never reached its marker').toBe(true)
+			const claimant = stage.progress
+			writeFileSync(release, '', 'utf8')
+			await expect(running).resolves.toMatchObject({ issues: [] })
+			expect(claimant).toBeGreaterThan(baseline)
+			// The run this reading was taken inside has ended, so the count it raised is back down.
+			expect(stage.progress).toBe(baseline)
+		} finally {
+			// Releases a specification still parked because an assertion above failed, so teardown
+			// tears down rather than waiting out the stage's own bound.
+			writeFileSync(release, '', 'utf8')
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
+	// The cleanup half. Its rendezvous sits inside the stage's own eviction, which the generated
+	// specification cannot reach, so this one is gated on the host reading the preceding comment on
+	// `readFIFOGate` describes. It samples the claimant side again because a reading of the baseline
+	// at cleanup means nothing without the raised reading it returned from.
 	it(
 		"raises progress for the caller's run and lowers it before the stage's cleanup",
 		{ timeout: 60_000 },
-		async () => {
+		async (context) => {
+			// The control comes first: a FIFO asked for under a directory that does not exist is not
+			// created, so an instrument reporting a usable gate for that name would be reading nothing
+			// about the call.
+			expect(readFIFOGate('absent/gate')).toBe(false)
+			// Two rendezvous points inside one inspection are what this proof samples the stage's
+			// progress between, and a FIFO at the cache path is what parks the run at each. A host that
+			// builds none cannot construct the condition, so the stage's progress accounting across its
+			// own cleanup is unmeasured here rather than shown wrong.
+			context.skip(
+				!readFIFOGate('gate'),
+				"this host reports success for mkfifo and leaves no path behind, so nothing can be parked at the results cache the stage writes inside its own cleanup, which is the only rendezvous that samples progress after the caller's run has ended",
+			)
 			const scratch = createScratch()
 			scratch.write('package.json', '{"type":"module"}\n')
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
@@ -1094,7 +1195,7 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it(
+	it.runIf(DIRECTORY_LINKS)(
 		'preserves workspace classification when cleanup crosses a symbolic link',
 		{ timeout: 60_000 },
 		async () => {
@@ -1105,7 +1206,10 @@ describe('runtime stage', () => {
 					files: [],
 					test: {
 						path: `tmp/probe/${marker}.test.ts`,
-						text: "import { rmSync, symlinkSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('replaces the specification', () => { const file = fileURLToPath(import.meta.url); rmSync(file); symlinkSync('.', file, 'dir') })\n",
+						// The link's target is the directory holding it, written out in full: a junction
+						// stores an absolute path, so a relative target would name the writing process's
+						// working directory rather than a place this proof chose.
+						text: "import { rmSync, symlinkSync } from 'node:fs'\nimport { dirname } from 'node:path'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('replaces the specification', () => { const file = fileURLToPath(import.meta.url); rmSync(file); symlinkSync(dirname(file), file, 'junction') })\n",
 					},
 				})
 				expect(check.issues).toEqual([

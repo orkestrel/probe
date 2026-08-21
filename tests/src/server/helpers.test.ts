@@ -1,8 +1,8 @@
 import type { Draft } from '@src/core'
 import { EventEmitter } from 'node:events'
-import { lstatSync } from 'node:fs'
+import { lstatSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { compileGuard } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
@@ -15,6 +15,7 @@ import {
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
+	isRefusedName,
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	normalizePath,
@@ -54,6 +55,18 @@ describe('server helper examples', () => {
 		expect(() => resolveWorkspaceFile(ROOT, '../secrets.env')).toThrow(
 			'Path escapes the workspace: ../secrets.env',
 		)
+		// Node refuses a NUL byte before any filesystem reads the name, so this block writes nothing
+		// and needs no directory of its own.
+		const embedded = 'tmp/probe/greeting\0.test.ts'
+		expect(
+			isRefusedName(
+				embedded,
+				captureError(() => writeFileSync(embedded, '')),
+			),
+		).toBe(true)
+		expect(
+			isRefusedName('tmp/probe/greeting.test.ts', new Error('the runtime stage was destroyed')),
+		).toBe(false)
 		expect(relativeWorkspaceFile(ROOT, resolve(ROOT, 'src/core/greeting.ts'))).toBe(
 			'src/core/greeting.ts',
 		)
@@ -247,6 +260,99 @@ describe('server path helpers', () => {
 		}
 	})
 
+	// Every fault below is the one a real operation raised on the host this proof runs on, because
+	// which code a host reports for a name it refuses is the host's choice and a literal shaped like
+	// an error would only restate the choice this host made. Windows reports `ENOENT` for an overlong
+	// final component and POSIX reports `ENAMETOOLONG`; the classification is the same on both, so
+	// this proof asserts the classification and needs no host gate.
+	it('separates a name the host refuses from a parent the tree does not hold', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-refused-name-' })
+		try {
+			const overlong = resolve(scratch.path, `${'x'.repeat(300)}.test.ts`)
+			expect(
+				isRefusedName(
+					overlong,
+					captureError(() => writeFileSync(overlong, '', 'utf8')),
+				),
+			).toBe(true)
+			// The same `ENOENT` under a parent that does not exist reports the tree's absence rather
+			// than the caller's name, and no rename repairs it.
+			const orphan = resolve(scratch.path, 'absent/value.test.ts')
+			expect(
+				isRefusedName(
+					orphan,
+					captureError(() => writeFileSync(orphan, '', 'utf8')),
+				),
+			).toBe(false)
+			// Node refuses a NUL byte itself, so this fault reaches no filesystem at all.
+			const embedded = resolve(scratch.path, 'value\0.test.ts')
+			expect(
+				isRefusedName(
+					embedded,
+					captureError(() => writeFileSync(embedded, '', 'utf8')),
+				),
+			).toBe(true)
+			// A fault carrying no filesystem code classifies nothing, whatever path it arrives with.
+			expect(isRefusedName(overlong, new Error('the runtime stage was destroyed'))).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// The predicate accepts `unknown` and is published, so a caller outside this package can hand it
+	// a value whose own property reads throw. Each value below is one the predicate reports on rather
+	// than one it escapes through, which is what makes the documented totality a property of the code
+	// instead of a habit of the callers this package happens to have.
+	it('reports false for a fault whose property reads throw', () => {
+		const trapped = new Proxy(new Error('the write failed'), {
+			has(): boolean {
+				throw new Error('this trap refuses the membership test')
+			},
+		})
+		expect(captureError(() => 'code' in trapped)).toMatchObject({
+			message: 'this trap refuses the membership test',
+		})
+		expect(isRefusedName('tmp/probe/value.test.ts', trapped)).toBe(false)
+
+		const throwing: { message: string; code?: unknown } = new Error('the write failed')
+		Object.defineProperty(throwing, 'code', {
+			get(): never {
+				throw new Error('this getter refuses the read')
+			},
+		})
+		expect(captureError(() => throwing.code)).toMatchObject({
+			message: 'this getter refuses the read',
+		})
+		expect(isRefusedName('tmp/probe/value.test.ts', throwing)).toBe(false)
+	})
+
+	// `ERR_INVALID_ARG_VALUE` names every argument Node rejects, not the NUL byte alone, so the code
+	// by itself cannot separate a name the host refuses from an unrelated argument the caller got
+	// wrong. The fault below is the one `writeFileSync` itself raises for a bad `flag`, on a path
+	// carrying no NUL — the same operation and the same code as the refusal, arriving for another
+	// reason entirely.
+	it('reports false for an invalid-argument fault whose path carries no NUL byte', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-invalid-argument-' })
+		try {
+			const target = resolve(scratch.path, 'value.test.ts')
+			const invalid = captureError(() => writeFileSync(target, '', { flag: 'not-a-flag' }))
+			expect(invalid).toMatchObject({ code: 'ERR_INVALID_ARG_VALUE' })
+			expect(target.includes('\0')).toBe(false)
+			expect(isRefusedName(target, invalid)).toBe(false)
+			// The same code on a path that does carry the byte is the refusal, so the tightened branch
+			// keeps what it was written for.
+			const embedded = resolve(scratch.path, 'value\0.test.ts')
+			expect(
+				isRefusedName(
+					embedded,
+					captureError(() => writeFileSync(embedded, '', 'utf8')),
+				),
+			).toBe(true)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('accepts a contained file whose name begins with two dots', () => {
 		expect(resolveWorkspaceFile(ROOT, '..hidden.ts')).toBe(resolve(ROOT, '..hidden.ts'))
 		expect(resolveWorkspaceFile(ROOT, '..config/value.ts')).toBe(resolve(ROOT, '..config/value.ts'))
@@ -268,8 +374,14 @@ describe('server path helpers', () => {
 		expect(() => resolveWorkspaceFile(ROOT, '')).toThrow('Path escapes the workspace: ')
 	})
 
+	// The `resolveWorkspaceModule`, `readWorkspaceManifest`, and `resolveWorkspaceBinary` helpers
+	// each return an absolute native path, so each expected fragment is composed with `node:path`
+	// on the host the assertion runs on. A forward-slash literal would describe a POSIX host
+	// rather than the separator these helpers return.
 	it('resolves installed modules and refuses absent ones', () => {
-		expect(resolveWorkspaceModule(ROOT, 'typescript')).toContain('node_modules/typescript/')
+		expect(resolveWorkspaceModule(ROOT, 'typescript')).toContain(
+			`${join('node_modules', 'typescript')}${sep}`,
+		)
 		const absent = captureError(() => resolveWorkspaceModule(ROOT, 'missing-probe-package'))
 		expect(isProbeError(absent)).toBe(true)
 		expect(absent).toMatchObject({
@@ -287,7 +399,7 @@ describe('server path helpers', () => {
 
 	it('reads installed manifests and refuses absent packages', () => {
 		const manifest = readWorkspaceManifest(ROOT, 'typescript')
-		expect(manifest.path).toContain('node_modules/typescript/package.json')
+		expect(manifest.path).toContain(join('node_modules', 'typescript', 'package.json'))
 		expect(manifest.contents).toMatchObject({ name: 'typescript', version: expect.any(String) })
 		const absent = captureError(() => readWorkspaceManifest(ROOT, 'missing-probe-package'))
 		expect(isProbeError(absent)).toBe(true)
@@ -300,7 +412,9 @@ describe('server path helpers', () => {
 	})
 
 	it('resolves package binaries and refuses a package without the requested key', () => {
-		expect(resolveWorkspaceBinary(ROOT, 'oxlint')).toContain('node_modules/oxlint/bin/oxlint')
+		expect(resolveWorkspaceBinary(ROOT, 'oxlint')).toContain(
+			join('node_modules', 'oxlint', 'bin', 'oxlint'),
+		)
 		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
 			'typescript does not publish the typescript binary',
 		)

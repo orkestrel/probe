@@ -126,6 +126,19 @@ const HOST = [
 	"console.log('settled ' + check.stage + ' ' + check.issues.length)",
 ].join('\n')
 
+// A bare child that ends its own standard input the way the fixture server's `PROBE_CLOSES_INPUT`
+// branch does: it reads a message, calls `closeSync(0)` on itself, and announces the close on its
+// standard output, so a parent writes again only after the close has landed. The timer holds it
+// open past the write that follows.
+const CLOSER = [
+	"import { closeSync } from 'node:fs'",
+	"process.stdin.on('data', () => {",
+	'\tcloseSync(0)',
+	"\tprocess.stdout.write('closed')",
+	'})',
+	'setTimeout(() => {}, 10_000)',
+].join('\n')
+
 // Reads the process id the fixture server announced. The stage owns its child privately, so this
 // is the door a real failure comes through rather than an accessor added to serve a test.
 function readFixtureServer(scratch: ScratchInterface): number {
@@ -148,6 +161,67 @@ async function waitForFixtureServer(scratch: ScratchInterface): Promise<number> 
 // Kills the language server the stage spawned, by the process id the fixture announced.
 function killFixtureServer(scratch: ScratchInterface): void {
 	process.kill(readFixtureServer(scratch), 'SIGKILL')
+}
+
+// Reads how this host reports a child that ended, phrased the way the lint stage phrases an ending.
+// A kill lands as a signal on one host and as an exit code on another, and the door it came through
+// decides too, so this kills with `process.kill`, the door `killFixtureServer` uses, and the
+// assertion composes whatever came back. With no signal the child ends on its own, which is the
+// control: an instrument that reported a kill's ending for a child nobody killed would be measuring
+// nothing.
+async function readHostEnding(signal?: NodeJS.Signals): Promise<string> {
+	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 250)'], { stdio: 'ignore' })
+	const ended = new Promise<void>((settle) => {
+		child.on('exit', () => settle())
+	})
+	if (signal !== undefined) {
+		await new Promise<void>((ready) => {
+			child.on('spawn', () => ready())
+		})
+		const id = child.pid
+		if (id === undefined) throw new Error('The probe child never reported a process id')
+		process.kill(id, signal)
+	}
+	await ended
+	return child.signalCode === null ? `code ${child.exitCode}` : `signal ${child.signalCode}`
+}
+
+// Reads how this host reports a write to a child that closed its own standard input, which is the
+// mechanism the fixture server's `PROBE_CLOSES_INPUT` marker uses. A host that breaks the writing
+// end when that descriptor closes refuses the next write, and the refusal's own code comes back; a
+// host that leaves the writing end open accepts the write, and nothing comes back. Killing the child
+// before the write is the control: that write is refused, so an instrument reporting nothing for it
+// would be reporting nothing about the write at all.
+async function readInputRefusal(signal?: NodeJS.Signals): Promise<string | undefined> {
+	const child = spawn(process.execPath, ['-e', CLOSER], { stdio: ['pipe', 'pipe', 'ignore'] })
+	// A host that does break the pipe reports it on the stream as well as on the write, and an
+	// unheard `error` event there would end the run instead of the write.
+	child.stdin.on('error', () => {})
+	const closed = new Promise<void>((settle) => {
+		child.stdout.on('data', () => settle())
+	})
+	const ended = new Promise<void>((settle) => {
+		child.on('exit', () => settle())
+	})
+	child.stdin.write('open\n')
+	await closed
+	if (signal !== undefined) {
+		child.kill(signal)
+		await ended
+	}
+	const refusal = await new Promise<string | undefined>((settle) => {
+		child.stdin.write('next\n', (error) => {
+			if (error === null || error === undefined) {
+				settle(undefined)
+				return
+			}
+			settle('code' in error && typeof error.code === 'string' ? error.code : error.message)
+		})
+	})
+	// The control already ended this child, so only the measured run leaves one to end.
+	if (signal === undefined) child.kill('SIGKILL')
+	await ended
+	return refusal
 }
 
 // Whether one process still exists. Signal 0 delivers nothing and reports only reachability, which
@@ -752,12 +826,16 @@ describe('lint stage', () => {
 				})
 				killFixtureServer(scratch)
 				await waitForDelay(250)
+				// The control comes first: a child this host never killed ends on its own code, so an
+				// instrument returning the kill's phrase for it would be reading nothing about the kill.
+				expect(await readHostEnding()).toBe('code 0')
+				const ending = await readHostEnding('SIGKILL')
 				await expect(
 					stage.inspect({
 						files: [],
 						test: { path: 'tests/src/server/lint-after-signal.test.ts', text: PASSING },
 					}),
-				).rejects.toThrow('signal SIGKILL')
+				).rejects.toThrow(`The Oxlint language server exited with ${ending}`)
 			} finally {
 				await stage.destroy()
 				scratch.destroy()
@@ -832,7 +910,20 @@ describe('lint stage', () => {
 	it(
 		'refuses an inspection through a stage fault when the language server closes its input',
 		{ timeout: 20_000 },
-		async () => {
+		async (context) => {
+			// The control comes first: a write to a child this host killed is refused, so an
+			// instrument returning nothing for that one would be reading nothing about a refusal.
+			expect(await readInputRefusal('SIGKILL')).toBeDefined()
+			// The fixture ends the server's input by closing the server's own descriptor 0, so a host
+			// that accepts the next write to a child that did that leaves the broken pipe this proof
+			// needs unbuildable. The skip records that the condition cannot be constructed here, and
+			// it claims nothing about the stage: a host that breaks the writing end surfaces a dead
+			// input through the failing write, and a host that does not gives the stage no signal on
+			// that route, which leaves the stage's behaviour against a dead input unproven here.
+			context.skip(
+				(await readInputRefusal()) === undefined,
+				'this host accepts a write to a child that closed its own standard input, so the fixture server cannot break the pipe the stage writes to',
+			)
 			const scratch = createScratch({ files: FIXTURE })
 			const stage = new LintStage(scratch.path)
 			try {
@@ -866,6 +957,9 @@ describe('lint stage', () => {
 		async () => {
 			const scratch = createScratch({ files: { ...FIXTURE, 'host.mjs': HOST } })
 			try {
+				// The host kills the language server through `process.kill`, so the ending it reports is
+				// the one this host gives that door.
+				const ending = await readHostEnding('SIGKILL')
 				const host = spawn(
 					process.execPath,
 					[
@@ -889,7 +983,7 @@ describe('lint stage', () => {
 				const reported = Buffer.concat(errors).toString('utf8')
 				expect(reported).toBe('')
 				const said = Buffer.concat(output).toString('utf8')
-				expect(said).toContain('refused The Oxlint language server exited with signal SIGKILL')
+				expect(said).toContain(`refused The Oxlint language server exited with ${ending}`)
 				// The stage class still serves a live server after the failed inspection, which is the
 				// observable a pruned document map produces.
 				expect(said).toContain('settled lint 0')
