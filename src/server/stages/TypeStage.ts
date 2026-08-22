@@ -7,6 +7,7 @@ import type {
 	DiagnosticMessageChain,
 	IScriptSnapshot,
 	LanguageService,
+	LanguageServiceHost,
 } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -287,29 +288,64 @@ export class TypeStage implements TypeStageInterface {
 		}
 		this.#options.set(path, parsed.options)
 		this.#files.set(path, parsed.fileNames)
-		const service = typescript.createLanguageService({
-			getCompilationSettings: () => this.#options.get(path) ?? {},
-			getScriptFileNames: () => [...(this.#files.get(path) ?? []), ...this.#overlay.paths],
-			getScriptVersion: (file) => this.#version(file),
-			getScriptSnapshot: (file) => this.#snapshot(typescript, file),
-			getCurrentDirectory: () => this.#workspace,
-			getDefaultLibFileName: (options) => typescript.getDefaultLibFilePath(options),
-			fileExists: (file) =>
-				this.#overlay.text(file) !== undefined || typescript.sys.fileExists(file),
-			readFile: (file) => this.#overlay.text(file) ?? typescript.sys.readFile(file),
+		const host: LanguageServiceHost = {
+			getCompilationSettings: this.#compilationSettings.bind(this, path),
+			getScriptFileNames: this.#scriptFiles.bind(this, path),
+			getScriptVersion: this.#version.bind(this),
+			getScriptSnapshot: this.#snapshot.bind(this, typescript),
+			getCurrentDirectory: this.#directory.bind(this),
+			getDefaultLibFileName: this.#defaultLibrary.bind(this, typescript),
+			fileExists: this.#fileExists.bind(this, typescript),
+			readFile: this.#readFile.bind(this, typescript),
 			// Listings stay on disk. A candidate that entered one would reach the file set this
 			// stage caches per project at service creation, and outlive the inspection that
 			// declared it, so glob and directory-discovery imports fail closed.
 			readDirectory: typescript.sys.readDirectory,
-			directoryExists: (directory) =>
-				typescript.sys.directoryExists(directory) || this.#overlay.covers(directory),
+			directoryExists: this.#directoryExists.bind(this, typescript),
 			getDirectories: typescript.sys.getDirectories,
-			useCaseSensitiveFileNames: () => typescript.sys.useCaseSensitiveFileNames,
-			getNewLine: () => typescript.sys.newLine,
-		})
+			useCaseSensitiveFileNames: this.#caseSensitive.bind(this, typescript),
+			getNewLine: this.#newline.bind(this, typescript),
+		}
+		const service = typescript.createLanguageService(host)
 		this.#services.set(path, service)
 		if (!this.#resident.has(path)) this.#recycle(path)
 		return service
+	}
+
+	#compilationSettings(path: string): CompilerOptions {
+		return this.#options.get(path) ?? {}
+	}
+
+	#scriptFiles(path: string): string[] {
+		return [...(this.#files.get(path) ?? []), ...this.#overlay.paths]
+	}
+
+	#directory(): string {
+		return this.#workspace
+	}
+
+	#defaultLibrary(typescript: typeof TypeScript, options: CompilerOptions): string {
+		return typescript.getDefaultLibFilePath(options)
+	}
+
+	#fileExists(typescript: typeof TypeScript, file: string): boolean {
+		return this.#overlay.text(file) !== undefined || typescript.sys.fileExists(file)
+	}
+
+	#readFile(typescript: typeof TypeScript, file: string): string | undefined {
+		return this.#overlay.text(file) ?? typescript.sys.readFile(file)
+	}
+
+	#directoryExists(typescript: typeof TypeScript, directory: string): boolean {
+		return typescript.sys.directoryExists(directory) || this.#overlay.covers(directory)
+	}
+
+	#caseSensitive(typescript: typeof TypeScript): boolean {
+		return typescript.sys.useCaseSensitiveFileNames
+	}
+
+	#newline(typescript: typeof TypeScript): string {
+		return typescript.sys.newLine
 	}
 
 	// Renders one project diagnostic in the terms this package reports a path in. The compiler names

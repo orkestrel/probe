@@ -1,4 +1,6 @@
-import type { ProbeInterface, ProbeOptions } from '@src/core'
+import type { ProbeInterface, ProbeOptions, Verdict } from '@src/core'
+import type { MCPCallResult, MCPExecutionContext } from '@orkestrel/mcp'
+import type { ToolResult } from '@orkestrel/tool'
 import type { ProbeServerInterface } from './types.js'
 import { PassThrough } from 'node:stream'
 import { compileSchema, schemaToParameters } from '@orkestrel/contract'
@@ -170,42 +172,46 @@ export class ProbeServer implements ProbeServerInterface {
 				description:
 					"Answers whether a TypeScript edit compiles, lints, and passes its test in this workspace — call it before relying on such a claim, instead of reasoning or writing a throwaway probe. Supply the edit you believe is correct and an edit that must break with the stage it breaks at; the closing line is a receipt only when the case ran clean and the control broke exactly at its declared stage, and no receipt otherwise. For a performance claim, measure before proving: write a guarded bench block — if (import.meta.env.MODE === 'benchmark') — beside the probe test, run the workspace bench script, and record only magnitudes; a settled ratio then proves here as an ordinary runtime claim.",
 				parameters,
-				execute: async (input) => {
-					if (!isClaim(input)) {
-						const refused = findRefusedPaths(input)
-						throw new ProbeError(
-							refused.length === 0
-								? 'The prove tool requires a claim matching the advertised schema'
-								: `The prove tool refuses ${refused.join(', ')}: a draft path must stay inside the workspace, which the advertised schema does not constrain`,
-							{
-								origin: 'claimant',
-								code: 'refused',
-								context: { value: input },
-							},
-						)
-					}
-					return this.#probe.prove(input)
-				},
+				execute: this.#prove.bind(this),
 			}),
 		)
 		return createMCPServer({
 			identity: { name: 'probe', version },
 			tools,
-			execution: async ({ call }) => {
-				const result = await tools.execute(call)
-				if (!result.success) return result
-				if (!isVerdict(result.value)) {
-					throw new ProbeError('The prove tool returned an invalid verdict', {
-						origin: 'instrument',
-						code: 'malformed',
-						context: { value: result.value },
-					})
-				}
-				return {
-					resultType: 'complete',
-					content: [{ type: 'text', text: formatVerdict(result.value) }],
-				}
-			},
+			execution: this.#execute.bind(this),
 		})
+	}
+
+	async #prove(input: Readonly<Record<string, unknown>>): Promise<Verdict> {
+		if (!isClaim(input)) {
+			const refused = findRefusedPaths(input)
+			throw new ProbeError(
+				refused.length === 0
+					? 'The prove tool requires a claim matching the advertised schema'
+					: `The prove tool refuses ${refused.join(', ')}: a draft path must stay inside the workspace, which the advertised schema does not constrain`,
+				{
+					origin: 'claimant',
+					code: 'refused',
+					context: { value: input },
+				},
+			)
+		}
+		return this.#probe.prove(input)
+	}
+
+	async #execute(context: MCPExecutionContext): Promise<ToolResult | MCPCallResult> {
+		const result = await context.tools.execute(context.call)
+		if (!result.success) return result
+		if (!isVerdict(result.value)) {
+			throw new ProbeError('The prove tool returned an invalid verdict', {
+				origin: 'instrument',
+				code: 'malformed',
+				context: { value: result.value },
+			})
+		}
+		return {
+			resultType: 'complete',
+			content: [{ type: 'text', text: formatVerdict(result.value) }],
+		}
 	}
 }

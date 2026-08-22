@@ -433,7 +433,7 @@ describe.sequential('probe', () => {
 				}),
 			).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: 'The supported TypeScript range is ^6.0.0; found 7.0.2',
+				message: 'The supported TypeScript range is ^6.0.3; found 7.0.2',
 				origin: 'workspace',
 				code: 'malformed',
 				context: { name: 'typescript', value: '7.0.2' },

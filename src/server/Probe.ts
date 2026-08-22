@@ -99,35 +99,17 @@ export class Probe implements ProbeInterface {
 		this.#typeQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
 			retries: 0,
-			handler: (inspection) =>
-				this.#inspectStage(
-					this.#type,
-					this.#type.progress,
-					this.#type.inspect(inspection.subject, inspection.claim.project),
-					inspection.claim,
-				),
+			handler: this.#inspectType.bind(this),
 		})
 		this.#lintQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
 			retries: 0,
-			handler: (inspection) =>
-				this.#inspectStage(
-					this.#lint,
-					this.#lint.progress,
-					this.#lint.inspect(inspection.subject),
-					inspection.claim,
-				),
+			handler: this.#inspectLint.bind(this),
 		})
 		this.#runtimeQueue = createQueue<Inspection, Check>({
 			concurrency: 1,
 			retries: 0,
-			handler: (inspection) =>
-				this.#inspectStage(
-					this.#runtime,
-					this.#runtime.progress,
-					this.#runtime.inspect(inspection.subject),
-					inspection.claim,
-				),
+			handler: this.#inspectRuntime.bind(this),
 		})
 		this.#arming = this.#arm()
 		// Observe the stored promise here. Nothing else reads it until `prove` or `destroy`, and a
@@ -398,6 +380,33 @@ export class Probe implements ProbeInterface {
 		// rejection ends the host process. Observe each one here; the caller still reads the first.
 		for (const pending of admitted) void pending.catch(() => {})
 		return Promise.all(admitted)
+	}
+
+	#inspectType(inspection: Inspection): Promise<Check> {
+		return this.#inspectStage(
+			this.#type,
+			this.#type.progress,
+			this.#type.inspect(inspection.subject, inspection.claim.project),
+			inspection.claim,
+		)
+	}
+
+	#inspectLint(inspection: Inspection): Promise<Check> {
+		return this.#inspectStage(
+			this.#lint,
+			this.#lint.progress,
+			this.#lint.inspect(inspection.subject),
+			inspection.claim,
+		)
+	}
+
+	#inspectRuntime(inspection: Inspection): Promise<Check> {
+		return this.#inspectStage(
+			this.#runtime,
+			this.#runtime.progress,
+			this.#runtime.inspect(inspection.subject),
+			inspection.claim,
+		)
 	}
 
 	async #inspectStage(
