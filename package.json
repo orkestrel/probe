@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/probe",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"description": "Prove a claim with type, lint, and runtime evidence from the workspace's own toolchain.",
 	"keywords": [
 		"agent",
@@ -112,9 +112,9 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"oxlint": "^1.79.0",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.11"
+		"oxlint": "^1.77.0",
+		"typescript": "^6.0.0",
+		"vitest": "^4.1.0"
 	},
 	"peerDependenciesMeta": {
 		"oxlint": {

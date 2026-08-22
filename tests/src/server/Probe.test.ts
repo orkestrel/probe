@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
+import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
 import { matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
@@ -433,7 +434,7 @@ describe.sequential('probe', () => {
 				}),
 			).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: 'The supported TypeScript range is ^6.0.3; found 7.0.2',
+				message: `The supported TypeScript range is ${peerDependencies.typescript}; found 7.0.2`,
 				origin: 'workspace',
 				code: 'malformed',
 				context: { name: 'typescript', value: '7.0.2' },
