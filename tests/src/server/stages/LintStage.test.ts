@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
+import { isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
@@ -795,12 +796,19 @@ describe('lint stage', () => {
 			// `error` and `close` and never `exit`, so teardown has to read the ending off the child
 			// rather than off an event it never receives.
 			const stage = new LintStage(resolve(scratch.path, 'missing'))
-			await expect(
-				stage.inspect({
+			const failure: unknown = await stage
+				.inspect({
 					files: [],
 					test: { path: 'tests/src/server/lint-unspawnable.test.ts', text: PASSING },
-				}),
-			).rejects.toThrow('ENOENT')
+				})
+				.catch((error: unknown) => error)
+			expect(isProbeError(failure)).toBe(true)
+			expect(failure).toMatchObject({
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: 'lint' },
+				cause: expect.any(Error),
+			})
 			// The wait is load-bearing. `close` is what teardown would otherwise still be waiting
 			// for, and letting it land first is what leaves the ending readable on the child alone.
 			await waitForDelay(250)

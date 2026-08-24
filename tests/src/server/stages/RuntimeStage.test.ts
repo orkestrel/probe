@@ -86,6 +86,38 @@ describe('runtime stage', () => {
 		}
 	})
 
+	it('translates a real Vitest specification-construction fault', { timeout: 60_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-runtime-specification-' })
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write(
+			'vite.config.ts',
+			"import { defineConfig } from 'vitest/config'\nconst refusal = new Error('the project refuses specification construction')\nexport default defineConfig({ test: { projects: [{ plugins: [{ name: 'refuse-specification', configureVitest({ project }) { project.createSpecification = () => { throw refusal } } }], test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+		)
+		const stage = new RuntimeStage(scratch.path)
+		try {
+			const failure: unknown = await stage
+				.inspect({
+					files: [],
+					test: {
+						path: 'tmp/probe/specification-fault.test.ts',
+						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+					},
+				})
+				.catch((error: unknown) => error)
+			expect(isProbeError(failure)).toBe(true)
+			expect(failure).toMatchObject({
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: 'runtime' },
+				cause: expect.any(Error),
+			})
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
 	it(
 		'reports a failing expectation and accepts a passing expectation',
 		{ timeout: 60_000 },
@@ -1087,7 +1119,7 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { appendFileSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { appendFileSync, existsSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nif (existsSync(fileURLToPath(new URL('refuse-warm', import.meta.url)))) throw new Error('the workspace refuses this warm')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('tmp/probe/.keep', '')
 			const id = randomUUID()
@@ -1122,11 +1154,28 @@ describe('runtime stage', () => {
 					})
 				}
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual(['warm'])
+				scratch.write('refuse-warm', '')
 				const last = `import { expect, test } from 'vitest'\ntest('passes ${marker}-65', () => expect(1).toBe(1))\n`
+				const refused: unknown = await stage
+					.inspect({ files: [], test: { path, text: last } })
+					.catch((error: unknown) => error)
+				expect(isProbeError(refused)).toBe(true)
+				expect(refused).toMatchObject({
+					origin: 'workspace',
+					code: 'malformed',
+					context: { stage: 'runtime', path: 'vite.config.ts' },
+					cause: expect.any(Error),
+				})
+				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual([
+					'warm',
+					'warm',
+				])
+				scratch.remove('refuse-warm')
 				await expect(
 					stage.inspect({ files: [], test: { path, text: last } }),
 				).resolves.toMatchObject({ issues: [] })
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual([
+					'warm',
 					'warm',
 					'warm',
 				])

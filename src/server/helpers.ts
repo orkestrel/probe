@@ -1,3 +1,4 @@
+import type { Stage } from '@src/core'
 import type { ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
 import type * as TypeScript from 'typescript'
@@ -518,6 +519,33 @@ export function describeUnknown(value: unknown): string {
 		return value.message
 	}
 	return String(value)
+}
+
+/**
+ * Guards one resident-stage operation with the stage failure contract.
+ *
+ * @param stage - The resident stage serving the operation
+ * @param operation - The operation to settle
+ * @returns The operation's fulfilled value
+ * @throws The original `ProbeError`, or an instrument-owned malformed failure retaining the cause
+ *
+ * @example
+ * ```ts
+ * await guardStage('type', stage.inspect(subject))
+ * ```
+ */
+export async function guardStage<T>(stage: Stage, operation: Promise<T>): Promise<T> {
+	try {
+		return await operation
+	} catch (error) {
+		if (error instanceof ProbeError) throw error
+		throw new ProbeError(`The ${stage} stage could not serve (${describeUnknown(error)})`, {
+			origin: 'instrument',
+			code: 'malformed',
+			context: { stage },
+			cause: error,
+		})
+	}
 }
 
 /**

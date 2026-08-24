@@ -12,6 +12,7 @@ import {
 	createRevisionFile,
 	describeUnknown,
 	findRefusedPaths,
+	guardStage,
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
@@ -28,7 +29,7 @@ import {
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
 } from '@src/server'
-import { CLAIM_SHAPE, isProbeError } from '@src/core'
+import { CLAIM_SHAPE, ProbeError, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -107,6 +108,36 @@ describe('server helper examples', () => {
 		process.on('SIGTERM', () => {})
 		releaseListeners(process, capture)
 		expect(process.listenerCount('SIGTERM')).toBe(capture.get('SIGTERM')?.length)
+	})
+})
+
+describe('server stage boundary', () => {
+	it('wraps an escaping fault as an instrument failure and retains its cause', async () => {
+		const cause = new Error('the tool escaped')
+		const error: unknown = await guardStage('lint', Promise.reject(cause)).catch(
+			(failure: unknown) => failure,
+		)
+
+		expect(isProbeError(error)).toBe(true)
+		expect(error).toMatchObject({
+			message: 'The lint stage could not serve (the tool escaped)',
+			origin: 'instrument',
+			code: 'malformed',
+			context: { stage: 'lint' },
+			cause,
+		})
+	})
+
+	it('passes a ProbeError through unchanged', async () => {
+		const expected = new ProbeError('the claim was refused', {
+			origin: 'claimant',
+			code: 'refused',
+		})
+		const error: unknown = await guardStage('type', Promise.reject(expected)).catch(
+			(failure: unknown) => failure,
+		)
+
+		expect(error).toBe(expected)
 	})
 })
 

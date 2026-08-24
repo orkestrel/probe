@@ -15,6 +15,7 @@ import { setTimeout } from 'node:timers/promises'
 import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	computeDigest,
+	guardStage,
 	inferTypeProject,
 	loadWorkspaceModule,
 	normalizePath,
@@ -98,7 +99,36 @@ export class TypeStage implements TypeStageInterface {
 	 * @returns One outcome for this stage
 	 * @throws When the resident compiler cannot start or the stage has already been destroyed
 	 */
-	async inspect(subject: Case, project?: string): Promise<Check> {
+	inspect(subject: Case, project?: string): Promise<Check> {
+		return guardStage(this.stage, this.#inspect(subject, project))
+	}
+
+	/**
+	 * Resolves one project to the path and digest this stage applies for it.
+	 *
+	 * @remarks
+	 * Reads the parse this stage itself applies, filling its cache when the project is not already
+	 * resident, so the reported digest is the configuration the inspection is judged under rather
+	 * than a second parse a caller ran. The returned record is a value copy, so a later eviction
+	 * does not move it.
+	 *
+	 * @param project - The workspace-relative TypeScript project to resolve
+	 * @returns The resolved workspace-relative path and the digest of its compiler options
+	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
+	 * been destroyed
+	 */
+	resolve(project: string): Promise<Project> {
+		return guardStage(this.stage, this.#resolve(project))
+	}
+
+	destroy(): Promise<void> {
+		if (this.#closing !== undefined) return this.#closing
+		this.#destroyed = true
+		this.#closing = guardStage(this.stage, this.#destroy())
+		return this.#closing
+	}
+
+	async #inspect(subject: Case, project?: string): Promise<Check> {
 		if (this.#destroyed) throw createDestroyedError('type stage')
 		const started = performance.now()
 		const typescript = await this.#typescript
@@ -160,21 +190,7 @@ export class TypeStage implements TypeStageInterface {
 		}
 	}
 
-	/**
-	 * Resolves one project to the path and digest this stage applies for it.
-	 *
-	 * @remarks
-	 * Reads the parse this stage itself applies, filling its cache when the project is not already
-	 * resident, so the reported digest is the configuration the inspection is judged under rather
-	 * than a second parse a caller ran. The returned record is a value copy, so a later eviction
-	 * does not move it.
-	 *
-	 * @param project - The workspace-relative TypeScript project to resolve
-	 * @returns The resolved workspace-relative path and the digest of its compiler options
-	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
-	 * been destroyed
-	 */
-	async resolve(project: string): Promise<Project> {
+	async #resolve(project: string): Promise<Project> {
 		if (this.#destroyed) throw createDestroyedError('type stage')
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw createDestroyedError('type stage')
@@ -186,13 +202,6 @@ export class TypeStage implements TypeStageInterface {
 			path: relativeWorkspaceFile(this.#workspace, resolved),
 			digest: computeDigest(this.#workspace, this.#options.get(resolved) ?? {}),
 		}
-	}
-
-	destroy(): Promise<void> {
-		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
-		this.#closing = this.#destroy()
-		return this.#closing
 	}
 
 	async #destroy(): Promise<void> {

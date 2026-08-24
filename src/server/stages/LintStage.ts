@@ -8,6 +8,7 @@ import { createTimeout } from '@orkestrel/timeout'
 import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	describeUnknown,
+	guardStage,
 	inferDocumentLanguage,
 	normalizePath,
 	parseContentLength,
@@ -83,7 +84,18 @@ export class LintStage implements StageInterface {
 		return this.#progress
 	}
 
-	async inspect(subject: Case): Promise<Check> {
+	inspect(subject: Case): Promise<Check> {
+		return guardStage(this.stage, this.#inspect(subject))
+	}
+
+	destroy(): Promise<void> {
+		if (this.#closing !== undefined) return this.#closing
+		this.#destroyed = true
+		this.#closing = guardStage(this.stage, this.#destroy())
+		return this.#closing
+	}
+
+	async #inspect(subject: Case): Promise<Check> {
 		if (this.#destroyed) throw createDestroyedError('lint stage')
 		const started = performance.now()
 		await this.#warmth
@@ -97,13 +109,6 @@ export class LintStage implements StageInterface {
 			elapsed: Math.round(performance.now() - started),
 			issues,
 		}
-	}
-
-	destroy(): Promise<void> {
-		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
-		this.#closing = this.#destroy()
-		return this.#closing
 	}
 
 	async #destroy(): Promise<void> {

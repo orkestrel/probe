@@ -9,8 +9,59 @@ import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+const DISPOSED_COMPILER = [
+	"const compiler = require('typescript-real')",
+	'function createLanguageService(host, registry, mode) {',
+	'\tconst service = compiler.createLanguageService(host, registry, mode)',
+	'\tqueueMicrotask(() => service.dispose())',
+	'\treturn service',
+	'}',
+	'module.exports = new Proxy(compiler, {',
+	'\tget(target, property) {',
+	"\t\treturn property === 'createLanguageService' ? createLanguageService : Reflect.get(target, property)",
+	'\t}',
+	'})',
+].join('\n')
 
 describe('type stage', () => {
+	it('translates a real disposed language-service fault', { timeout: 60_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-type-disposed-' })
+		scratch.write('package.json', '{"type":"commonjs"}\n')
+		scratch.write(
+			'tsconfig.json',
+			'{"compilerOptions":{"strict":true},"include":["src/**/*.ts"]}\n',
+		)
+		scratch.write('src/index.ts', 'export const VALUE = 1\n')
+		scratch.write(
+			'node_modules/typescript/package.json',
+			'{"name":"typescript","version":"fixture","main":"index.cjs"}\n',
+		)
+		scratch.write('node_modules/typescript/index.cjs', DISPOSED_COMPILER)
+		scratch.link('node_modules/typescript-real', resolve(ROOT, 'node_modules/typescript'))
+		const stage = new TypeStage(scratch.path)
+		try {
+			const failure: unknown = await stage
+				.inspect({
+					files: [],
+					test: {
+						path: 'tests/src/core/type-disposed.test.ts',
+						text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
+					},
+				})
+				.catch((error: unknown) => error)
+			expect(isProbeError(failure)).toBe(true)
+			expect(failure).toMatchObject({
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: 'type' },
+				cause: expect.any(Error),
+			})
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+
 	it('reports a missing workspace compiler during construction', () => {
 		const scratch = createScratch({ prefix: 'probe-type-resolution-' })
 		try {

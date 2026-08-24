@@ -26,12 +26,14 @@ import {
 	ProbeError,
 	createDestroyedError,
 	formatSpecification,
+	isProbeError,
 	matchesSpecification,
 } from '@src/core'
 import {
 	captureListeners,
 	createRevisionFile,
 	describeUnknown,
+	guardStage,
 	inferTestProject,
 	isRefusedName,
 	loadWorkspaceModule,
@@ -90,7 +92,7 @@ import { Overlay } from '../Overlay.js'
  */
 export class RuntimeStage implements StageInterface {
 	readonly #workspace: string
-	#vitest: Promise<Vitest>
+	#vitest: Promise<Vitest> | undefined
 	#overlay: OverlayInterface = new Overlay()
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
@@ -107,11 +109,7 @@ export class RuntimeStage implements StageInterface {
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
 		const vitest = loadWorkspaceModule(this.#workspace, 'vitest/node')
-		this.#vitest = this.#warm(vitest.createVitest)
-		// Observe the stored promise here. A stage the coordinator builds to replace a hung one may
-		// never be inspected or destroyed, and an unobserved rejection ends the host process. The
-		// stored promise keeps rejecting, so an inspection still reports the warming failure.
-		void this.#vitest.catch(() => {})
+		this.#store(this.#warm(vitest.createVitest))
 	}
 
 	get stage(): Stage {
@@ -122,7 +120,18 @@ export class RuntimeStage implements StageInterface {
 		return this.#progress
 	}
 
-	async inspect(subject: Case): Promise<Check> {
+	inspect(subject: Case): Promise<Check> {
+		return guardStage(this.stage, this.#inspect(subject))
+	}
+
+	destroy(): Promise<void> {
+		if (this.#closing !== undefined) return this.#closing
+		this.#destroyed = true
+		this.#closing = guardStage(this.stage, this.#destroy())
+		return this.#closing
+	}
+
+	async #inspect(subject: Case): Promise<Check> {
 		if (this.#destroyed) throw createDestroyedError('runtime stage')
 		const started = performance.now()
 		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
@@ -223,13 +232,6 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	destroy(): Promise<void> {
-		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
-		this.#closing = this.#destroy()
-		return this.#closing
-	}
-
 	async #destroy(): Promise<void> {
 		try {
 			// Remove the abandoned specifications first. An inspection the coordinator gave up on keeps
@@ -249,7 +251,7 @@ export class RuntimeStage implements StageInterface {
 			this.#revisions.clear()
 			// A stage whose warming failed holds nothing to release, so teardown settles rather than
 			// re-reporting a failure its constructor already surfaced.
-			const vitest = await this.#vitest.catch(() => undefined)
+			const vitest = await this.#vitest?.catch(() => undefined)
 			if (vitest !== undefined) {
 				void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
 				await vitest.close()
@@ -281,10 +283,11 @@ export class RuntimeStage implements StageInterface {
 		// the host registered meanwhile — including the server's own, which starts after this
 		// constructor returns.
 		const signals = captureListeners(process, ['SIGINT', 'SIGTERM'])
+		let warming: Promise<Vitest>
 		try {
 			// Only standard output frames the Model Context Protocol transport. Preserve worker
 			// diagnostics on standard error while draining standard output into a bounded stream.
-			return create(
+			warming = create(
 				'test',
 				{
 					root: this.#workspace,
@@ -310,8 +313,15 @@ export class RuntimeStage implements StageInterface {
 				},
 				{ stdout: output, stderr: process.stderr },
 			)
+		} catch (error) {
+			throw this.#configuration(error)
 		} finally {
 			releaseListeners(process, signals)
+		}
+		try {
+			return await warming
+		} catch (error) {
+			throw this.#configuration(error)
 		}
 	}
 
@@ -543,19 +553,51 @@ export class RuntimeStage implements StageInterface {
 	#runner(): Promise<Vitest> {
 		// Vite retains one unresolved URL for each fresh specification path. A 64-specification
 		// lifetime bounds that internal map without giving up the resident runner on each call.
-		if (this.#specifications < 64) return this.#vitest
-		this.#specifications = 0
-		this.#vitest = this.#replace(this.#vitest)
-		void this.#vitest.catch(() => {})
-		return this.#vitest
+		const current = this.#vitest
+		if (current !== undefined && this.#specifications < 64) return current
+		if (current !== undefined) return this.#store(this.#replace(current))
+		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
+		return this.#store(
+			this.#specifications < 64
+				? this.#warm(runner.createVitest)
+				: this.#replace(undefined, runner.createVitest),
+		)
 	}
 
-	async #replace(current: Promise<Vitest>): Promise<Vitest> {
-		const vitest = await current
-		await vitest.close()
+	async #replace(
+		current: Promise<Vitest> | undefined,
+		create?: typeof createVitest,
+	): Promise<Vitest> {
+		if (current !== undefined) {
+			const vitest = await current
+			await vitest.close()
+		}
 		if (this.#destroyed) throw createDestroyedError('runtime stage')
-		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
-		return this.#warm(runner.createVitest)
+		const runner = create ?? loadWorkspaceModule(this.#workspace, 'vitest/node').createVitest
+		const replacement = await this.#warm(runner)
+		this.#specifications = 0
+		return replacement
+	}
+
+	#store(vitest: Promise<Vitest>): Promise<Vitest> {
+		this.#vitest = vitest
+		void vitest.catch(() => {
+			if (this.#vitest === vitest) this.#vitest = undefined
+		})
+		return vitest
+	}
+
+	#configuration(error: unknown): ProbeError {
+		if (isProbeError(error)) return error
+		return new ProbeError(
+			`The runtime stage could not load vite.config.ts (${describeUnknown(error)})`,
+			{
+				origin: 'workspace',
+				code: 'malformed',
+				context: { stage: this.stage, path: 'vite.config.ts' },
+				cause: error,
+			},
+		)
 	}
 
 	#revalidate(vitest: Vitest): void {
