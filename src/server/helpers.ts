@@ -7,6 +7,7 @@ import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { attempt, compileGuard, isArray, isRecord } from '@orkestrel/contract'
 import { CLAIM_SHAPE, ProbeError, isDraft } from '@src/core'
 
@@ -182,6 +183,71 @@ export function isRefusedName(file: string, error: unknown): boolean {
  */
 export function relativeWorkspaceFile(workspace: string, file: string): string {
 	return normalizePath(relative(resolve(workspace), resolve(file)))
+}
+
+/**
+ * Projects the paths one tool named in a message into the forms this package's issues expose.
+ *
+ * @remarks
+ * An issue's `path` is workspace-relative, and its message is prose a tool wrote about the same
+ * tree. Left alone that prose names a file by the host's own layout, so one issue reports a path two
+ * ways and a reader on another checkout is sent to a directory that is not theirs. Each spelling of
+ * the root is removed: the absolute path, the backslash spelling a Windows tool writes, and the
+ * `file:` URL a runtime names a module by. A root the host itself names ends in a separator, and the
+ * paths beneath it continue straight from it rather than from one more separator. A path outside the
+ * workspace stands as it is, because a relative spelling of it would name a file the tree does not
+ * hold.
+ *
+ * A spelling of the root counts only where a path begins: at the start of the message, or after a
+ * character no path carries. A directory whose own name ends in this root's text holds a different
+ * tree, so the root inside a longer path names a file this workspace does not hold and that path
+ * survives whole.
+ *
+ * Only the root is removed. A name is otherwise the tool's, including a `.probe-` name that reads
+ * like a specification this package generates: the stage that wrote one knows the exact name it
+ * wrote and renames that name itself, which is the only reading that separates its own file from a
+ * file the target tree owns.
+ *
+ * Everything else the tool wrote survives verbatim, separators included. A message carries text
+ * that is not a path — a runtime escapes a newline as a backslash when it prints a string inline,
+ * and a compiler quotes a string literal with its escapes intact — so rewriting every separator
+ * would corrupt the evidence the message exists to carry. The cost is that the path left behind
+ * keeps the separator the tool chose, which on Windows is not the one `Issue.path` uses.
+ *
+ * @param workspace - The target workspace root
+ * @param message - The message a tool reported
+ * @returns The message with the host's own layout removed from every path that begins with it
+ *
+ * @example
+ * ```ts
+ * relativeWorkspaceMessage('/srv/checkout', 'Cannot read /srv/checkout/tsconfig.json')
+ * // 'Cannot read tsconfig.json'
+ * relativeWorkspaceMessage('/srv/checkout', 'Cannot read /mirror/srv/checkout/tsconfig.json')
+ * // 'Cannot read /mirror/srv/checkout/tsconfig.json'
+ * ```
+ */
+export function relativeWorkspaceMessage(workspace: string, message: string): string {
+	const root = resolve(workspace)
+	const forward = normalizePath(root)
+	const url = pathToFileURL(forward).href
+	// On a host whose separator is a forward slash the native and forward-slash spellings are one
+	// string, and a host root carries its separator already, so the set holds each distinct prefix
+	// once and a root passes through as itself rather than as a doubled separator.
+	const spellings = new Set([
+		url.endsWith('/') ? url : `${url}/`,
+		forward.endsWith('/') ? forward : `${forward}/`,
+		root.endsWith(sep) ? root : `${root}${sep}`,
+	])
+	let text = message
+	for (const spelling of spellings) {
+		text = text.replaceAll(spelling, (match: string, offset: number, source: string) =>
+			// A character a path carries sits before this occurrence, so the occurrence is inside a
+			// longer path that another tree holds rather than at the start of one of this tree's own.
+			// The character before offset 0 reads as empty, which no class matches.
+			/[^\s"'`()[\]{}<>,;:=|]/u.test(source.charAt(offset - 1)) ? match : '',
+		)
+	}
+	return text
 }
 
 /**

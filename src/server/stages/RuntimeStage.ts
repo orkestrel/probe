@@ -41,6 +41,7 @@ import {
 	normalizePath,
 	releaseListeners,
 	relativeWorkspaceFile,
+	relativeWorkspaceMessage,
 	resolveWorkspaceFile,
 } from '../helpers.js'
 import { Overlay } from '../Overlay.js'
@@ -880,9 +881,19 @@ export class RuntimeStage implements StageInterface {
 	// Every error reaching here came out of a run Vitest completed over the candidate's own test,
 	// so each one is that code failing rather than this stage faulting. `specification` arrives
 	// already resolved through its real path, and every reported frame is resolved the same way, so
-	// the two sides compare on one spelling.
+	// the two sides compare on one spelling. The message is rendered the way the issue's own `path`
+	// is: a test that reads its own module reports the generated sibling this stage ran, and a
+	// caller handed that name finds no file, because the sibling is deleted as the inspection ends.
+	// The rename reads the exact name this stage generated rather than a name shaped like one, and
+	// it reads the name alone: the sibling is written into the declared test's own directory, so
+	// every spelling a tool can write — relative, absolute, or a `file:` URL — differs only in the
+	// leading directories the workspace rewrite has already removed. That name carries the revision
+	// minted for this run, so an occurrence of it names this file and no other.
 	#issue(error: unknown, specification: string, original: string): Issue {
-		const message = describeUnknown(error)
+		const message = relativeWorkspaceMessage(this.#workspace, describeUnknown(error)).replaceAll(
+			basename(specification),
+			basename(original),
+		)
 		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
 			return { origin: 'claimant', path: original, message }
 		}

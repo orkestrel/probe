@@ -195,10 +195,13 @@ describe('type stage', () => {
 					code: 'refused',
 					context: { stage: 'type', project: 'configs/src/tsconfig.core.json' },
 				})
+				// The inferred project is the workspace's own, so its configuration fault is the
+				// workspace's to fix. Naming this package instead would refuse every receipt the
+				// target could earn while the target holds the only file that can close it.
 				const inferred = await stage.inspect(subject)
 				expect(inferred.issues).toEqual([
 					expect.objectContaining({
-						origin: 'instrument',
+						origin: 'workspace',
 						path: 'configs/src/tsconfig.core.json',
 						message: expect.stringContaining(
 							"Cannot find type definition file for 'definitely-missing'",

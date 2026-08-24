@@ -1,8 +1,8 @@
 import type { Draft } from '@src/core'
 import { EventEmitter } from 'node:events'
 import { lstatSync, writeFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { join, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { join, relative, resolve, sep } from 'node:path'
 import { compileGuard } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
@@ -24,6 +24,7 @@ import {
 	parseContentLength,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
+	relativeWorkspaceMessage,
 	releaseListeners,
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
@@ -71,6 +72,13 @@ describe('server helper examples', () => {
 		expect(relativeWorkspaceFile(ROOT, resolve(ROOT, 'src/core/greeting.ts'))).toBe(
 			'src/core/greeting.ts',
 		)
+		expect(relativeWorkspaceMessage(ROOT, `Cannot read ${resolve(ROOT, 'tsconfig.json')}`)).toBe(
+			'Cannot read tsconfig.json',
+		)
+		const mirrored = `/mirror${normalizePath(resolve(ROOT))}/tsconfig.json`
+		expect(relativeWorkspaceMessage(ROOT, `Cannot read ${mirrored}`)).toBe(
+			`Cannot read ${mirrored}`,
+		)
 		expect(resolveWorkspaceModule(ROOT, 'typescript/package.json')).toBe(
 			readWorkspaceManifest(ROOT, 'typescript').path,
 		)
@@ -108,6 +116,80 @@ describe('server helper examples', () => {
 		process.on('SIGTERM', () => {})
 		releaseListeners(process, capture)
 		expect(process.listenerCount('SIGTERM')).toBe(capture.get('SIGTERM')?.length)
+	})
+})
+
+describe('workspace message paths', () => {
+	it('rewrites every contained spelling and leaves an uncontained path alone', () => {
+		const contained = resolve(ROOT, 'src/core/greeting.ts')
+		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${contained}`)).toBe(
+			'Cannot find src/core/greeting.ts',
+		)
+		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${pathToFileURL(contained).href}`)).toBe(
+			'Cannot find src/core/greeting.ts',
+		)
+		// A sibling directory whose name begins with the workspace's own is a different tree, so the
+		// rewrite is bounded by the separator that ends the root rather than by the root's text.
+		const sibling = `${normalizePath(resolve(ROOT))}-mirror/src/core/greeting.ts`
+		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${sibling}`)).toBe(`Cannot find ${sibling}`)
+		const outside = normalizePath(resolve(ROOT, '../secrets.env'))
+		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${outside}`)).toBe(`Cannot find ${outside}`)
+	})
+
+	it('removes a root spelling only where a path begins', () => {
+		// A foreign tree can hold this workspace's own spelling inside a longer path, and that path
+		// names a file this workspace does not hold. Removing the root there would rewrite a foreign
+		// path into a relative one, sending a reader into the tree under test instead.
+		const embedded = `/mirror${normalizePath(resolve(ROOT))}/src/core/greeting.ts`
+		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${embedded}`)).toBe(
+			`Cannot find ${embedded}`,
+		)
+	})
+
+	it('rewrites a path beneath a workspace that is the host root', () => {
+		// A host root ends in the separator already, so a path beneath it continues straight from the
+		// root rather than from the root plus one more separator.
+		const host = resolve(sep)
+		const project = resolve(host, 'tsconfig.json')
+		expect(relativeWorkspaceMessage(host, `Cannot read ${project}`)).toBe(
+			'Cannot read tsconfig.json',
+		)
+		const nested = resolve(host, 'tmp/probe/greeting.test.ts')
+		expect(relativeWorkspaceMessage(host, `Cannot find ${nested}`)).toBe(
+			`Cannot find ${relative(host, nested)}`,
+		)
+	})
+
+	it('leaves the text around a path exactly as the tool wrote it', () => {
+		// Vitest escapes a newline when it prints a string inline, so an assertion message carries a
+		// backslash that names no path. Measured on 2026-08-24 with Vitest 4.1.11, `expect('line1\n
+		// line2').toBe('other')` reports its received value that way. A rewrite that read every
+		// separator as a path separator would corrupt the evidence the message exists to carry.
+		const escaped = "expected 'line1\\nline2' to be 'other' // Object.is equality"
+		expect(relativeWorkspaceMessage(ROOT, escaped)).toBe(escaped)
+	})
+
+	it('leaves a name the target tree owns alone', () => {
+		// The target's own file can carry this package's marker text, and renaming it in a message
+		// would send a reader to a file the tree does not hold. A name carrying a complete marker is
+		// still the target's: only the stage that generated a specification knows which exact name it
+		// wrote, and it renames that one itself.
+		const owned = 'tmp/probe/notes.probe-draft.ts'
+		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${owned}`)).toBe(
+			`Failed to load ${owned}`,
+		)
+		const partial = 'tmp/probe/notes.probe-4821-1f0c9d2e.ts'
+		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${partial}`)).toBe(
+			`Failed to load ${partial}`,
+		)
+		const complete = 'tmp/notes.probe-4821-1f0c9d2e-3a4b-4c6d-8e8f-90ab1c2d3e4f.ts'
+		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${complete}`)).toBe(
+			`Failed to load ${complete}`,
+		)
+		const generated = createRevisionFile(ROOT, 'tmp/probe/greeting.test.ts', `${process.pid}-1f0c`)
+		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${generated}`)).toBe(
+			`Failed to load ${relativeWorkspaceFile(ROOT, generated)}`,
+		)
 	})
 })
 

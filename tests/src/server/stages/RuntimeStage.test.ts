@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { captureError, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
-import { RuntimeStage, createRevisionFile } from '@src/server'
+import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
 import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
@@ -257,6 +257,32 @@ describe('runtime stage', () => {
 					message: 'Vitest ran no tests in the module',
 				},
 			])
+		} finally {
+			await stage.destroy()
+		}
+	})
+
+	it('names the declared test in a reported message', { timeout: 60_000 }, async () => {
+		const marker = `runtime-message-${randomUUID()}`
+		const stage = new RuntimeStage(ROOT)
+		try {
+			const check = await stage.inspect({
+				files: [],
+				test: {
+					path: `tmp/probe/${marker}.test.ts`,
+					// The failure carries the module's own name, rather than an assertion about it: Vitest
+					// truncates a value it prints into an assertion message, and the declared path is
+					// longer than that limit.
+					text: "import { test } from 'vitest'\ntest('reads its own module', () => { throw new Error(`ran ${import.meta.url}`) })\n",
+				},
+			})
+			expect(check.issues).toHaveLength(1)
+			const message = check.issues[0]?.message ?? ''
+			// The run executes a generated sibling, so a message quoting the module names both a
+			// file the caller never wrote and the host directory holding it.
+			expect(message).toContain(`tmp/probe/${marker}.test.ts`)
+			expect(message).not.toContain('.probe-')
+			expect(message).not.toContain(normalizePath(ROOT))
 		} finally {
 			await stage.destroy()
 		}

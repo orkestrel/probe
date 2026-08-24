@@ -20,6 +20,7 @@ import {
 	loadWorkspaceModule,
 	normalizePath,
 	relativeWorkspaceFile,
+	relativeWorkspaceMessage,
 	resolveWorkspaceFile,
 } from '../helpers.js'
 import { Overlay } from '../Overlay.js'
@@ -279,7 +280,7 @@ export class TypeStage implements TypeStageInterface {
 		const spelling = normalizePath(path)
 		const config = typescript.readConfigFile(spelling, typescript.sys.readFile)
 		if (config.error !== undefined) {
-			throw new ProbeError(this.#translate(typescript, config.error.messageText, path), {
+			throw new ProbeError(this.#translate(typescript, config.error.messageText), {
 				origin: 'workspace',
 				code: 'malformed',
 				context: { stage: this.stage, project },
@@ -293,7 +294,7 @@ export class TypeStage implements TypeStageInterface {
 			spelling,
 		)
 		if (parsed.errors.length > 0) {
-			throw new ProbeError(this.#translate(typescript, parsed.errors[0]?.messageText, path), {
+			throw new ProbeError(this.#translate(typescript, parsed.errors[0]?.messageText), {
 				origin: 'workspace',
 				code: 'malformed',
 				context: { stage: this.stage, project },
@@ -361,21 +362,21 @@ export class TypeStage implements TypeStageInterface {
 		return typescript.sys.newLine
 	}
 
-	// Renders one project diagnostic in the terms this package reports a path in. The compiler names
-	// the project by the absolute path this stage handed it, and it spells that path either way: the
+	// Renders one diagnostic in the terms this package reports a path in. The compiler names a
+	// project by the absolute path this stage handed it, and it spells that path either way: the
 	// native spelling where it echoes what it was given, the forward-slash spelling where it derived
 	// the path itself. So a caller reads whichever spelling the diagnostic happened to take, and on a
 	// host whose separator is a backslash that is this host's own directory layout rather than the
-	// project the caller named. Normalizing the message first makes one replacement cover both
-	// spellings, and the caller reads the workspace-relative project it asked for.
+	// project the caller named. `relativeWorkspaceMessage` removes both spellings of the root, so the
+	// caller reads the workspace-relative project it asked for, and so does every other contained
+	// file the diagnostic happens to name.
 	#translate(
 		typescript: typeof TypeScript,
 		message: string | DiagnosticMessageChain | undefined,
-		path: string,
 	): string {
-		return normalizePath(typescript.flattenDiagnosticMessageText(message, '\n')).replaceAll(
-			normalizePath(path),
-			relativeWorkspaceFile(this.#workspace, path),
+		return relativeWorkspaceMessage(
+			this.#workspace,
+			typescript.flattenDiagnosticMessageText(message, '\n'),
 		)
 	}
 
@@ -437,7 +438,7 @@ export class TypeStage implements TypeStageInterface {
 		project: string,
 		selected: boolean,
 	): Issue {
-		const message = typescript.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+		const message = this.#translate(typescript, diagnostic.messageText)
 		if (diagnostic.file === undefined) {
 			if (selected) {
 				throw new ProbeError(message, {
@@ -446,7 +447,11 @@ export class TypeStage implements TypeStageInterface {
 					context: { stage: this.stage, project },
 				})
 			}
-			return { origin: 'instrument', path: project, message }
+			// A diagnostic naming no file is about the project rather than about any candidate, and an
+			// inferred project is one the workspace declares for itself. So the target tree holds the
+			// only file that can close it, and naming this package instead would refuse every receipt
+			// the target could earn until someone else fixed a configuration nobody else owns.
+			return { origin: 'workspace', path: project, message }
 		}
 		const path = relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
 		if (diagnostic.start === undefined) return { origin: 'claimant', path, message }
