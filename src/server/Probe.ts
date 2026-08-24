@@ -132,6 +132,7 @@ export class Probe implements ProbeInterface {
 	async prove(claim: Claim): Promise<Verdict> {
 		try {
 			this.#support()
+			this.#admit(claim)
 			await this.#ready()
 			if (this.#destroyed) throw createDestroyedError('probe')
 			const started = performance.now()
@@ -603,6 +604,36 @@ export class Probe implements ProbeInterface {
 			})
 		}
 		return version
+	}
+
+	// Refuses a control that is the case again. No stage inspects such a claim: the refusal answers
+	// before any stage is asked for an inspection and before the instrument is awaited, so it reads
+	// the same in every workspace state — construction has already begun arming and running the boot
+	// controls by the time this is reached, and neither touches this claim. Such a control can only
+	// break by nondeterminism, and the receipt it would earn that way attests a falsification that
+	// never happened — the worst answer this package can return. Identity covers the whole case, the
+	// candidate drafts and the test, and it is decided on the bytes rather than on the digest a
+	// verdict carries: that digest rewrites every workspace-contained absolute string to its relative
+	// form, so two drafts one byte apart can hash alike and a control the claimant can break would be
+	// refused. The control's `stage` and `reason` describe the drafts rather than being them, so
+	// neither rescues a control whose files and test are the case's. Drafts are paired by position,
+	// because a shared path materializes the last draft that carries it and reordering the list
+	// therefore changes what the stages read.
+	#admit(claim: Claim): void {
+		const subject = claim.case
+		const control = claim.control
+		if (subject.test.path !== control.test.path) return
+		if (subject.test.text !== control.test.text) return
+		if (subject.files.length !== control.files.length) return
+		const repeated = subject.files.every((draft, index) => {
+			const other = control.files[index]
+			return other !== undefined && other.path === draft.path && other.text === draft.text
+		})
+		if (!repeated) return
+		throw new ProbeError(
+			'The control must differ from the case; it carries the same candidate drafts and the same test',
+			{ origin: 'claimant', code: 'refused' },
+		)
 	}
 
 	#support(): void {

@@ -141,6 +141,14 @@ function slowest(checks: readonly Check[]): number {
 	return Math.max(...checks.map((check) => check.elapsed))
 }
 
+// Returns the draft again carrying one trailing comment, which every stage reads as the draft it
+// already was. A fixture whose subject is a deadline, a queue, or a teardown wants its control to
+// reach the stages, and `prove` refuses a control repeating the whole case without letting a stage
+// inspect it, so each such control varies here rather than in the behaviour the fixture is measuring.
+function varyDraft(draft: Draft): Draft {
+	return { path: draft.path, text: `${draft.text}// the control, one comment apart\n` }
+}
+
 describe.sequential('probe', () => {
 	it(
 		'mints receipts only when every stage executes cleanly and returns admitted path issues',
@@ -175,11 +183,13 @@ describe.sequential('probe', () => {
 						reason: 'the source assigns a string to a number',
 					},
 				})
-				const refused = await probe.prove({
+				// Admitted, because it is not the case again, and unable to break, because the only thing
+				// it varies is a comment: every stage reports clean and the claim earns no receipt.
+				const unbroken = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
 					case: { files: [clean], test },
 					control: {
-						files: [clean],
+						files: [varyDraft(clean)],
 						test,
 						stage: 'type',
 						reason: 'this control is deliberately clean',
@@ -213,7 +223,7 @@ describe.sequential('probe', () => {
 				})
 				expect(minted.receipt).toMatch(/^probe:/)
 				expect(minted.reason).toBe('the source assigns a string to a number')
-				expect(refused.receipt).toBeUndefined()
+				expect(unbroken.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
 				expect(unexecuted.case.find((check) => check.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
@@ -223,6 +233,119 @@ describe.sequential('probe', () => {
 				])
 			} finally {
 				await probe.destroy()
+			}
+		},
+	)
+
+	it(
+		'refuses a control that repeats the whole case, and admits one a byte apart',
+		{ timeout: 120_000 },
+		async () => {
+			// This workspace cannot arm: its Vitest configuration declares no project collecting the
+			// boot control's test path, so every claim that reaches the stages ends in the arming
+			// failure. A claimant refusal here is therefore evidence no stage inspected the claim, and
+			// the arming failure is evidence a control a byte apart got past the refusal.
+			const scratch = createScratch({ prefix: 'probe-identical-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const files = [{ path: 'src/core/identical.ts', text: "export const VALUE = 'ok'\n" }]
+			const test = {
+				path: 'tmp/probe/identical.test.ts',
+				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+			}
+			const armed = {
+				origin: 'instrument',
+				code: 'malformed',
+				message: expect.stringContaining('The probe could not arm'),
+			}
+			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			try {
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: { files, test },
+						control: { files, test, stage: 'type', reason: 'this control is the case again' },
+					}),
+				).rejects.toMatchObject({
+					name: 'ProbeError',
+					origin: 'claimant',
+					code: 'refused',
+					message: expect.stringContaining('The control must differ from the case'),
+				})
+				// The reason is the claimant's prose about the drafts rather than the drafts themselves,
+				// so restating it leaves a control that still cannot break.
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: { files, test },
+						control: {
+							files,
+							test,
+							stage: 'runtime',
+							reason: 'the same control, in other words, at another stage',
+						},
+					}),
+				).rejects.toMatchObject({ origin: 'claimant', code: 'refused' })
+				// One byte apart in the candidate draft.
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: { files, test },
+						control: {
+							files: [{ path: 'src/core/identical.ts', text: "export const VALUE = 'Ok'\n" }],
+							test,
+							stage: 'type',
+							reason: 'the draft names another value',
+						},
+					}),
+				).rejects.toMatchObject(armed)
+				// One byte apart in the test, with the candidate drafts repeated: the case is both, so a
+				// control varying either one is a control that can break.
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: { files, test },
+						control: {
+							files,
+							test: {
+								path: 'tmp/probe/identical.test.ts',
+								text: "import { test } from 'vitest'\ntest('Passes', () => {})\n",
+							},
+							stage: 'runtime',
+							reason: 'the test asserts under another name',
+						},
+					}),
+				).rejects.toMatchObject(armed)
+				// One byte apart, and alike under the digest a verdict carries: that digest rewrites every
+				// workspace-contained absolute string to its workspace-relative form, so these two
+				// spellings of one anchor collapse to one hash. A refusal reading that digest would refuse
+				// a control the claimant can break, so this control is admitted and reaches the arming
+				// failure.
+				const anchored = `${scratch.path}/anchor`
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: { files: [{ path: 'src/core/identical.ts', text: `/${anchored}` }], test },
+						control: {
+							files: [{ path: 'src/core/identical.ts', text: `//${anchored}` }],
+							test,
+							stage: 'type',
+							reason: 'the drafts spell one anchor two ways',
+						},
+					}),
+				).rejects.toMatchObject(armed)
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
 			}
 		},
 	)
@@ -518,10 +641,10 @@ describe.sequential('probe', () => {
 				},
 				control: {
 					files: [],
-					test: {
+					test: varyDraft({
 						path: 'tmp/probe/expiry.test.ts',
 						text: "import { test } from 'vitest'\ntest('never returns', () => { while (true) {} })\n",
-					},
+					}),
 					stage: 'runtime',
 					reason: 'the synchronous loop never returns',
 				},
@@ -601,7 +724,7 @@ describe.sequential('probe', () => {
 			case: { files, test },
 			control: {
 				files,
-				test,
+				test: varyDraft(test),
 				stage: 'type',
 				reason: 'the candidate outruns the deadline the coordinator allows one stage',
 			},
@@ -683,7 +806,9 @@ describe.sequential('probe', () => {
 					test,
 				},
 				control: {
-					files: [{ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						varyDraft({ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }),
+					],
 					test,
 					stage: 'type',
 					reason: 'project discovery outruns the coordinator budget',
@@ -767,7 +892,7 @@ describe.sequential('probe', () => {
 					test,
 				},
 				control: {
-					files: Array.from({ length: 4 }, (_unused, index) => createHeavyDraft(index)),
+					files: Array.from({ length: 4 }, (_unused, index) => varyDraft(createHeavyDraft(index))),
 					test,
 					stage: 'type',
 					reason: 'this control is deliberately clean',
@@ -780,7 +905,12 @@ describe.sequential('probe', () => {
 					test,
 				},
 				control: {
-					files: [{ path: 'src/core/project-serialization.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						varyDraft({
+							path: 'src/core/project-serialization.ts',
+							text: 'export const VALUE = 1\n',
+						}),
+					],
 					test,
 					stage: 'type',
 					reason: 'this control is deliberately clean',
@@ -856,7 +986,10 @@ describe.sequential('probe', () => {
 						},
 						control: {
 							files: [
-								{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' },
+								varyDraft({
+									path: 'src/core/stalled.ts',
+									text: 'export const VALUE = 1 // PROBE_SILENT\n',
+								}),
 							],
 							test: {
 								path: 'tmp/probe/stalled-lint.test.ts',
@@ -885,7 +1018,7 @@ describe.sequential('probe', () => {
 					},
 				},
 				control: {
-					files: [{ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' }],
+					files: [varyDraft({ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' })],
 					test: {
 						path: 'tmp/probe/served-lint.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -947,7 +1080,7 @@ describe.sequential('probe', () => {
 					},
 				},
 				control: {
-					files: [{ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' }],
+					files: [varyDraft({ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' })],
 					test: {
 						path: 'tmp/probe/rearmed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1133,10 +1266,10 @@ describe.sequential('probe', () => {
 						},
 						control: {
 							files: [],
-							test: {
+							test: varyDraft({
 								path: 'tmp/probe/refused.test.ts',
 								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-							},
+							}),
 							stage: 'type',
 							reason: 'the probe did not arm',
 						},
@@ -1228,10 +1361,10 @@ describe.sequential('probe', () => {
 					},
 					control: {
 						files: [],
-						test: {
+						test: varyDraft({
 							path: 'tmp/probe/after-destroy.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-						},
+						}),
 						stage: 'runtime',
 						reason: 'the probe is destroyed',
 					},
@@ -1288,10 +1421,10 @@ describe.sequential('probe', () => {
 				},
 				control: {
 					files: [],
-					test: {
+					test: varyDraft({
 						path: 'tmp/probe/destroy-bound.test.ts',
 						text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks in a FIFO', { timeout: 60_000 }, () => { writeFileSync(new URL('destroy-ready', import.meta.url), ''); readFileSync(new URL('destroy-gate', import.meta.url)) })\n",
-					},
+					}),
 					stage: 'runtime',
 					reason: 'the specification is blocked in a FIFO',
 				},
@@ -1386,7 +1519,7 @@ describe.sequential('probe', () => {
 					test: passing,
 				},
 				control: {
-					files: [{ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' }],
+					files: [varyDraft({ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' })],
 					test: passing,
 					stage: 'type',
 					reason: 'this control is deliberately clean',
@@ -1399,7 +1532,9 @@ describe.sequential('probe', () => {
 					test: passing,
 				},
 				control: {
-					files: [{ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }],
+					files: [
+						varyDraft({ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }),
+					],
 					test: passing,
 					stage: 'type',
 					reason: 'this control is deliberately clean',

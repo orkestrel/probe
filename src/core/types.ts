@@ -98,9 +98,11 @@ export interface Control extends Case {
  * because the root project admits host globals the scoped projects remove and would report green
  * where the gate reports red. The test drafts remain on the root project for Vitest and Node globals.
  *
- * The control's candidate drafts must differ from the case's. A control byte-identical to its case
- * cannot break, so it never produces the `origin: 'claimant'` issue a receipt requires, and the
- * claim is unprovable however correct the case is.
+ * The control's case must differ from the claim's case by one byte at least: in a candidate draft,
+ * in the test, or in each. A control that repeats the whole case cannot break, so it never produces
+ * the `origin: 'claimant'` issue a receipt requires, and the claim is unprovable however correct
+ * the case is. `reason` is the claimant's prose about the drafts rather than the drafts themselves,
+ * so rewording it leaves the control the case again, and the `prove` method refuses it.
  *
  * @example
  * ```ts
@@ -425,10 +427,22 @@ export interface ProbeInterface {
 	/**
 	 * Answers one claim with every stage's evidence.
 	 *
+	 * @remarks
+	 * A control carrying the case's files and the case's test byte for byte is refused at admission,
+	 * with `origin: 'claimant'` and `code: 'refused'`. No stage inspects such a claim: the refusal
+	 * answers before the resident stages are awaited, so it reads the same in every workspace state.
+	 * Such a control can only break by nondeterminism, so the receipt it would earn attests a
+	 * falsification that never happened, and a flake-earned receipt is the worst answer this package
+	 * can return. The refusal compares the bytes of each side's files and test rather than the digest
+	 * a verdict carries, because that digest rewrites a workspace-contained absolute string to its
+	 * relative form and so reads two drafts one byte apart as one. A control varying only its `stage`
+	 * or its `reason` is refused, because neither is a draft.
+	 *
 	 * @param claim - The case, its control, and the project the candidate drafts in both cases
 	 * are checked against
 	 * @returns The verdict, carrying one check per stage for both the case and the control
-	 * @throws When a stage cannot start, so no verdict ever reports a stage that did not run
+	 * @throws When the control repeats the case byte for byte, or when a stage cannot start, so no
+	 * verdict ever reports a stage that did not run
 	 */
 	prove(claim: Claim): Promise<Verdict>
 	/**
