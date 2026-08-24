@@ -744,7 +744,7 @@ describe('runtime stage', () => {
 	})
 
 	it(
-		'preserves transform selectors while serving versioned candidates',
+		'serves candidate bytes through every query while preserving transform selectors',
 		{ timeout: 60_000 },
 		async () => {
 			const scratch = createScratch()
@@ -763,10 +763,48 @@ describe('runtime stage', () => {
 					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 					test: {
 						path: 'tmp/probe/query.test.ts',
-						text: "import RAW from '../../src/value.ts?raw'\nimport { VALUE } from '../../src/value.ts?v=123'\nimport { expect, test } from 'vitest'\ntest('preserves query semantics', () => { expect(RAW).toBe(\"export const VALUE = 'disk'\\n\"); expect(VALUE).toBe('candidate') })\n",
+						text: "import RAW from '../../src/value.ts?raw&source=candidate'\nimport { VALUE } from '../../src/value.ts?v=123'\nimport { expect, test } from 'vitest'\ntest('preserves query semantics', () => { expect(RAW).toBe(\"export const VALUE = 'candidate'\\n\"); expect(VALUE).toBe('candidate') })\n",
 					},
 				})
 				expect(check.issues).toStrictEqual([])
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'reports when workspace configuration serves a covered module before the overlay',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch()
+			const disk = "export const VALUE = 'disk'\n"
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nconst disk = { name: 'workspace-disk-loader', enforce: 'pre', load(id) { if (id.endsWith('/src/value.ts')) return \"export const VALUE = 'disk'\\n\" } }\nexport default defineConfig({ test: { projects: [{ plugins: [disk], test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			scratch.write('src/value.ts', disk)
+			scratch.write('tmp/probe/.keep', '')
+			const stage = new RuntimeStage(scratch.path)
+			try {
+				const check = await stage.inspect({
+					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
+					test: {
+						path: 'tmp/probe/workspace-loader.test.ts',
+						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads workspace bytes', () => expect(VALUE).toBe('disk'))\n",
+					},
+				})
+
+				expect(check.issues).toStrictEqual([
+					{
+						origin: 'workspace',
+						path: 'src/value.ts',
+						message: 'The workspace configuration served this module before the runtime overlay',
+					},
+				])
 			} finally {
 				await stage.destroy()
 				scratch.destroy()

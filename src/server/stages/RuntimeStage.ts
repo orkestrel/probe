@@ -56,6 +56,13 @@ import { Overlay } from '../Overlay.js'
  * workspace module whose disk content or candidate revision changed, runs that specification,
  * evicts its result, and deletes the file. Clearing the overlay makes the next snapshot differ from
  * the candidate revision, so the next inspection invalidates that module and reads disk again.
+ * After the run, the stage checks each covered module reachable from the generated specification
+ * against the overlay paths its loader served. A target-config loader that served first produces a
+ * workspace issue; a module id probe's loader received but failed to match produces an instrument
+ * issue.
+ * The runtime overlay leaves bare specifier resolution to Vite: it replaces a bare import only
+ * after Vite resolves that import to a covered file. The type stage overlays the declared test
+ * path, while this stage executes a generated sibling and overlays only the candidate files.
  *
  * Vite retains one unresolved URL for every specification path, so the stage replaces its whole
  * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
@@ -94,6 +101,8 @@ export class RuntimeStage implements StageInterface {
 	readonly #workspace: string
 	#vitest: Promise<Vitest> | undefined
 	#overlay: OverlayInterface = new Overlay()
+	readonly #loads = new Set<string>()
+	readonly #reads = new Set<string>()
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
 	#specifications = 0
@@ -150,6 +159,8 @@ export class RuntimeStage implements StageInterface {
 		}
 		const overlay = new Overlay()
 		this.#overlay = overlay
+		this.#loads.clear()
+		this.#reads.clear()
 		try {
 			for (const draft of subject.files) {
 				overlay.set(resolveWorkspaceFile(this.#workspace, draft.path), draft.text)
@@ -183,7 +194,10 @@ export class RuntimeStage implements StageInterface {
 			try {
 				try {
 					const result = await vitest.runTestSpecifications([task], false)
-					issues = this.#issues(result, file, subject.test.path)
+					issues = [
+						...this.#issues(result, file, subject.test.path),
+						...this.#misses(project, file),
+					]
 				} catch (error) {
 					if (error instanceof ProbeError) throw error
 					throw new ProbeError(
@@ -228,6 +242,8 @@ export class RuntimeStage implements StageInterface {
 				issues: [...issues, ...cleanup],
 			}
 		} finally {
+			this.#loads.clear()
+			this.#reads.clear()
 			overlay.clear()
 		}
 	}
@@ -258,6 +274,8 @@ export class RuntimeStage implements StageInterface {
 			}
 		} finally {
 			this.#modules.clear()
+			this.#loads.clear()
+			this.#reads.clear()
 			this.#overlay.clear()
 		}
 	}
@@ -359,7 +377,7 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#resolve(id: string, importer: string | undefined): string | undefined {
-		const separator = id.lastIndexOf('?')
+		const separator = id.indexOf('?')
 		const specifier = separator === -1 ? id : id.slice(0, separator)
 		const suffix = separator === -1 ? '' : id.slice(separator)
 		if (!specifier.startsWith('.') && !isAbsolute(specifier)) return undefined
@@ -373,27 +391,33 @@ export class RuntimeStage implements StageInterface {
 		if (extension === '') candidates.push(`${imported}.ts`)
 		for (const candidate of candidates) {
 			const resolved = `${candidate}${suffix}`
-			if (this.#load(resolved) !== undefined) return resolved
+			if (this.#overlay.text(candidate) !== undefined) return resolved
 		}
 		return undefined
 	}
 
-	#load(id: string): string | undefined {
-		const text = this.#overlay.text(id)
-		if (text !== undefined) return text
-		const separator = id.lastIndexOf('?')
-		if (separator === -1) return undefined
-		const query = id.slice(separator + 1)
-		if (
-			!query.startsWith('v=') ||
-			query.length === 2 ||
-			query.includes('&') ||
-			query.includes('#') ||
-			query.slice(2).includes('?')
-		) {
-			return undefined
+	#load(id: string):
+		| string
+		| {
+				readonly code: string
+				readonly map: { readonly mappings: string }
+				readonly moduleType: 'js'
+		  }
+		| undefined {
+		this.#loads.add(normalizePath(id))
+		const separator = id.indexOf('?')
+		const path = separator === -1 ? id : id.slice(0, separator)
+		const text = this.#overlay.text(path)
+		if (text === undefined) return undefined
+		this.#reads.add(normalizePath(path))
+		if (separator !== -1 && /(?:^|&)raw(?:&|$)/u.test(id.slice(separator + 1))) {
+			return {
+				code: `export default ${JSON.stringify(text)}`,
+				map: { mappings: '' },
+				moduleType: 'js',
+			}
 		}
-		return this.#overlay.text(id.slice(0, separator))
+		return text
 	}
 
 	#specification(test: Draft): string | Issue {
@@ -502,6 +526,53 @@ export class RuntimeStage implements StageInterface {
 			}
 		}
 		return project
+	}
+
+	// Importer reachability limits this reading to the graph the generated specification served. A
+	// resident runner keeps older module nodes, and membership alone would report an unused candidate
+	// because an earlier inspection imported the same path.
+	#misses(project: TestProject, specification: string): readonly Issue[] {
+		const file = normalizePath(specification)
+		const issues: Issue[] = []
+		for (const path of this.#overlay.paths) {
+			if (this.#reads.has(path)) continue
+			let served = false
+			let loaded = false
+			for (const environment of Object.values(project.vite.environments)) {
+				const modules = environment.moduleGraph.getModulesByFile(path)
+				if (modules === undefined) continue
+				for (const module of modules) {
+					const pending = [...module.importers]
+					const seen = new Set(pending)
+					let reaches = false
+					while (pending.length > 0) {
+						const importer = pending.pop()
+						if (importer === undefined) break
+						if (importer.file !== null && normalizePath(importer.file) === file) {
+							reaches = true
+							break
+						}
+						for (const parent of importer.importers) {
+							if (seen.has(parent)) continue
+							seen.add(parent)
+							pending.push(parent)
+						}
+					}
+					if (!reaches) continue
+					served = true
+					if (module.id !== null && this.#loads.has(normalizePath(module.id))) loaded = true
+				}
+			}
+			if (!served) continue
+			issues.push({
+				origin: loaded ? 'instrument' : 'workspace',
+				path: relativeWorkspaceFile(this.#workspace, path),
+				message: loaded
+					? 'The runtime overlay did not resolve this module'
+					: 'The workspace configuration served this module before the runtime overlay',
+			})
+		}
+		return issues
 	}
 
 	async #evict(vitest: Vitest, file: string): Promise<readonly Issue[]> {
