@@ -11,7 +11,7 @@ import type {
 } from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { setImmediate } from 'node:timers/promises'
+import { setTimeout } from 'node:timers/promises'
 import { ProbeError, createDestroyedError } from '@src/core'
 import {
 	computeDigest,
@@ -111,9 +111,12 @@ export class TypeStage implements TypeStageInterface {
 			draft: candidate.draft,
 			project: project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, candidate.path)),
 		}))
-		this.#configure(this.#service(typescript, 'tsconfig.json'), 'tsconfig.json')
+		const root = this.#service(typescript, 'tsconfig.json')
+		this.#configure(root, 'tsconfig.json')
+		await this.#unblock()
 		for (const selection of selections) {
 			this.#configure(this.#service(typescript, selection.project), selection.project)
+			await this.#unblock()
 		}
 		// Each inspection owns its candidate set and reads it through its own reference, so the
 		// clear that follows releases what this inspection recorded and nothing else. The resident
@@ -127,7 +130,6 @@ export class TypeStage implements TypeStageInterface {
 			this.#progress += 1
 			const issues: Issue[] = []
 			const projects = new Set<string>()
-			const root = this.#service(typescript, 'tsconfig.json')
 			issues.push(...this.#issues(typescript, root, subject.test, 'tsconfig.json', false, true))
 			projects.add('tsconfig.json')
 			await this.#unblock()
@@ -177,7 +179,9 @@ export class TypeStage implements TypeStageInterface {
 		const typescript = await this.#typescript
 		if (this.#destroyed) throw createDestroyedError('type stage')
 		const resolved = resolveWorkspaceFile(this.#workspace, project)
+		this.#progress += 1
 		this.#service(typescript, project)
+		await this.#unblock()
 		return {
 			path: relativeWorkspaceFile(this.#workspace, resolved),
 			digest: computeDigest(this.#workspace, this.#options.get(resolved) ?? {}),
@@ -239,7 +243,7 @@ export class TypeStage implements TypeStageInterface {
 	// what stops an abandoned inspection reaching a disposed service and building a replacement
 	// this stage would then own past its own teardown.
 	async #unblock(): Promise<void> {
-		await setImmediate()
+		await setTimeout(0)
 		if (this.#destroyed) throw createDestroyedError('type stage')
 	}
 

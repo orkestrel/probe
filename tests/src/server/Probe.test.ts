@@ -1,5 +1,17 @@
 import type { Check, Claim, Draft, ProbeEventMap, Toolchain, Verdict } from '@src/core'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+	closeSync,
+	constants,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+	writeSync,
+} from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -626,6 +638,181 @@ describe.sequential('probe', () => {
 		}
 	})
 
+	it(
+		'expires caller-named project resolution and serves through the recycled type stage',
+		{ timeout: 180_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-project-deadline-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["node","vitest/globals"]},"files":["src/core/index.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const include: string[] = []
+			for (let index = 0; index < 10_000; index += 1) {
+				const directory = `generated/d${index}`
+				scratch.write(`${directory}/index.ts`, 'export {}\n')
+				if (index < 1_200) include.push(`../${directory}/**/*.ts`)
+			}
+			const project = 'projects/tsconfig.generated.json'
+			scratch.write(
+				project,
+				`${JSON.stringify({ compilerOptions: { skipLibCheck: true, types: [] }, include })}\n`,
+			)
+			const expirations = createRecorder<[Claim]>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 2_000,
+				on: { expire: expirations.handler },
+			})
+			const test = {
+				path: 'tmp/probe/project-deadline.test.ts',
+				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+			}
+			const claim: Claim = {
+				project,
+				case: {
+					files: [{ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }],
+					test,
+				},
+				control: {
+					files: [{ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }],
+					test,
+					stage: 'type',
+					reason: 'project discovery outruns the coordinator budget',
+				},
+			}
+			try {
+				await Promise.race([
+					new Promise<void>((armed) => probe.emitter.on('arm', () => armed())),
+					waitForDelay(10_000).then(() => {
+						throw new Error('The project deadline fixture did not arm')
+					}),
+				])
+				await expect(probe.prove(claim)).rejects.toMatchObject({
+					name: 'ProbeError',
+					message: 'The type stage project resolution exceeded 2000 ms',
+					origin: 'claimant',
+					code: 'deadline',
+					context: { stage: 'type', deadline: 2000 },
+				})
+				expect(expirations.calls).toStrictEqual([[claim]])
+				const served = await probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [
+							{ path: 'src/core/after-project-deadline.ts', text: 'export const VALUE = 1\n' },
+						],
+						test,
+					},
+					control: {
+						files: [
+							{
+								path: 'src/core/after-project-deadline.ts',
+								text: "export const VALUE: number = 'bad'\n",
+							},
+						],
+						test,
+						stage: 'type',
+						reason: 'the source assigns a string to a number',
+					},
+				})
+				expect(served.receipt).toBeTypeOf('string')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'serializes project resolution against a live type inspection',
+		{ timeout: 180_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-project-serialization-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["node","vitest/globals"]},"files":["src/core/index.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const projectA = 'projects/tsconfig.a.json'
+			const projectB = 'projects/tsconfig.b.json'
+			const project =
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]},"files":["../src/core/index.ts"]}\n'
+			scratch.write(projectA, project)
+			scratch.write(projectB, '{"compilerOptions" {"strict":true}}\n')
+			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			const test = {
+				path: 'tmp/probe/project-serialization.test.ts',
+				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
+			}
+			const first: Claim = {
+				project: projectA,
+				case: {
+					files: Array.from({ length: 4 }, (_unused, index) => createHeavyDraft(index)),
+					test,
+				},
+				control: {
+					files: Array.from({ length: 4 }, (_unused, index) => createHeavyDraft(index)),
+					test,
+					stage: 'type',
+					reason: 'this control is deliberately clean',
+				},
+			}
+			const second: Claim = {
+				project: projectB,
+				case: {
+					files: [{ path: 'src/core/project-serialization.ts', text: 'export const VALUE = 1\n' }],
+					test,
+				},
+				control: {
+					files: [{ path: 'src/core/project-serialization.ts', text: 'export const VALUE = 1\n' }],
+					test,
+					stage: 'type',
+					reason: 'this control is deliberately clean',
+				},
+			}
+			try {
+				await new Promise<void>((armed, failed) => {
+					probe.emitter.on('arm', () => armed())
+					probe.emitter.on('error', (error) => failed(error))
+				})
+				const inspecting = probe.prove(first)
+				await waitForDelay(100)
+				const resolving = probe.prove(second)
+				void resolving.catch(() => {})
+				await waitForDelay(20)
+				scratch.write(projectB, project)
+				const verdicts = await Promise.all([inspecting, resolving])
+				expect(verdicts.flatMap((verdict) => verdict.case)).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ stage: 'type', issues: [] }),
+						expect.objectContaining({ stage: 'type', issues: [] }),
+					]),
+				)
+				const recycled = await probe.prove(second)
+				expect(recycled.case.flatMap((check) => check.issues)).toStrictEqual([])
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('replaces a lint stage its deadline destroyed', { timeout: 60_000 }, async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
@@ -1058,6 +1245,84 @@ describe.sequential('probe', () => {
 			expect(
 				readdirSync(directory).filter((name) => name.startsWith('after-destroy.test.probe-')),
 			).toStrictEqual([])
+		},
+	)
+
+	it(
+		'bounds teardown while a runtime specification is blocked',
+		{ timeout: 60_000 },
+		async (context) => {
+			const scratch = createScratch({ prefix: 'probe-destroy-bound-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":["node","vitest/globals"]},"include":["src/**/*.ts","tmp/**/*.ts"]}\n',
+			)
+			scratch.write('src/core/index.ts', 'export const READY = true\n')
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			)
+			scratch.write('tmp/probe/.keep', '')
+			const absent = resolve(scratch.path, 'absent/destroy-gate')
+			expect(spawnSync('mkfifo', [absent]).status).not.toBe(0)
+			expect(existsSync(absent)).toBe(false)
+			const gate = resolve(scratch.path, 'tmp/probe/destroy-gate')
+			const fifo = spawnSync('mkfifo', [gate])
+			context.skip(
+				fifo.status !== 0 || !existsSync(gate) || !lstatSync(gate).isFIFO(),
+				'this host cannot create the FIFO that parks a generated Vitest specification during teardown',
+			)
+			const ready = resolve(scratch.path, 'tmp/probe/destroy-ready')
+			const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
+			let closing: Promise<void> | undefined
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probe/destroy-bound.test.ts',
+						text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks in a FIFO', { timeout: 60_000 }, () => { writeFileSync(new URL('destroy-ready', import.meta.url), ''); readFileSync(new URL('destroy-gate', import.meta.url)) })\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probe/destroy-bound.test.ts',
+						text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks in a FIFO', { timeout: 60_000 }, () => { writeFileSync(new URL('destroy-ready', import.meta.url), ''); readFileSync(new URL('destroy-gate', import.meta.url)) })\n",
+					},
+					stage: 'runtime',
+					reason: 'the specification is blocked in a FIFO',
+				},
+			}
+			const proof = probe.prove(claim)
+			void proof.catch(() => {})
+			try {
+				const budget = performance.now() + 30_000
+				while (!existsSync(ready) && performance.now() < budget) await waitForDelay(10)
+				expect(existsSync(ready), 'the generated specification never reached its FIFO').toBe(true)
+				await waitForDelay(50)
+				const started = performance.now()
+				closing = probe.destroy()
+				const settled = await Promise.race([
+					closing.then(() => true),
+					waitForDelay(7_000).then(() => false),
+				])
+				expect(settled).toBe(true)
+				expect(performance.now() - started).toBeLessThan(7_000)
+			} finally {
+				let descriptor: number | undefined
+				try {
+					descriptor = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK)
+					writeSync(descriptor, 'release')
+				} catch {
+				} finally {
+					if (descriptor !== undefined) closeSync(descriptor)
+				}
+				await (closing ?? probe.destroy()).catch(() => {})
+				scratch.destroy()
+			}
 		},
 	)
 	it('publishes exactly the events its map declares', () => {

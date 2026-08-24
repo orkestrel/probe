@@ -5,6 +5,7 @@ import type {
 	ProbeEventMap,
 	ProbeInterface,
 	ProbeOptions,
+	Project,
 	Toolchain,
 	Verdict,
 } from '@src/core'
@@ -68,6 +69,8 @@ export class Probe implements ProbeInterface {
 	readonly #typeQueue: QueueInterface<Inspection, Check>
 	readonly #lintQueue: QueueInterface<Inspection, Check>
 	readonly #runtimeQueue: QueueInterface<Inspection, Check>
+	readonly #deadlines = new WeakSet<ProbeError>()
+	#typeTail = Promise.resolve()
 	#arming: Promise<void>
 	#closing: Promise<void> | undefined
 	#destroyed = false
@@ -135,7 +138,7 @@ export class Probe implements ProbeInterface {
 			const id = randomUUID()
 			// Resolve the project before any inspection runs, so a project this workspace cannot parse
 			// fails the claim outright rather than after every stage has paid for it.
-			const project = await this.#type.resolve(claim.project)
+			const project = await this.#resolve(claim)
 			const digest = computeDigest(this.#workspace, {
 				case: claim.case,
 				control: claim.control,
@@ -382,13 +385,19 @@ export class Probe implements ProbeInterface {
 		return Promise.all(admitted)
 	}
 
-	#inspectType(inspection: Inspection): Promise<Check> {
-		return this.#inspectStage(
-			this.#type,
-			this.#type.progress,
-			this.#type.inspect(inspection.subject, inspection.claim.project),
-			inspection.claim,
-		)
+	async #inspectType(inspection: Inspection): Promise<Check> {
+		const release = await this.#admitType()
+		try {
+			const stage = this.#type
+			return await this.#inspectStage(
+				stage,
+				stage.progress,
+				stage.inspect(inspection.subject, inspection.claim.project),
+				inspection.claim,
+			)
+		} finally {
+			release()
+		}
 	}
 
 	#inspectLint(inspection: Inspection): Promise<Check> {
@@ -415,24 +424,32 @@ export class Probe implements ProbeInterface {
 		operation: Promise<Check>,
 		claim: Claim,
 	): Promise<Check> {
+		try {
+			return await this.#bound(
+				operation,
+				`The ${stage.stage} stage exceeded ${this.#deadline} ms`,
+				stage,
+				progress,
+			)
+		} catch (error) {
+			this.#emitExpiry(stage, claim)
+			throw error
+		}
+	}
+
+	async #bound<T>(
+		operation: Promise<T>,
+		message: string,
+		stage: StageInterface,
+		progress: number,
+	): Promise<T> {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
-			return await Promise.race([
-				operation,
-				this.#expiry(
-					timeout,
-					`The ${stage.stage} stage exceeded ${this.#deadline} ms`,
-					stage,
-					progress,
-				),
-			])
+			return await Promise.race([operation, this.#expiry(timeout, message, stage, progress)])
 		} catch (error) {
 			if (!timeout.expired) throw error
-			// The recovery runs before this handler returns, so the replacement is installed before
-			// the queue admits the next inspection and the claim behind this one meets a stage that
-			// serves rather than one that reports a stranger's expiry.
-			if (await this.#recycle(stage)) this.#emitter.emit('expire', claim)
+			await this.#recycle(stage)
 			throw error
 		} finally {
 			timeout.clear()
@@ -443,6 +460,7 @@ export class Probe implements ProbeInterface {
 	// rather than the process. A resident server whose type, lint, or runtime stage stays destroyed
 	// answers every later claim with the destruction of a stage that caller never asked about.
 	async #recycle(stage: StageInterface): Promise<boolean> {
+		if (this.#destroyed) return false
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
@@ -482,6 +500,42 @@ export class Probe implements ProbeInterface {
 		return false
 	}
 
+	// Holds every caller-selected project resolution and type inspection on one promise chain. A
+	// resolve that recycled the shared caller-named service during an inspection would change the
+	// service that inspection resumes with after its next cooperative yield.
+	async #admitType(): Promise<() => void> {
+		const previous = this.#typeTail
+		const turn = Promise.withResolvers<void>()
+		this.#typeTail = turn.promise
+		await previous
+		return turn.resolve
+	}
+
+	async #resolve(claim: Claim): Promise<Project> {
+		const release = await this.#admitType()
+		try {
+			const stage = this.#type
+			try {
+				return await this.#bound(
+					stage.resolve(claim.project),
+					`The type stage project resolution exceeded ${this.#deadline} ms`,
+					stage,
+					stage.progress,
+				)
+			} catch (error) {
+				this.#emitExpiry(stage, claim)
+				throw error
+			}
+		} finally {
+			release()
+		}
+	}
+
+	#emitExpiry(stage: StageInterface, claim: Claim): void {
+		if (stage === this.#type || stage === this.#lint || stage === this.#runtime) return
+		this.#emitter.emit('expire', claim)
+	}
+
 	// Rejects when the deadline fires, so a race against it settles even when the operation it
 	// races never returns. The stage travels beside the message because a caller catching this
 	// branches on the category and the budget, and reads the message only to print it.
@@ -494,14 +548,15 @@ export class Probe implements ProbeInterface {
 		return new Promise<never>((_resolve, reject) => {
 			timeout.signal.addEventListener(
 				'abort',
-				() =>
-					reject(
-						new ProbeError(message, {
-							origin: stage.progress > progress ? 'claimant' : 'instrument',
-							code: 'deadline',
-							context: { stage: stage.stage, deadline: this.#deadline },
-						}),
-					),
+				() => {
+					const error = new ProbeError(message, {
+						origin: stage.progress > progress ? 'claimant' : 'instrument',
+						code: 'deadline',
+						context: { stage: stage.stage, deadline: this.#deadline },
+					})
+					this.#deadlines.add(error)
+					reject(error)
+				},
 				{ once: true },
 			)
 		})
@@ -515,7 +570,26 @@ export class Probe implements ProbeInterface {
 		// timer, no listener, no store — and stage teardown settles every entry still admitted, so
 		// each caller reads the stage's own refusal. Destroying a queue instead abandons those
 		// entries, and a stage rejecting after its queue stopped observing ends the host process.
-		await Promise.all([this.#type.destroy(), this.#lint.destroy(), this.#runtime.destroy()])
+		await Promise.all([
+			this.#destroyStage(this.#type),
+			this.#destroyStage(this.#lint),
+			this.#destroyStage(this.#runtime),
+		])
+	}
+
+	async #destroyStage(stage: StageInterface): Promise<void> {
+		try {
+			await this.#bound(
+				stage.destroy(),
+				`The ${stage.stage} stage teardown exceeded ${this.#deadline} ms`,
+				stage,
+				stage.progress,
+			)
+		} catch (error) {
+			// A teardown overrun cannot replace the destroyed stage, and every sibling still receives
+			// its own bound. A teardown that fails before the deadline keeps its original rejection.
+			if (!(error instanceof ProbeError) || !this.#deadlines.has(error)) throw error
+		}
 	}
 
 	#version(name: string): string {

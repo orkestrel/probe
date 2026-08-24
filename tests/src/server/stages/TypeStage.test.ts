@@ -444,6 +444,22 @@ describe('type stage', () => {
 })
 
 describe('type stage project resolution', () => {
+	it('yields after resolving a caller-named project', async () => {
+		const stage = new TypeStage(ROOT)
+		let yielded = false
+		try {
+			const turn = waitForDelay().then(() => {
+				yielded = true
+			})
+			const resolving = stage.resolve('configs/src/tsconfig.core.json')
+			await resolving
+			expect(yielded).toBe(true)
+			await turn
+		} finally {
+			await stage.destroy()
+		}
+	})
+
 	it('resolves every spelling of one project to one path and one digest', async () => {
 		const stage = new TypeStage(ROOT)
 		try {
