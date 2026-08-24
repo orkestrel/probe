@@ -32,8 +32,9 @@ import {
 } from '@src/server'
 import { CLAIM_SHAPE, ProbeError, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 // Two distinct listeners reporting one name, so a release keyed on the name cannot tell them apart
 // and a release keyed on identity can. The name is assigned rather than declared, because two

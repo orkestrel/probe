@@ -7,8 +7,9 @@ import { createScratch } from '@orkestrel/test/server'
 import { isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill

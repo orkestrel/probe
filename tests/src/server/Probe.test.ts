@@ -22,8 +22,9 @@ import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
 import { matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 // A protocol-faithful Oxlint language server that records every document session it is given. It
 // appends one line per `didOpen` carrying the number of documents open at that moment, waits, then

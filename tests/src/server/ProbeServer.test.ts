@@ -6,8 +6,9 @@ import { captureError, createRecorder, waitForDelay } from '@orkestrel/test'
 import { createToolManager } from '@orkestrel/tool'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 // Every following count is a delta against the moment it was read. A sibling test in this project
 // holds listeners of its own, and the worker these run in is not a fresh process.

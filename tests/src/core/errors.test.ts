@@ -12,8 +12,9 @@ import {
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
+import { WORKSPACE_ROOT } from '../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 // Every source module's own text, read as strings rather than as modules, so the construction check
 // reads what a consumer receives rather than what an import resolves to.

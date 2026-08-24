@@ -25,8 +25,9 @@ import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
 import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
+import { WORKSPACE_ROOT } from '../../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 // Reads whether this host leaves a FIFO at a filesystem path a caller names. Vitest writes its
 // results cache twice inside one inspection — as the caller's run ends, and again as the stage

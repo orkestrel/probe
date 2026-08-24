@@ -10,8 +10,9 @@ import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const ENTRY = 'src/bin/main.ts'
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
 // The program that gives the entry a real terminal, by running it inside a pseudo-terminal session.

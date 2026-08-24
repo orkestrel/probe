@@ -7,8 +7,9 @@ import { createScratch } from '@orkestrel/test/server'
 import { TypeStage, normalizePath } from '@src/server'
 import { isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from '../../../setup.js'
 
-const ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const DISPOSED_COMPILER = [
 	"const compiler = require('typescript-real')",
 	'function createLanguageService(host, registry, mode) {',
