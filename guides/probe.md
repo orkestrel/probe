@@ -529,7 +529,7 @@ const claim: Claim = {
 const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 verdict.digest // '0806fb30f428edb8ea85adfb4b355441'
-verdict.receipt // 'probe:0806fb30f428edb8ea85adfb4b355441:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+verdict.receipt // 'probe:0806fb30f428edb8ea85adfb4b355441:type:typescript@6.0.3:oxlint@1.80.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
 await probe.destroy()
 ```
 

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, mergeConfig } from 'vite'
 import { srcBin } from '../../vite.config.ts'
 
 // The `scaffold` executable build — a single ESM lib file, no declarations (an
@@ -7,7 +7,7 @@ import { srcBin } from '../../vite.config.ts'
 // `output.paths` rewriting the externalized `@src/*` specifiers to the built sibling
 // src environments (relative to `dist/bin/`), so the emitted bin resolves at runtime.
 export default defineConfig(
-	srcBin({
+	mergeConfig(srcBin(), {
 		build: {
 			rolldownOptions: {
 				output: {
