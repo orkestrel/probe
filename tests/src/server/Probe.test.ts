@@ -152,7 +152,7 @@ function varyDraft(draft: Draft): Draft {
 
 describe.sequential('probe', () => {
 	it(
-		'mints receipts only when every stage executes cleanly and returns admitted path issues',
+		'mints receipts only when every stage executes cleanly, including for a control that shares no path with its case, and returns admitted path issues',
 		{ timeout: 60_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
@@ -172,6 +172,17 @@ describe.sequential('probe', () => {
 			const unmapped = {
 				path: 'tests/unmapped.test.ts',
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+			}
+			// Broken code at a path the case never names, paired with a test the case never declares.
+			// Nothing about this control is a mutation of its case, which is the pairing the guide says
+			// probe admits and the reader judges.
+			const foreign = {
+				path: 'src/core/probe-receipt-foreign.ts',
+				text: "export const FOREIGN: number = 'bad'\n",
+			}
+			const foreignTest = {
+				path: 'tmp/probe/probe-foreign.test.ts',
+				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(3 * 3).toBe(9))\n",
 			}
 			try {
 				const minted = await probe.prove({
@@ -194,6 +205,16 @@ describe.sequential('probe', () => {
 						test,
 						stage: 'type',
 						reason: 'this control is deliberately clean',
+					},
+				})
+				const unrelated = await probe.prove({
+					project: 'configs/src/tsconfig.core.json',
+					case: { files: [clean], test },
+					control: {
+						files: [foreign],
+						test: foreignTest,
+						stage: 'type',
+						reason: 'a source file the case never names assigns a string to a number',
 					},
 				})
 				const unexecuted = await probe.prove({
@@ -224,6 +245,11 @@ describe.sequential('probe', () => {
 				})
 				expect(minted.receipt).toMatch(/^probe:/)
 				expect(minted.reason).toBe('the source assigns a string to a number')
+				// The control shares neither path with the case, so the receipt it earned is evidence
+				// that relatedness is no receipt condition.
+				expect(foreign.path).not.toBe(clean.path)
+				expect(foreignTest.path).not.toBe(test.path)
+				expect(unrelated.receipt).toMatch(/^probe:/)
 				expect(unbroken.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
 				expect(unexecuted.case.find((check) => check.stage === 'runtime')?.issues).toEqual([

@@ -173,6 +173,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | -------------------------- | -------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `normalizePath`            | function | `(path: string) => string`                                                                  | Rewrites a path into the forward-slash spelling this package compares and reports paths in.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `resolveWorkspaceFile`     | function | `(workspace: string, target: string, mutate?: boolean) => string`                           | Resolves a workspace-relative path to an absolute one and throws when it escapes the workspace. Under `mutate` it refuses a symbolic link as `workspace`/`refused`, refuses as `claimant`/`refused` an inspection fault whose code is `ENAMETOOLONG` or `ERR_INVALID_ARG_VALUE`, and translates every other native path-inspection fault to `workspace`/`malformed` with the native fault on `cause`. A host that reports an absent-file code for an overlong component instead — Windows reports `ENOENT` — reaches no refusal here, and `isRefusedName` classifies that name at the create. |
+| `overwriteFile`            | function | `(file: string, text: string) => void`                                                      | Overwrites an existing file through a descriptor opened `O_WRONLY \| O_TRUNC \| O_NOFOLLOW`, so a symbolic link standing at the final component refuses the open and a target that has gone fails `ENOENT` rather than being recreated. The final component is open on a host whose Node build defines no `O_NOFOLLOW`.                                                                                                                                                                                                                                                                       |
 | `isRefusedName`            | function | `(file: string, error: unknown) => boolean`                                                 | Reports whether a fault means the host refuses a caller-supplied name for creation: `ENAMETOOLONG`, `ERR_INVALID_ARG_VALUE` on a path carrying a NUL byte, or `ENOENT` raised while the parent stats as a directory. Never throws, whatever the fault's own property reads do, and applies no length or character policy of its own.                                                                                                                                                                                                                                                          |
 | `relativeWorkspaceFile`    | function | `(workspace: string, file: string) => string`                                               | Projects an absolute path into the forward-slash workspace-relative form issues expose.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `relativeWorkspaceMessage` | function | `(workspace: string, message: string) => string`                                            | Removes every spelling of the workspace root from the paths a tool's message names, at each path it begins.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -623,10 +624,10 @@ Further limits belong beside those:
 - **A control need not be a mutation of its case, and probe applies no relatedness rule.** `Control`
   carries its own `files` and `test`, so a caller can pair a clean case with unrelated broken code
   and satisfy every receipt condition. Any approximation of relatedness strict enough to catch that
-  pairing also refuses controls this package deliberately admits, so none is applied. The one
-  control `prove` refuses is the one repeating the whole case byte for byte, and that refusal
-  answers nondeterminism rather than relatedness. **Judging a control against its case is the
-  reader's obligation.** The claim digest binds the case and the control together, so the pairing a
+  pairing also refuses controls this package deliberately admits, so none is applied. `prove`
+  refuses only a control repeating the whole case byte for byte, and that refusal answers
+  nondeterminism rather than relatedness. **Judging a control against its case is the reader's
+  obligation.** The claim digest binds the case and the control together, so the pairing a
   token was minted over is there to be read.
 - **The overlay is the only thing that serves a candidate's bytes to the runtime stage.** A Vite
   filesystem module cache that answered a covered path from disk would run the file the workspace
@@ -663,14 +664,22 @@ link belongs to the target tree. A native fault while inspecting an existing com
 
 The walk and the write that follows it are separate calls, so a concurrent process can move a
 component between them. What that reaches is not uniform, and the difference is worth stating
-exactly. **The final component is closed.** probe creates every file it puts in a target with the
-`wx` flag, which fails rather than following a symbolic link or overwriting a file that appeared
-after the walk, and an unlink names the final component itself rather than what it points at.
-**A directory component is open.** A directory swapped for a symbolic link after the walk redirects
-the create, and closing that needs a traversal pinned to file descriptors: Node exposes
+exactly. **Exclusive creation and final-component removal are closed.** probe creates every file
+it puts in a target with the `wx` flag, which fails rather than following a symbolic link or
+overwriting a file that appeared after the walk, and an unlink names the final component itself
+rather than what it points at. **An overwrite refuses symbolic-link and gone-file swaps.** A boot
+dependency is overwritten through a descriptor opened `O_WRONLY | O_TRUNC | O_NOFOLLOW`, which
+fails on a symbolic link standing at that component and on a target that has gone since the walk
+saw it — while **hard-link aliasing remains open**: a regular file swapped for a hard link to a
+same-filesystem file outside the workspace passes that flag set, because `O_NOFOLLOW` refuses
+symbolic links, not hard-linked inodes. Where a host's Node build defines no `O_NOFOLLOW`, that
+flag contributes nothing to the flag set and an overwrite there follows a link the walk did not
+see. **A directory component is open.** A directory swapped for a symbolic link after the walk
+redirects the create, and closing that needs a traversal pinned to file descriptors: Node exposes
 `O_NOFOLLOW` and no descriptor-relative call to apply it through, so this package cannot walk and
-write through one set of descriptors. Read the physical guarantee as covering the claim inputs and
-the target tree as the walk inspected it, plus the final component at the moment it is created.
+write through one set of descriptors. Read physical containment as covering the claim inputs and
+the target tree as the walk inspected it, plus what the closed set holds at the moment probe
+writes or unlinks a final component.
 
 **A read is contained lexically only, and that is the reach to plan for.** A candidate path beneath
 an in-workspace symbolic link resolves to a file outside the workspace, and TypeScript and Oxlint
@@ -771,13 +780,14 @@ than the probe's — it decides which process reads the stdio, not when the engi
   clears when that warm rejects, so the fault reaches the caller as the target tree's own —
   `origin: 'workspace'`, `code: 'malformed'`, naming `vite.config.ts` in `context` — rather than
   being masked by an aging resident runner. The next `inspect` finds the slot empty and warms fresh,
-  reading the configuration again, so a workspace repaired between two calls serves the second one.
+  reading the configuration again, so a workspace repaired after the failed call serves the call
+  that follows it.
   One call never loops through a second warm of its own, and no failure leaves the stage permanently
   refusing. This is a recovery path rather than a reload: a warm that succeeded is kept, so the
   preceding entry's rule about editing `vite.config.ts` stands.
 - **Admission.** One queue per stage admits inspections in arrival order, one at a time. The
   `deadline` covers active work rather than queue wait. Caller-named project resolution shares that
-  order with type inspections, so a resolve never runs between two of one inspection's own
+  order with type inspections, so a resolve never runs partway through one inspection's own
   candidate checks.
 - **Expiry.** `ProbeOptions.deadline` is the coordinator's budget for one active stage inspection,
   and it lives outside the worker because a Vitest `testTimeout` cannot fire while a synchronous
@@ -785,10 +795,11 @@ than the probe's — it decides which process reads the stdio, not when the engi
   queued inspection begins, and emits `expire` with the claim that expired. A failed boot is
   replaced the same way: the next claim runs the controls again rather than inheriting a refusal.
 - **The budget is not the ceiling.** The deadline fires on the host's event loop, and a language
-  service checks one candidate synchronously, so a type inspection that is inside such a call when
-  the budget expires answers at the end of that call. The type stage hands the loop back at each
-  candidate boundary to keep that hold to one candidate, so an overrun is bounded by the budget plus
-  the longest single language-service call. The lint stage's exchanges cross a child process and the
+  service checks one candidate synchronously, so a type inspection that is inside such a check when
+  the budget expires answers at the end of that candidate's checks. The type stage hands the loop
+  back at each candidate boundary to keep that hold to one candidate, so an overrun is bounded by
+  the budget plus the longest candidate diagnostic batch — the syntactic and semantic readings one
+  candidate takes before the loop returns. The lint stage's exchanges cross a child process and the
   runtime stage's run happens in Vitest workers, so neither holds the loop and neither adds to the
   budget. Size `deadline` against the work, and expect a reported elapsed time to exceed it by one
   candidate's check.

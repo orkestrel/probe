@@ -1,6 +1,6 @@
 import type { Draft } from '@src/core'
 import { EventEmitter } from 'node:events'
-import { lstatSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join, relative, resolve, sep } from 'node:path'
 import { compileGuard } from '@orkestrel/contract'
@@ -21,6 +21,7 @@ import {
 	matchesWorkspaceModule,
 	normalizePath,
 	normalizeValue,
+	overwriteFile,
 	parseContentLength,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
@@ -117,6 +118,18 @@ describe('server helper examples', () => {
 		process.on('SIGTERM', () => {})
 		releaseListeners(process, capture)
 		expect(process.listenerCount('SIGTERM')).toBe(capture.get('SIGTERM')?.length)
+		// The overwrite block writes, so it runs against a directory this proof owns rather than
+		// against the workspace the illustrative root stands for.
+		const scratch = createScratch({ prefix: 'probe-helper-example-' })
+		try {
+			scratch.ensure('tmp/probe')
+			const file = resolveWorkspaceFile(scratch.path, 'tmp/probe/arm-type.ts', true)
+			writeFileSync(file, 'export type Signal = string\n', { encoding: 'utf8', flag: 'wx' })
+			overwriteFile(file, 'export type Signal = number\n')
+			expect(readFileSync(file, 'utf8')).toBe('export type Signal = number\n')
+		} finally {
+			scratch.destroy()
+		}
 	})
 })
 
@@ -349,6 +362,56 @@ describe('server path helpers', () => {
 				code: 'refused',
 				context: { path: 'link/value.ts' },
 			})
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// The containment walk and the write that follows it are separate calls, so this plants what the
+	// walk cannot see: a symbolic link standing where it found a file. The link's destination is
+	// absent under a directory that exists, so a write that follows the link creates that destination
+	// and the redirection is visible in the tree rather than inferred from a fault code.
+	it('refuses to overwrite a final component swapped for a symbolic link', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-overwrite-link-' })
+		try {
+			const elsewhere = resolve(scratch.ensure('elsewhere'), 'value.ts')
+			const target = scratch.link('boot/value.ts', elsewhere)
+			expect(lstatSync(target).isSymbolicLink()).toBe(true)
+			expect(existsSync(elsewhere)).toBe(false)
+
+			// The fault names the path the write was aimed at, so it is this open's refusal rather than
+			// an incidental failure elsewhere in the call. Which code the host reports for it is the
+			// host's choice, and a literal in its place would describe the host this ran on.
+			expect(captureError(() => overwriteFile(target, 'export const VALUE = 2\n'))).toMatchObject({
+				path: target,
+			})
+			// The bytes reached neither the link's destination nor the link's own path, so the swap
+			// redirected nothing and wrote nothing.
+			expect(existsSync(elsewhere)).toBe(false)
+			expect(lstatSync(target).isSymbolicLink()).toBe(true)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('overwrites a file the walk found and refuses one that has since gone', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-overwrite-' })
+		try {
+			const target = scratch.write('boot/value.ts', 'export const VALUE = 1\n')
+			overwriteFile(target, 'export const VALUE = 22\n')
+			expect(readFileSync(target, 'utf8')).toBe('export const VALUE = 22\n')
+			// Shorter text leaves no tail of the longer text behind, which is what `O_TRUNC` decides
+			// rather than the position a descriptor opens at.
+			overwriteFile(target, 'export const VALUE = 3\n')
+			expect(readFileSync(target, 'utf8')).toBe('export const VALUE = 3\n')
+
+			scratch.remove('boot/value.ts')
+			expect(captureError(() => overwriteFile(target, 'export const VALUE = 4\n'))).toMatchObject({
+				code: 'ENOENT',
+			})
+			// The omitted `O_CREAT` is what refuses it, so a target that vanished after the walk is
+			// reported rather than recreated.
+			expect(existsSync(target)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}

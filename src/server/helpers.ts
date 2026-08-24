@@ -3,7 +3,16 @@ import type { ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
 import type * as TypeScript from 'typescript'
 import type * as VitestNode from 'vitest/node'
-import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import {
+	closeSync,
+	constants,
+	lstatSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+	writeFileSync,
+} from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
@@ -118,6 +127,47 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		})
 	}
 	return file
+}
+
+/**
+ * Overwrites a file that already exists, through a descriptor that refuses a symbolic link at the
+ * final component.
+ *
+ * @remarks
+ * A containment walk and the write that follows it are separate calls, so a process that swaps the
+ * final component between them decides where the bytes land. `writeFileSync` opens with the default
+ * `w` flag, which follows a symbolic link at that component and creates the file when it is absent,
+ * so the walk's reading does not bind the write. Opening `O_WRONLY | O_TRUNC | O_NOFOLLOW` moves
+ * that decision into the call that writes: a link at the final component refuses the open, and the
+ * omitted `O_CREAT` fails `ENOENT` for a target that has gone since the walk saw it. This is the
+ * mutating counterpart of the `wx` flag every create in this package uses. Which code the refusal
+ * carries is the host's; Linux with Node v22.22.2 reported `ELOOP` on 2026-08-24.
+ *
+ * A directory component stays open, because Node exposes no descriptor-relative call to walk and
+ * write through one set of descriptors. Where a host's Node build defines no `O_NOFOLLOW`, that flag
+ * contributes nothing to the flag set and the final component is open on that host too.
+ *
+ * @param file - The absolute path to overwrite
+ * @param text - The text to write
+ * @returns Nothing
+ * @throws The host's own fault when the final component is a symbolic link, when the file is
+ * absent, or when the host refuses the descriptor
+ *
+ * @example
+ * ```ts
+ * const file = resolveWorkspaceFile('/srv/checkout', 'tmp/probe/arm-type.ts', true)
+ * writeFileSync(file, 'export type Signal = string\n', { encoding: 'utf8', flag: 'wx' })
+ * overwriteFile(file, 'export type Signal = number\n')
+ * readFileSync(file, 'utf8') // 'export type Signal = number\n'
+ * ```
+ */
+export function overwriteFile(file: string, text: string): void {
+	const descriptor = openSync(file, constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW)
+	try {
+		writeFileSync(descriptor, text, 'utf8')
+	} finally {
+		closeSync(descriptor)
+	}
 }
 
 /**

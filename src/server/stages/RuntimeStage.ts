@@ -87,9 +87,12 @@ import { Overlay } from '../Overlay.js'
  * test path the host refuses to create is a claimant failure with `code: 'refused'`. Each is thrown
  * rather than reported, because a test that never ran is no evidence about the candidate.
  *
- * The write path's physical-containment guarantee covers the claim inputs and the target tree as
- * inspected. A concurrent process that mutates a path component between the final inspection and
- * the write is outside that guarantee.
+ * Physical containment covers the claim inputs, the target tree as the walk inspected it, and the
+ * final component at the moment this stage writes or unlinks it: a specification is created with the
+ * `wx` flag, which fails rather than following a symbolic link that appeared after the walk, and an
+ * unlink names the final component itself rather than what it points at. A directory component
+ * swapped for a symbolic link between the walk and the write stays open, because Node exposes no
+ * descriptor-relative call to pin the walk and the write to one set of descriptors.
  *
  * @example
  * ```ts

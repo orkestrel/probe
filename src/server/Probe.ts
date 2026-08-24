@@ -31,6 +31,7 @@ import {
 	computeDigest,
 	createRevisionFile,
 	describeUnknown,
+	overwriteFile,
 	readWorkspaceManifest,
 	resolveWorkspaceFile,
 } from './helpers.js'
@@ -310,11 +311,7 @@ export class Probe implements ProbeInterface {
 				)
 			}
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
-			writeFileSync(
-				typeDependency,
-				formatSpecification('export type Signal = number\n', revision),
-				'utf8',
-			)
+			overwriteFile(typeDependency, formatSpecification('export type Signal = number\n', revision))
 			const afterType = await this.#inspect(typeClaim.control, typeClaim)
 			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
 			const tolerant = afterType.find((check) => check.stage === 'runtime')
@@ -339,10 +336,9 @@ export class Probe implements ProbeInterface {
 				)
 			}
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, runtimeDependency), true)
-			writeFileSync(
+			overwriteFile(
 				runtimeDependency,
 				formatSpecification("export const SIGNAL = 'after'\n", revision),
-				'utf8',
 			)
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
 			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
