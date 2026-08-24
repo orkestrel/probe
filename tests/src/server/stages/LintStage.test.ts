@@ -2,7 +2,7 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
-import { waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
@@ -321,8 +321,10 @@ describe('lint stage', () => {
 			await stage.destroy()
 			await expect(held).rejects.toThrow('The lint stage has been destroyed')
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -445,8 +447,10 @@ describe('lint stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -479,8 +483,10 @@ describe('lint stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -513,8 +519,10 @@ describe('lint stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -566,8 +574,10 @@ describe('lint stage', () => {
 				})
 				expect(elsewhere.issues).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -603,8 +613,10 @@ describe('lint stage', () => {
 				expect(served.stage).toBe('lint')
 				expect(served.issues).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -818,8 +830,10 @@ describe('lint stage', () => {
 					}),
 				).rejects.toThrow(`The Oxlint language server exited with ${ending}`)
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -853,8 +867,10 @@ describe('lint stage', () => {
 					}),
 				).rejects.toThrow('The Oxlint language server exited with code 7')
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -926,8 +942,10 @@ describe('lint stage', () => {
 				).rejects.toThrow('EPIPE')
 				await expect(stage.destroy()).resolves.toBeUndefined()
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)

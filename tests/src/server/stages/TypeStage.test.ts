@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { captureError, waitForDelay } from '@orkestrel/test'
+import { captureError, createTeardown, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { TypeStage, normalizePath } from '@src/server'
 import { isProbeError } from '@src/core'
@@ -58,8 +58,10 @@ describe('type stage', () => {
 				cause: expect.any(Error),
 			})
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -135,8 +137,10 @@ describe('type stage', () => {
 				expect(before.issues).toStrictEqual([])
 				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
-				await stage.destroy()
-				rmSync(dependencyFile, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(dependencyFile, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -210,8 +214,10 @@ describe('type stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -322,8 +328,10 @@ describe('type stage', () => {
 				expect(check.issues).toStrictEqual([])
 				expect(readFileSync(candidateFile, 'utf8')).toBe(disk)
 			} finally {
-				await stage.destroy()
-				rmSync(candidateFile, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(candidateFile, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -377,10 +385,12 @@ describe('type stage', () => {
 				expect(readFileSync(secondFile, 'utf8')).toBe(diskSecond)
 				expect(later.issues).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				rmSync(testFile, { force: true })
-				rmSync(firstFile, { force: true })
-				rmSync(secondFile, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(secondFile, { force: true }))
+				teardown.add(() => rmSync(firstFile, { force: true }))
+				teardown.add(() => rmSync(testFile, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -421,8 +431,10 @@ describe('type stage', () => {
 				await stage.destroy()
 				await expect(stage.inspect(subject)).rejects.toThrow('The type stage has been destroyed')
 			} finally {
-				await stage.destroy()
-				rmSync(candidateFile, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(candidateFile, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -476,9 +488,11 @@ describe('type stage', () => {
 			// the rewritten configuration and cannot grow past that slot.
 			expect(recycled.issues).toStrictEqual([])
 		} finally {
-			await stage.destroy()
-			rmSync(firstFile, { force: true })
-			rmSync(secondFile, { force: true })
+			const teardown = createTeardown()
+			teardown.add(() => rmSync(secondFile, { force: true }))
+			teardown.add(() => rmSync(firstFile, { force: true }))
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -572,8 +586,10 @@ describe('type stage project resolution', () => {
 				await replacement.destroy()
 			}
 		} finally {
-			await stage.destroy()
-			rmSync(resolve(ROOT, directory), { recursive: true, force: true })
+			const teardown = createTeardown()
+			teardown.add(() => rmSync(resolve(ROOT, directory), { recursive: true, force: true }))
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 

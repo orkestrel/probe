@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
@@ -345,8 +345,10 @@ describe.sequential('probe', () => {
 					}),
 				).rejects.toMatchObject(armed)
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -473,8 +475,10 @@ describe.sequential('probe', () => {
 					}),
 				])
 			} finally {
-				await probe.destroy()
-				rmSync(blocker, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(blocker, { force: true }))
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -523,8 +527,10 @@ describe.sequential('probe', () => {
 				cause: expect.any(Error),
 			})
 		} finally {
-			await probe.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => probe.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -576,8 +582,10 @@ describe.sequential('probe', () => {
 				context: { name: 'typescript', value: '7.0.2' },
 			})
 		} finally {
-			await probe.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => probe.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -852,8 +860,10 @@ describe.sequential('probe', () => {
 				})
 				expect(served.receipt).toBeTypeOf('string')
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -938,8 +948,10 @@ describe.sequential('probe', () => {
 				const recycled = await probe.prove(second)
 				expect(recycled.case.flatMap((check) => check.issues)).toStrictEqual([])
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1035,8 +1047,10 @@ describe.sequential('probe', () => {
 			])
 			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
-			await probe.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => probe.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -1115,8 +1129,10 @@ describe.sequential('probe', () => {
 				])
 				expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1168,8 +1184,10 @@ describe.sequential('probe', () => {
 					)
 				}
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1228,8 +1246,10 @@ describe.sequential('probe', () => {
 				])
 				expect(verdict.receipt).toBeUndefined()
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1298,8 +1318,10 @@ describe.sequential('probe', () => {
 					}),
 				)
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1572,8 +1594,10 @@ describe.sequential('probe', () => {
 				expect(expirations.count).toBe(0)
 				expect(failures.count).toBe(0)
 			} finally {
-				await probe.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1637,8 +1661,10 @@ describe.sequential('probe', () => {
 				expect(honest.id).not.toBe(repeated.id)
 				expect(repeated.receipt).toBe(honest.receipt)
 			} finally {
-				await probe.destroy()
-				rmSync(resolve(ROOT, lax), { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(resolve(ROOT, lax), { force: true }))
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1703,8 +1729,10 @@ describe.sequential('probe', () => {
 				])
 				expect(forged.digest).toBe(workspace.digest)
 			} finally {
-				await probe.destroy()
-				rmSync(resolve(ROOT, lax), { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(resolve(ROOT, lax), { force: true }))
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1830,8 +1858,10 @@ describe.sequential('probe', () => {
 			expect(local.receipt).toBeTypeOf('string')
 			expect(reported).toBe(local.receipt)
 		} finally {
-			await probe.destroy()
-			rmSync(resolve(ROOT, spec), { force: true })
+			const teardown = createTeardown()
+			teardown.add(() => rmSync(resolve(ROOT, spec), { force: true }))
+			teardown.add(() => probe.destroy())
+			await teardown.destroy()
 		}
 	})
 })

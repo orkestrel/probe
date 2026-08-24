@@ -9,6 +9,7 @@ import {
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
 } from '@src/server'
+import { createTeardown } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
@@ -168,7 +169,7 @@ describe('probe error', () => {
 // failure this package raises most often is not one it constructs — it is a dependency's own,
 // caught and translated — so these run the paths and read what came back.
 describe('failure adoption', () => {
-	it('classifies every failure path a test can drive without a resident tool', () => {
+	it('classifies every failure path a test can drive without a resident tool', async () => {
 		const workspace = createScratch({ prefix: 'probe-adoption-workspace-' })
 		const outside = createScratch({ prefix: 'probe-adoption-outside-' })
 		try {
@@ -278,8 +279,10 @@ describe('failure adoption', () => {
 			const translated = raiseFailure(() => readWorkspaceManifest(workspace.path, 'unparsable'))
 			expect(isProbeError(translated) && translated.cause instanceof Error).toBe(true)
 		} finally {
-			workspace.destroy()
-			outside.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => outside.destroy())
+			teardown.add(() => workspace.destroy())
+			await teardown.destroy()
 		}
 	})
 

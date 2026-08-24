@@ -18,7 +18,7 @@ import { open } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { captureError, waitForCondition } from '@orkestrel/test'
+import { captureError, createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
 import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
@@ -114,8 +114,10 @@ describe('runtime stage', () => {
 				cause: expect.any(Error),
 			})
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -195,8 +197,10 @@ describe('runtime stage', () => {
 					line: expect.any(Number),
 				})
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -234,9 +238,11 @@ describe('runtime stage', () => {
 				])
 				expect(readdirSync(outside.path)).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
-				outside.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => outside.destroy())
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -430,8 +436,10 @@ describe('runtime stage', () => {
 				},
 			])
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -458,8 +466,10 @@ describe('runtime stage', () => {
 				expect(before.issues).toStrictEqual([])
 				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
-				await stage.destroy()
-				rmSync(dependency, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(dependency, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -497,8 +507,10 @@ describe('runtime stage', () => {
 				expect(before.issues).toStrictEqual([])
 				expect(after.issues.length).toBeGreaterThan(0)
 			} finally {
-				await stage.destroy()
-				rmSync(dependency, { force: true })
+				const teardown = createTeardown()
+				teardown.add(() => rmSync(dependency, { force: true }))
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -528,8 +540,10 @@ describe('runtime stage', () => {
 				expect(check.issues).toStrictEqual([])
 				expect(existsSync(resolve(scratch.path, 'src/value.ts'))).toBe(false)
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -567,8 +581,10 @@ describe('runtime stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -594,8 +610,10 @@ describe('runtime stage', () => {
 			// exists, and the path a claim declares can be as deep as the claim likes.
 			expect(existsSync(resolve(directory, 'deep'))).toBe(true)
 		} finally {
-			await stage.destroy()
-			rmSync(directory, { force: true, recursive: true })
+			const teardown = createTeardown()
+			teardown.add(() => rmSync(directory, { force: true, recursive: true }))
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -630,8 +648,10 @@ describe('runtime stage', () => {
 			// directory this stage could not create from a file it could not write.
 			expect(check.issues[0]?.message).toContain('mkdir')
 		} finally {
-			await stage.destroy()
-			rmSync(blocker, { force: true })
+			const teardown = createTeardown()
+			teardown.add(() => rmSync(blocker, { force: true }))
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -699,8 +719,10 @@ describe('runtime stage', () => {
 				expect(restored.issues).toStrictEqual([])
 				expect(scratch.read('src/value.ts')).toBe(disk)
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -728,8 +750,10 @@ describe('runtime stage', () => {
 			expect(check.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -765,8 +789,10 @@ describe('runtime stage', () => {
 				},
 			])
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -795,8 +821,10 @@ describe('runtime stage', () => {
 				})
 				expect(check.issues).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -833,8 +861,10 @@ describe('runtime stage', () => {
 					},
 				])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -864,8 +894,10 @@ describe('runtime stage', () => {
 			expect(check.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -901,8 +933,10 @@ describe('runtime stage', () => {
 			expect(second.issues).toStrictEqual([])
 			expect(scratch.read('src/value.ts')).toBe(disk)
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -956,8 +990,10 @@ describe('runtime stage', () => {
 				context: { stage: 'runtime', path: 'tmp/probe/missing-project.test.ts' },
 			})
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -1025,8 +1061,10 @@ describe('runtime stage', () => {
 						}
 						samples.push({ unresolved, files })
 					} finally {
-						rmSync(file, { force: true })
-						await vitest.close()
+						const teardown = createTeardown()
+						teardown.add(() => vitest.close())
+						teardown.add(() => rmSync(file, { force: true }))
+						await teardown.destroy()
 					}
 				}
 				expect(samples[1]?.unresolved).toBe(samples[0]?.unresolved)
@@ -1084,8 +1122,10 @@ describe('runtime stage', () => {
 			// Releases a specification still parked because an assertion above failed, so teardown
 			// tears down rather than waiting out the stage's own bound.
 			writeFileSync(release, '', 'utf8')
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 
@@ -1174,9 +1214,13 @@ describe('runtime stage', () => {
 				expect(cleanup).toBe(baseline)
 				await expect(running).resolves.toMatchObject({ issues: [] })
 			} finally {
-				if (cache !== undefined) rmSync(cache, { force: true })
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				teardown.add(() => {
+					if (cache !== undefined) rmSync(cache, { force: true })
+				})
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1268,8 +1312,10 @@ describe('runtime stage', () => {
 					readdirSync(resolve(scratch.path, 'tmp/probe')).filter((file) => file.includes(marker)),
 				).toStrictEqual([])
 			} finally {
-				await stage.destroy()
-				scratch.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1300,17 +1346,21 @@ describe('runtime stage', () => {
 					'The runtime stage could not delete the generated specification',
 				)
 			} finally {
-				await stage.destroy()
-				// A fresh clone has no `tmp/probe`, and an unguarded read throws there and replaces
-				// whatever the inspection actually reported.
-				const directory = resolve(ROOT, 'tmp/probe')
-				if (existsSync(directory)) {
-					for (const file of readdirSync(directory)) {
-						if (file.includes(marker)) {
-							rmSync(resolve(directory, file), { force: true, recursive: true })
+				const teardown = createTeardown()
+				teardown.add(() => {
+					// A fresh clone has no `tmp/probe`, and an unguarded read throws there and replaces
+					// whatever the inspection actually reported.
+					const directory = resolve(ROOT, 'tmp/probe')
+					if (existsSync(directory)) {
+						for (const file of readdirSync(directory)) {
+							if (file.includes(marker)) {
+								rmSync(resolve(directory, file), { force: true, recursive: true })
+							}
 						}
 					}
-				}
+				})
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1341,15 +1391,19 @@ describe('runtime stage', () => {
 					}),
 				])
 			} finally {
-				await stage.destroy()
-				const directory = resolve(ROOT, 'tmp/probe')
-				if (existsSync(directory)) {
-					for (const file of readdirSync(directory)) {
-						if (file.includes(marker)) {
-							rmSync(resolve(directory, file), { force: true, recursive: true })
+				const teardown = createTeardown()
+				teardown.add(() => {
+					const directory = resolve(ROOT, 'tmp/probe')
+					if (existsSync(directory)) {
+						for (const file of readdirSync(directory)) {
+							if (file.includes(marker)) {
+								rmSync(resolve(directory, file), { force: true, recursive: true })
+							}
 						}
 					}
-				}
+				})
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1450,8 +1504,10 @@ describe('runtime stage', () => {
 					SIGTERM: process.listenerCount('SIGTERM'),
 				}).toStrictEqual(before)
 			} finally {
-				await first.destroy()
-				await second.destroy()
+				const teardown = createTeardown()
+				teardown.add(() => second.destroy())
+				teardown.add(() => first.destroy())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -1557,8 +1613,10 @@ describe('runtime stage', () => {
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/keeper.test.ts'))).toBe(true)
 			expect(existsSync(resolve(scratch.path, 'tmp/probe/notes.probe-draft.ts'))).toBe(true)
 		} finally {
-			await stage.destroy()
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 })

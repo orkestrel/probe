@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
-import { waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { readSignalEnding } from '../../setupServer.js'
@@ -141,8 +141,12 @@ describe('bin entry', () => {
 			)
 			expect(reported).not.toContain('ProbeError:')
 		} finally {
-			if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => {
+				if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+			})
+			await teardown.destroy()
 		}
 	})
 
@@ -339,17 +343,23 @@ describe('bin entry', () => {
 				expect(call).toContain('"text":"probe ')
 				expect(call).not.toContain('"text":"\\"probe ')
 			} finally {
-				output.close()
-				if (child.exitCode === null) {
-					const exited = new Promise<void>((resolveExit) => {
-						child.once('exit', () => resolveExit())
-					})
-					child.kill('SIGTERM')
-					await exited
-				}
-				try {
-					rmdirSync(directory)
-				} catch {}
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -408,10 +418,14 @@ describe('bin entry', () => {
 			expect(text.startsWith('probe ')).toBe(true)
 			expect(text.trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
 		} finally {
-			await client.disconnect()
-			try {
-				rmdirSync(directory)
-			} catch {}
+			const teardown = createTeardown()
+			teardown.add(() => {
+				try {
+					rmdirSync(directory)
+				} catch {}
+			})
+			teardown.add(() => client.disconnect())
+			await teardown.destroy()
 		}
 	})
 
@@ -469,10 +483,14 @@ describe('bin entry', () => {
 				expect(text.startsWith('probe ')).toBe(true)
 				expect(text.trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
 			} finally {
-				await client.disconnect()
-				try {
-					rmdirSync(directory)
-				} catch {}
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(() => client.disconnect())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -555,18 +573,24 @@ describe('bin entry', () => {
 				})
 				expect(readFileSync(diagnostic, 'utf8')).toContain('worker-stderr-marker')
 			} finally {
-				output.close()
-				if (child.exitCode === null) {
-					const exited = new Promise<void>((resolveExit) => {
-						child.once('exit', () => resolveExit())
-					})
-					child.kill('SIGTERM')
-					await exited
-				}
-				rmSync(diagnostic, { force: true })
-				try {
-					rmdirSync(directory)
-				} catch {}
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(() => rmSync(diagnostic, { force: true }))
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
 			}
 		},
 	)
@@ -624,11 +648,15 @@ describe('bin entry', () => {
 					expect(elapsed).toBeLessThan(TEARDOWN_BOUND)
 					expect(readWorkbench(directory)).toStrictEqual([])
 				} finally {
-					if (child.exitCode === null && child.signalCode === null) {
-						child.kill('SIGKILL')
-						await exited
-					}
-					scratch.destroy()
+					const teardown = createTeardown()
+					teardown.add(() => scratch.destroy())
+					teardown.add(async () => {
+						if (child.exitCode === null && child.signalCode === null) {
+							child.kill('SIGKILL')
+							await exited
+						}
+					})
+					await teardown.destroy()
 				}
 			},
 		)

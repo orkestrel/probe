@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
-import { captureError, createRecorder, waitForDelay } from '@orkestrel/test'
+import { captureError, createRecorder, createTeardown, waitForDelay } from '@orkestrel/test'
 import { createToolManager } from '@orkestrel/tool'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
@@ -65,9 +65,15 @@ describe('probe server', () => {
 				await waitForDelay(20)
 				expect(reader.calls.map((call) => String(call[0]))).toStrictEqual(['probe'])
 			} finally {
-				process.stdin.removeListener('data', reader.handler)
-				if (initial) process.stdin.pause()
-				else process.stdin.resume()
+				const teardown = createTeardown()
+				teardown.add(() => {
+					if (initial) process.stdin.pause()
+					else process.stdin.resume()
+				})
+				teardown.add(() => {
+					process.stdin.removeListener('data', reader.handler)
+				})
+				await teardown.destroy()
 			}
 		},
 	)
@@ -184,8 +190,14 @@ describe('probe server', () => {
 				expect(interrupt.count).toBe(1)
 				expect(terminate.count).toBe(1)
 			} finally {
-				process.removeListener('SIGINT', interrupt.handler)
-				process.removeListener('SIGTERM', terminate.handler)
+				const teardown = createTeardown()
+				teardown.add(() => {
+					process.removeListener('SIGTERM', terminate.handler)
+				})
+				teardown.add(() => {
+					process.removeListener('SIGINT', interrupt.handler)
+				})
+				await teardown.destroy()
 			}
 		},
 	)
@@ -224,9 +236,15 @@ describe('probe server', () => {
 				await waitForDelay(20)
 				expect(reader.calls.map((call) => String(call[0]))).toStrictEqual(['probe'])
 			} finally {
-				process.stdin.removeListener('data', reader.handler)
-				if (initial) process.stdin.pause()
-				else process.stdin.resume()
+				const teardown = createTeardown()
+				teardown.add(() => {
+					if (initial) process.stdin.pause()
+					else process.stdin.resume()
+				})
+				teardown.add(() => {
+					process.stdin.removeListener('data', reader.handler)
+				})
+				await teardown.destroy()
 			}
 		},
 	)
