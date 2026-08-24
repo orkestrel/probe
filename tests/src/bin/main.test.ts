@@ -1,4 +1,5 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
+import { version } from '../../../package.json' with { type: 'json' }
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -297,7 +298,7 @@ describe('bin entry', () => {
 							id: 1,
 							result: expect.objectContaining({
 								protocolVersion: '2025-06-18',
-								serverInfo: { name: 'probe', version: '0.0.1' },
+								serverInfo: { name: 'probe', version },
 							}),
 						}),
 						expect.objectContaining({
