@@ -2,11 +2,17 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
-import { waitForDelay } from '@orkestrel/test'
+import { waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
+import {
+	isProcessLive,
+	killFixtureServer,
+	readFixtureServer,
+	waitForFixtureServer,
+} from '../../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -141,30 +147,6 @@ const CLOSER = [
 	'setTimeout(() => {}, 10_000)',
 ].join('\n')
 
-// Reads the process id the fixture server announced. The stage owns its child privately, so this
-// is the door a real failure comes through rather than an accessor added to serve a test.
-function readFixtureServer(scratch: ScratchInterface): number {
-	const announced = scratch.read('server.pid')
-	if (announced === undefined) throw new Error('The fixture server never announced its process id')
-	return Number.parseInt(announced, 10)
-}
-
-// Waits for the fixture server to announce itself, so a teardown under test races a server that
-// has accepted the connection rather than a spawn that has not landed yet.
-async function waitForFixtureServer(scratch: ScratchInterface): Promise<number> {
-	for (let attempt = 0; attempt < 200; attempt += 1) {
-		const announced = scratch.read('server.pid')
-		if (announced !== undefined) return Number.parseInt(announced, 10)
-		await waitForDelay(50)
-	}
-	throw new Error('The fixture server never announced its process id')
-}
-
-// Kills the language server the stage spawned, by the process id the fixture announced.
-function killFixtureServer(scratch: ScratchInterface): void {
-	process.kill(readFixtureServer(scratch), 'SIGKILL')
-}
-
 // Reads how this host reports a child that ended, phrased the way the lint stage phrases an ending.
 // A kill lands as a signal on one host and as an exit code on another, and the door it came through
 // decides too, so this kills with `process.kill`, the door `killFixtureServer` uses, and the
@@ -224,17 +206,6 @@ async function readInputRefusal(signal?: NodeJS.Signals): Promise<string | undef
 	if (signal === undefined) child.kill('SIGKILL')
 	await ended
 	return refusal
-}
-
-// Whether one process still exists. Signal 0 delivers nothing and reports only reachability, which
-// is how a caller reads the liveness of a child it does not own.
-function isProcessLive(id: number): boolean {
-	try {
-		process.kill(id, 0)
-		return true
-	} catch {
-		return false
-	}
 }
 
 // Everything a settled teardown owes a consumer, read through the public surface alone: teardown
@@ -367,10 +338,11 @@ describe('lint stage', () => {
 			const held = stage.inspect({ files: [], test: source })
 			void held.catch(() => {})
 			try {
-				const deadline = performance.now() + 10_000
-				while (scratch.read('admitted') === undefined && performance.now() < deadline) {
-					await waitForDelay(20)
-				}
+				await waitForCondition(
+					'the lint fixture to admit the progress document',
+					() => scratch.read('admitted') !== undefined,
+					{ budget: 10_000, interval: 20 },
+				)
 				// The protocol peer records `didOpen` and withholds `publishDiagnostics`, so this reads
 				// the gauge after admission and before the result exists.
 				expect(scratch.read('admitted')).toContain('lint-progress.test.ts')

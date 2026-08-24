@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
-import { waitForDelay } from '@orkestrel/test'
+import { waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
+import { readSignalEnding } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -62,13 +63,16 @@ function readArming(directory: string): readonly string[] {
 }
 
 async function waitForArming(directory: string): Promise<readonly string[]> {
-	const deadline = performance.now() + ARMING_TIMEOUT
-	do {
-		const arming = readArming(directory)
-		if (arming.length === 2) return arming
-		await waitForDelay(10)
-	} while (performance.now() < deadline)
-	throw new Error(`Timed out waiting for two arming files in ${directory}`)
+	let arming: readonly string[] = []
+	await waitForCondition(
+		`two arming files in ${directory}`,
+		() => {
+			arming = readArming(directory)
+			return arming.length === 2
+		},
+		{ budget: ARMING_TIMEOUT, interval: 10 },
+	)
+	return arming
 }
 
 // Waits for the boot to finish rather than for the `arm` event, which no observer outside the
@@ -76,32 +80,14 @@ async function waitForArming(directory: string): Promise<readonly string[]> {
 // so their disappearance is the same moment from out here.
 async function waitForArmed(directory: string): Promise<void> {
 	await waitForArming(directory)
-	const deadline = performance.now() + ARMING_TIMEOUT
-	do {
-		if (readArming(directory).length === 0) return
-		await waitForDelay(10)
-	} while (performance.now() < deadline)
-	throw new Error(`Timed out waiting for the boot to end in ${directory}`)
-}
-
-// Reads how this host ends a child that `child.kill` signals, phrased the way the entry's own exit
-// is read. A host that delivers the signal to the child runs whatever handler the child installed,
-// and the child exits under its own code; a host that terminates the child instead reports the
-// signal and runs no handler. `child.kill` is the door the proofs below use, and the door decides,
-// so this reading comes through the same one.
-async function readSignalEnding(
-	signal: NodeJS.Signals,
-	program: string,
-): Promise<{ readonly code: number | null; readonly signal: string | null }> {
-	const child = spawn(process.execPath, ['-e', program], { stdio: ['ignore', 'pipe', 'ignore'] })
-	const ended = new Promise<{ code: number | null; signal: string | null }>((settle) => {
-		child.once('exit', (code, ending) => settle({ code, signal: ending }))
-	})
-	await new Promise<void>((armed) => {
-		child.stdout.once('data', () => armed())
-	})
-	child.kill(signal)
-	return await ended
+	await waitForCondition(
+		`the boot to end in ${directory}`,
+		() => readArming(directory).length === 0,
+		{
+			budget: ARMING_TIMEOUT,
+			interval: 10,
+		},
+	)
 }
 
 // Builds a target the entry can really arm against: a peer-resolution or configuration failure

@@ -18,7 +18,7 @@ import { open } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { captureError, waitForDelay } from '@orkestrel/test'
+import { captureError, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
 import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
@@ -1065,8 +1065,14 @@ describe('runtime stage', () => {
 		})
 		void running.catch(() => {})
 		try {
-			const budget = performance.now() + 30_000
-			while (!existsSync(ready) && performance.now() < budget) await waitForDelay(10)
+			await waitForCondition(
+				'the generated specification to reach its marker',
+				() => existsSync(ready),
+				{
+					budget: 30_000,
+					interval: 10,
+				},
+			)
 			expect(existsSync(ready), 'the generated specification never reached its marker').toBe(true)
 			const claimant = stage.progress
 			writeFileSync(release, '', 'utf8')
@@ -1385,13 +1391,11 @@ describe('runtime stage', () => {
 			})
 			void inspection.catch(() => {})
 			try {
-				for (
-					let attempt = 0;
-					attempt < 500 && !existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready'));
-					attempt += 1
-				) {
-					await waitForDelay(10)
-				}
+				await waitForCondition(
+					'the generated specification to block its own unlink',
+					() => existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready')),
+					{ budget: 5_000, interval: 10 },
+				)
 				expect(existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready'))).toBe(true)
 				await expect(stage.destroy()).resolves.toBeUndefined()
 			} finally {

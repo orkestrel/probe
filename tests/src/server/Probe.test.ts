@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
@@ -1144,14 +1144,16 @@ describe.sequential('probe', () => {
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			let observed: readonly string[] = []
 			try {
-				const deadline = performance.now() + 30_000
-				do {
-					observed = existsSync(directory)
-						? readdirSync(directory).filter((name) => name.startsWith('arm-'))
-						: []
-					if (observed.length === 2) break
-					await waitForDelay(5)
-				} while (performance.now() < deadline)
+				await waitForCondition(
+					'the probe boot dependencies to appear',
+					() => {
+						observed = existsSync(directory)
+							? readdirSync(directory).filter((name) => name.startsWith('arm-'))
+							: []
+						return observed.length === 2
+					},
+					{ budget: 30_000, interval: 5 },
+				)
 				const revision = `probe-${process.pid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 				expect([...observed].sort()).toStrictEqual([
 					expect.stringMatching(new RegExp(`^arm-runtime\\.${revision}\\.ts$`)),

@@ -1,7 +1,86 @@
+import type { ScratchInterface } from '@orkestrel/test/server'
+import { spawn } from 'node:child_process'
 import { statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
+import { waitForCondition } from '@orkestrel/test'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
+
+/**
+ * Reads the process id announced by a fixture server.
+ *
+ * @param scratch - The fixture workspace carrying `server.pid`.
+ * @returns The announced process id.
+ * @throws An `Error` when the fixture server has not announced itself.
+ */
+export function readFixtureServer(scratch: ScratchInterface): number {
+	const announced = scratch.read('server.pid')
+	if (announced === undefined) throw new Error('The fixture server never announced its process id')
+	return Number.parseInt(announced, 10)
+}
+
+/**
+ * Waits for a fixture server to announce its process id.
+ *
+ * @param scratch - The fixture workspace that receives `server.pid`.
+ * @returns The announced process id.
+ * @throws An `Error` when the fixture server does not announce itself within 10 seconds.
+ */
+export async function waitForFixtureServer(scratch: ScratchInterface): Promise<number> {
+	await waitForCondition(
+		'the fixture server to announce its process id',
+		() => scratch.read('server.pid') !== undefined,
+		{ budget: 10_000, interval: 50 },
+	)
+	return readFixtureServer(scratch)
+}
+
+/**
+ * Kills the process announced by a fixture server.
+ *
+ * @param scratch - The fixture workspace carrying `server.pid`.
+ * @returns Nothing.
+ */
+export function killFixtureServer(scratch: ScratchInterface): void {
+	process.kill(readFixtureServer(scratch), 'SIGKILL')
+}
+
+/**
+ * Checks whether a process id is live on this host.
+ *
+ * @param id - The process id to inspect.
+ * @returns True if signal zero reaches the process; false otherwise.
+ */
+export function isProcessLive(id: number): boolean {
+	try {
+		process.kill(id, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Reads how this host reports a signal delivered to a real child.
+ *
+ * @param signal - The signal to deliver after the child announces readiness.
+ * @param program - The child program that announces readiness on standard output.
+ * @returns The child's exit code and ending signal.
+ */
+export async function readSignalEnding(
+	signal: NodeJS.Signals,
+	program: string,
+): Promise<{ readonly code: number | null; readonly signal: string | null }> {
+	const child = spawn(process.execPath, ['-e', program], { stdio: ['ignore', 'pipe', 'ignore'] })
+	const ended = new Promise<{ code: number | null; signal: string | null }>((settle) => {
+		child.once('exit', (code, ending) => settle({ code, signal: ending }))
+	})
+	await new Promise<void>((armed) => {
+		child.stdout.once('data', () => armed())
+	})
+	child.kill(signal)
+	return await ended
+}
 
 // Reads, on the host the suite is running on, whether a create fails because the host refuses a
 // name whose final component is longer than the filesystem accepts. The code the failure carries is
