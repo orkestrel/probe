@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/probe",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"description": "Prove a claim with type, lint, and runtime evidence from the workspace's own toolchain.",
 	"keywords": [
 		"agent",
@@ -94,7 +94,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.7",
-		"@orkestrel/mcp": "^0.0.21",
+		"@orkestrel/mcp": "^0.0.22",
 		"@orkestrel/queue": "^0.0.10",
 		"@orkestrel/timeout": "^0.0.7",
 		"@orkestrel/tool": "^0.0.11"
