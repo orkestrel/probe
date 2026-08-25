@@ -1293,7 +1293,7 @@ describe.sequential('probe', () => {
 	)
 
 	it(
-		'carries a boot stage failure into one observed arming refusal',
+		'surfaces a rejected arming attempt before any claim, and once more for the retry',
 		{ timeout: 60_000 },
 		async () => {
 			const scratch = createScratch()
@@ -1315,8 +1315,25 @@ describe.sequential('probe', () => {
 				on: { error: failures.handler },
 			})
 			try {
-				await expect(
-					probe.prove({
+				// The constructor's attempt rejects with no claim in flight and no `arm` event to
+				// come. A host that waits for `arm` waits forever unless the rejection reaches the
+				// error channel on its own.
+				await waitForCondition(
+					'the rejected arming attempt to reach the error channel',
+					() => failures.count > 0,
+					{ budget: 30_000, interval: 5 },
+				)
+				const booted = failures.calls[0]?.[0]
+				expect(booted).toEqual(
+					expect.objectContaining({
+						origin: 'instrument',
+						code: 'malformed',
+						message:
+							'The probe could not arm: The runtime stage found no configured Vitest project named probe',
+					}),
+				)
+				const thrown = await probe
+					.prove({
 						project: 'tsconfig.json',
 						case: {
 							files: [],
@@ -1334,8 +1351,9 @@ describe.sequential('probe', () => {
 							stage: 'type',
 							reason: 'the probe did not arm',
 						},
-					}),
-				).rejects.toMatchObject({
+					})
+					.catch((error: unknown) => error)
+				expect(thrown).toMatchObject({
 					origin: 'instrument',
 					code: 'malformed',
 					message:
@@ -1346,15 +1364,14 @@ describe.sequential('probe', () => {
 						context: { stage: 'runtime', path: expect.any(String) },
 					}),
 				})
-				expect(failures.count).toBe(1)
-				expect(failures.calls[0]?.[0]).toEqual(
-					expect.objectContaining({
-						origin: 'instrument',
-						code: 'malformed',
-						message:
-							'The probe could not arm: The runtime stage found no configured Vitest project named probe',
-					}),
-				)
+				// The attempt stays retained for retry: this claim ran the boot controls again rather
+				// than replaying the refusal the constructor's attempt left, so its failure is a
+				// second one and the caller reads it as its own.
+				expect(thrown).not.toBe(booted)
+				// One emission per attempt. The failure `prove` reports is the one its own attempt
+				// surfaced, so a host counting faults never counts one refusal twice.
+				expect(failures.count).toBe(2)
+				expect(failures.calls[1]?.[0]).toBe(thrown)
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())

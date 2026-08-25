@@ -348,9 +348,12 @@ export interface Verdict {
  *
  * @remarks
  * `arm` fires when the boot control has reported red and the service will answer calls; a probe
- * arriving before it awaits that step rather than starting a second one. `expire` fires when the
- * coordinator's own deadline destroyed a stage and a replacement took its place, which is the only
- * way a synchronous infinite loop is ever reported.
+ * arriving before it awaits that step rather than starting a second one. An arming attempt that
+ * rejects fires `error` instead, as it rejects, so a host waiting on `arm` reads the refusal rather
+ * than waiting on a state no event describes. The rejected attempt is still retained for retry, and
+ * the next `prove` runs the boot controls again, so a workspace that cannot arm surfaces one `error`
+ * per attempt. `expire` fires when the coordinator's own deadline destroyed a stage and a
+ * replacement took its place, which is the only way a synchronous infinite loop is ever reported.
  *
  * @example
  * ```ts
@@ -364,7 +367,7 @@ export type ProbeEventMap = {
 	readonly prove: readonly [verdict: Verdict]
 	/** The coordinator's deadline fired at one stage and that stage was replaced before this event. */
 	readonly expire: readonly [claim: Claim]
-	/** A fault surfaced for observation. */
+	/** A fault surfaced for observation, once per fault, including a rejected arming attempt. */
 	readonly error: readonly [error: unknown]
 }
 

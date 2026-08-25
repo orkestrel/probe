@@ -759,9 +759,13 @@ than the probe's — it decides which process reads the stdio, not when the engi
 
 - **Arming.** Construction runs boot controls that mutate an imported dependency and refuse
   service unless the type and runtime stages report the change. The `arm` event fires after those
-  controls have reported red and the boot's own files are gone. The controls run under `tmp/probe/`
-  against the root `tsconfig.json`, which is why the Vitest project, its composition in the root
-  configuration, and a `tmp/probe/` the host lets it create gate the boot rather than a claim.
+  controls have reported red and the boot's own files are gone. An attempt that rejects fires `error`
+  instead, carrying the arming refusal as the attempt raises it, so a host waiting on `arm` reads the
+  refusal rather than an event that never arrives. The attempt is still retained for retry, so each
+  attempt surfaces its own `error` and no `prove` reports one refusal twice. The controls run under
+  `tmp/probe/` against the root `tsconfig.json`, which is why the Vitest project, its composition in
+  the root configuration, and a `tmp/probe/` the host lets it create gate the boot rather than a
+  claim.
 - **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
   workspace module and invalidates the ones whose contents moved; the type stage re-reads a file
   whose modification time moved. A warm service that skipped this would return a confident wrong

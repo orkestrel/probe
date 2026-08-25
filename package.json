@@ -19,7 +19,7 @@
 		"url": "git+https://github.com/orkestrel/probe.git"
 	},
 	"bin": {
-		"probe": "./dist/bin/main.js"
+		"probe": "dist/bin/main.js"
 	},
 	"files": [
 		"dist/src",

@@ -71,6 +71,7 @@ export class Probe implements ProbeInterface {
 	readonly #lintQueue: QueueInterface<Inspection, Check>
 	readonly #runtimeQueue: QueueInterface<Inspection, Check>
 	readonly #deadlines = new WeakSet<ProbeError>()
+	readonly #surfaced = new WeakSet<ProbeError>()
 	#typeTail = Promise.resolve()
 	#arming: Promise<void>
 	#closing: Promise<void> | undefined
@@ -162,7 +163,11 @@ export class Probe implements ProbeInterface {
 			this.#emitter.emit('prove', verdict)
 			return verdict
 		} catch (error) {
-			this.#emitter.emit('error', error)
+			// An arming failure reached the error channel as its attempt rejected. Reporting it here
+			// too would show one refused boot as two faults.
+			if (!(error instanceof ProbeError) || !this.#surfaced.has(error)) {
+				this.#emitter.emit('error', error)
+			}
 			throw error
 		}
 	}
@@ -205,11 +210,18 @@ export class Probe implements ProbeInterface {
 			// A boot failure and a claim's own stage failure are otherwise one message: the controls
 			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
 			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
-			throw new ProbeError(`The probe could not arm: ${describeUnknown(error)}`, {
+			const failure = new ProbeError(`The probe could not arm: ${describeUnknown(error)}`, {
 				origin: 'instrument',
 				code: 'malformed',
 				cause: error,
 			})
+			// Surface the refusal as it happens. `arm` never fires for a rejected attempt and the
+			// attempt is retained for the next `prove` to retry, so a host that waits for `arm` and a
+			// host that calls nothing are both told nothing without this. Observation only: the
+			// retry, its timing, and what the next caller reads are unchanged.
+			this.#surfaced.add(failure)
+			this.#emitter.emit('error', failure)
+			throw failure
 		}
 		// The boot control's own files are gone before this line, so a listener is told the
 		// instrument serves only after the workspace holds nothing the control wrote.
