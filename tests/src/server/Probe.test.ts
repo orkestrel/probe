@@ -798,7 +798,7 @@ describe.sequential('probe', () => {
 
 	it(
 		'expires caller-named project resolution and serves through the recycled type stage',
-		{ timeout: 180_000 },
+		{ timeout: 240_000 },
 		async () => {
 			const scratch = createScratch({ prefix: 'probe-project-deadline-' })
 			scratch.write('package.json', '{"type":"module"}\n')
@@ -813,17 +813,7 @@ describe.sequential('probe', () => {
 				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
 			scratch.write('tmp/probe/.keep', '')
-			const include: string[] = []
-			for (let index = 0; index < 10_000; index += 1) {
-				const directory = `generated/d${index}`
-				scratch.write(`${directory}/index.ts`, 'export {}\n')
-				if (index < 1_200) include.push(`../${directory}/**/*.ts`)
-			}
 			const project = 'projects/tsconfig.generated.json'
-			scratch.write(
-				project,
-				`${JSON.stringify({ compilerOptions: { skipLibCheck: true, types: [] }, include })}\n`,
-			)
 			const expirations = createRecorder<[Claim]>()
 			const probe = new Probe({
 				workspace: scratch.path,
@@ -850,12 +840,29 @@ describe.sequential('probe', () => {
 				},
 			}
 			try {
+				// Boot runs its own control claims through the stages, and every one of those
+				// inspections races this case's 2-second deadline. The probe therefore arms over the
+				// small tree written so far, and the tree that outruns that deadline lands after it.
+				// A boot that expires rejects without emitting the `arm` event, and only the next
+				// `prove` call retries the arming, so a guard placed after that tree waits for an
+				// event that can no longer fire. The guard covers a spawn-and-initialize on a
+				// contended host, not an idle one.
 				await Promise.race([
 					new Promise<void>((armed) => probe.emitter.on('arm', () => armed())),
-					waitForDelay(10_000).then(() => {
+					waitForDelay(60_000).then(() => {
 						throw new Error('The project deadline fixture did not arm')
 					}),
 				])
+				const include: string[] = []
+				for (let index = 0; index < 10_000; index += 1) {
+					const directory = `generated/d${index}`
+					scratch.write(`${directory}/index.ts`, 'export {}\n')
+					if (index < 1_200) include.push(`../${directory}/**/*.ts`)
+				}
+				scratch.write(
+					project,
+					`${JSON.stringify({ compilerOptions: { skipLibCheck: true, types: [] }, include })}\n`,
+				)
 				await expect(probe.prove(claim)).rejects.toMatchObject({
 					name: 'ProbeError',
 					message: 'The type stage project resolution exceeded 2000 ms',
@@ -864,6 +871,11 @@ describe.sequential('probe', () => {
 					context: { stage: 'type', deadline: 2000 },
 				})
 				expect(expirations.calls).toStrictEqual([[claim]])
+				// The recovery claim runs every stage, and the runtime stage walks the whole
+				// workspace. Removing the generated tree first leaves that walk small, so the
+				// recovery clears the same 2-second deadline the project resolution just exceeded.
+				scratch.remove('generated')
+				scratch.remove(project)
 				const served = await probe.prove({
 					project: 'tsconfig.json',
 					case: {
