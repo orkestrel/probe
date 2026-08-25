@@ -509,56 +509,91 @@ describe.sequential('probe', () => {
 		},
 	)
 
-	it('reports a blocked boot workbench as a workspace failure', async () => {
-		const scratch = createScratch()
-		scratch.write('package.json', '{"type":"module"}\n')
-		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-		scratch.write(
-			'tsconfig.json',
-			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
-		)
-		scratch.write(
-			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
-		)
-		scratch.write('tmp/probe', '')
-		const probe = new Probe({ workspace: scratch.path })
-		try {
-			await expect(
-				probe.prove({
-					project: 'tsconfig.json',
-					case: {
-						files: [],
-						test: {
-							path: 'tmp/probe/blocked-workbench.test.ts',
-							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+	it(
+		'reports a blocked boot workbench as a workspace failure it surfaces once',
+		{
+			timeout: 30_000,
+		},
+		async () => {
+			const scratch = createScratch()
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
+			)
+			scratch.write(
+				'vite.config.ts',
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			)
+			// A file where the workbench directory belongs is what the workbench refuses: a workspace
+			// path that does not exist is created by the same recursive call, and a workspace missing a
+			// tool is refused in the constructor before arming begins.
+			scratch.write('tmp/probe', '')
+			const failures = createRecorder<[unknown]>()
+			const probe = new Probe({ workspace: scratch.path, on: { error: failures.handler } })
+			try {
+				// The workbench runs before the boot controls and rejects the arming attempt on its own,
+				// so this refusal reaches a host only if it takes the same surfacing path a boot expiry
+				// takes.
+				await waitForCondition(
+					'the refused boot workbench to reach the error channel',
+					() => failures.count > 0,
+					{ budget: 10_000, interval: 5 },
+				)
+				// The target tree refused the directory, so the refusal keeps the workspace's own origin
+				// and its own message rather than being rewrapped as this package's.
+				expect(failures.calls[0]?.[0]).toEqual(
+					expect.objectContaining({
+						name: 'ProbeError',
+						message: expect.stringContaining('The probe could not create the boot workbench'),
+						origin: 'workspace',
+						code: 'malformed',
+						context: { path: 'tmp/probe' },
+					}),
+				)
+				const thrown = await probe
+					.prove({
+						project: 'tsconfig.json',
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probe/blocked-workbench.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
 						},
-					},
-					control: {
-						files: [],
-						test: {
-							path: 'tmp/probe/blocked-workbench.test.ts',
-							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						control: {
+							files: [],
+							test: {
+								path: 'tmp/probe/blocked-workbench.test.ts',
+								text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+							},
+							stage: 'runtime',
+							reason: 'the test throws',
 						},
-						stage: 'runtime',
-						reason: 'the test throws',
-					},
-				}),
-			).rejects.toMatchObject({
-				name: 'ProbeError',
-				message: expect.stringContaining('The probe could not create the boot workbench'),
-				origin: 'workspace',
-				code: 'malformed',
-				context: { path: 'tmp/probe' },
-				cause: expect.any(Error),
-			})
-		} finally {
-			const teardown = createTeardown()
-			teardown.add(() => scratch.destroy())
-			teardown.add(() => probe.destroy())
-			await teardown.destroy()
-		}
-	})
+					})
+					.catch((error: unknown) => error)
+				expect(thrown).toMatchObject({
+					name: 'ProbeError',
+					message: expect.stringContaining('The probe could not create the boot workbench'),
+					origin: 'workspace',
+					code: 'malformed',
+					context: { path: 'tmp/probe' },
+					cause: expect.any(Error),
+				})
+				// One emission per attempt on this path too: the constructor's attempt and the attempt
+				// this claim retried, and neither counted twice.
+				expect(thrown).not.toBe(failures.calls[0]?.[0])
+				expect(failures.count).toBe(2)
+				expect(failures.calls[1]?.[0]).toBe(thrown)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
 
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()

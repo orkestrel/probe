@@ -203,7 +203,16 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #arm(): Promise<void> {
-		const created = this.#workbench()
+		let created: boolean
+		try {
+			created = this.#workbench()
+		} catch (error) {
+			// The workbench refusal names the boot in its own message and reports the target tree's
+			// fault, so it surfaces and rejects unchanged. Rewrapping it here would report a
+			// directory this workspace blocks as this package refusing to serve.
+			this.#surface(error)
+			throw error
+		}
 		try {
 			await this.#boot(created)
 		} catch (error) {
@@ -215,17 +224,22 @@ export class Probe implements ProbeInterface {
 				code: 'malformed',
 				cause: error,
 			})
-			// Surface the refusal as it happens. `arm` never fires for a rejected attempt and the
-			// attempt is retained for the next `prove` to retry, so a host that waits for `arm` and a
-			// host that calls nothing are both told nothing without this. Observation only: the
-			// retry, its timing, and what the next caller reads are unchanged.
-			this.#surfaced.add(failure)
-			this.#emitter.emit('error', failure)
+			this.#surface(failure)
 			throw failure
 		}
 		// The boot control's own files are gone before this line, so a listener is told the
 		// instrument serves only after the workspace holds nothing the control wrote.
 		this.#emitter.emit('arm', this.#toolchain)
+	}
+
+	// Reports an arming attempt's refusal as it happens. `arm` never fires for a rejected attempt
+	// and the attempt is retained for the next `prove` to retry, so a host that waits for `arm` and
+	// a host that calls nothing are both told nothing without this. Recording the failure is what
+	// keeps `prove` from reporting one refusal a second time when the same attempt reaches it.
+	// Observation only: the retry, its timing, and what the next caller reads are unchanged.
+	#surface(error: unknown): void {
+		if (error instanceof ProbeError) this.#surfaced.add(error)
+		this.#emitter.emit('error', error)
 	}
 
 	#workbench(): boolean {
