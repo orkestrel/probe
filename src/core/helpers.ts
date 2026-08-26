@@ -4,6 +4,12 @@ import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
 /**
  * Renders one tool message as a single line an agent can classify and locate.
  *
+ * @remarks
+ * `Issue.range` is stored zero-based, and this is the only place it is rendered, so the one-based
+ * line an editor shows is derived here and nowhere else. The rendered location carries the line
+ * alone: a reader opens a file at a line, and the column would widen every issue line in every
+ * verdict for a precision that address does not use.
+ *
  * @param issue - The message and location a stage reported
  * @returns The bracketed origin, location, and message, separated by spaces
  *
@@ -13,7 +19,7 @@ import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: 'not assignable',
- * 	line: 1,
+ * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
  * }
  * const whole: Issue = {
  * 	origin: 'claimant',
@@ -25,7 +31,8 @@ import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
  * ```
  */
 export function formatIssue(issue: Issue): string {
-	const where = issue.line === undefined ? issue.path : `${issue.path}:${issue.line}`
+	const range = issue.range
+	const where = range === undefined ? issue.path : `${issue.path}:${range.start.line + 1}`
 	return `[${issue.origin}] ${where} ${issue.message}`
 }
 

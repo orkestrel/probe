@@ -39,12 +39,12 @@ describe('core formatting helpers', () => {
 	// The issues `formatIssue` documents, transcribed as the typed literals the contract
 	// requires. `origin` is required on `Issue`, so a documented call that omitted it would fail
 	// this file's typecheck before any assertion ran.
-	it('renders both origins with and without a line', () => {
+	it('renders both origins with and without a location', () => {
 		const located: Issue = {
 			origin: 'claimant',
 			path: 'src/core/greeting.ts',
 			message: 'not assignable',
-			line: 1,
+			range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
 		}
 		const whole: Issue = {
 			origin: 'instrument',
@@ -56,13 +56,41 @@ describe('core formatting helpers', () => {
 		expect(formatIssue(whole)).toBe('[instrument] src/core/greeting.ts not assignable')
 	})
 
+	// The stored span is zero-based and the rendered line is one-based, so the two numbers differ
+	// by exactly one at every line. A span past the first line separates that conversion from a
+	// renderer printing the stored number unchanged and from one printing a constant.
+	it('renders the stored zero-based line one-based and ignores the column', () => {
+		const first: Issue = {
+			origin: 'claimant',
+			path: 'src/core/greeting.ts',
+			message: 'not assignable',
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+		}
+		const later: Issue = {
+			origin: 'claimant',
+			path: 'src/core/greeting.ts',
+			message: 'not assignable',
+			range: { start: { line: 41, character: 8 }, end: { line: 43, character: 2 } },
+		}
+
+		expect(formatIssue(first)).toBe('[claimant] src/core/greeting.ts:1 not assignable')
+		expect(formatIssue(later)).toBe('[claimant] src/core/greeting.ts:42 not assignable')
+	})
+
 	it('renders zero, one, and multiple issues with correct summaries and order', () => {
 		expect(formatCheck({ stage: 'lint', elapsed: 17, issues: [] })).toBe('lint: 0 issues (17 ms)')
 		expect(
 			formatCheck({
 				stage: 'type',
 				elapsed: 23,
-				issues: [{ origin: 'claimant', path: 'src/core/first.ts', message: 'first', line: 4 }],
+				issues: [
+					{
+						origin: 'claimant',
+						path: 'src/core/first.ts',
+						message: 'first',
+						range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } },
+					},
+				],
 			}),
 		).toBe('type: 1 issue (23 ms)\n  [claimant] src/core/first.ts:4 first')
 		expect(
@@ -79,7 +107,7 @@ describe('core formatting helpers', () => {
 						origin: 'claimant',
 						path: 'tests/src/core/second.test.ts',
 						message: 'second failure',
-						line: 8,
+						range: { start: { line: 7, character: 1 }, end: { line: 7, character: 1 } },
 					},
 				],
 			}),
@@ -105,7 +133,7 @@ describe('core formatting helpers', () => {
 						origin: 'claimant',
 						path: 'src/core/control.ts',
 						message: 'not assignable',
-						line: 1,
+						range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
 					},
 				],
 			},

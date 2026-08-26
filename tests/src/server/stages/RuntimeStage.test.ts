@@ -20,7 +20,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { captureError, createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { computeReceipt, formatSpecification, isProbeError } from '@src/core'
+import { computeReceipt, formatIssue, formatSpecification, isProbeError } from '@src/core'
 import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
@@ -144,13 +144,65 @@ describe('runtime stage', () => {
 				expect(passing.issues).toStrictEqual([])
 				expect(failing.issues.length).toBeGreaterThan(0)
 				// Vitest reported the generated specification, at the frame inside it. The issue names
-				// the test path the case declared and keeps that frame's line, so a runtime failure whose
-				// stack carries a frame arrives with `line` set.
+				// the test path the case declared and keeps that frame's position, so a runtime failure
+				// whose stack carries a frame arrives with `range` set.
 				expect(failing.issues[0]).toMatchObject({
 					origin: 'claimant',
 					path: 'tmp/probe/runtime-failing.test.ts',
-					line: expect.any(Number),
+					range: {
+						start: { line: expect.any(Number), character: expect.any(Number) },
+						end: { line: expect.any(Number), character: expect.any(Number) },
+					},
 				})
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
+
+	// The frame Vitest reports numbers its line and column from one, and the issue stores them
+	// from zero, so the two differ by exactly one. The failing expression sits well past the first
+	// line and past the first column of its own line, which separates the conversion from a stage
+	// storing the frame unchanged, from one storing a constant, and from one storing the file's
+	// first position. The rendered line is read back through `formatIssue`, so the stored value and
+	// the one-based number a reader opens are pinned by the same case.
+	it(
+		'stores the reported frame zero-based and renders its line one-based',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new RuntimeStage(ROOT)
+			// `expect` opens at one-based line 6, column 2; its failing `toBe` call is later on that
+			// same line. Both coordinates are therefore non-zero under either numbering.
+			const text = [
+				"import { expect, test } from 'vitest'",
+				'',
+				'// padding',
+				'// padding',
+				"test('fails', () => {",
+				'\texpect(2 + 2).toBe(5)',
+				'})',
+				'',
+			].join('\n')
+			try {
+				const check = await stage.inspect({
+					files: [],
+					test: { path: 'tmp/probe/runtime-coordinates.test.ts', text },
+				})
+
+				expect(check.issues).toHaveLength(1)
+				const issue = check.issues[0]
+				expect(issue?.range?.start.line).toBe(5)
+				// Vitest blames the assertion method, whose `toBe` token opens at one-based column 16
+				// of that line: tab, `expect`, `(`, `2`, ` `, `+`, ` `, `2`, `)`, `.`, then `t`. So a
+				// stored 15 is that column lowered by one and a stored 16 is the frame carried
+				// unchanged. A Vitest release that blamed a different token would move this number,
+				// and reporting that is what this row is for.
+				expect(issue?.range?.start.character).toBe(15)
+				// A stack frame names a point, so the stored span has no width.
+				expect(issue?.range?.end).toStrictEqual(issue?.range?.start)
+				expect(formatIssue(issue ?? { origin: 'claimant', path: '', message: '' })).toContain(
+					'tmp/probe/runtime-coordinates.test.ts:6 ',
+				)
 			} finally {
 				await stage.destroy()
 			}
@@ -194,7 +246,10 @@ describe('runtime stage', () => {
 				expect(check.issues[0]).toMatchObject({
 					origin: 'claimant',
 					path: 'tmp/probe/symlinked.test.ts',
-					line: expect.any(Number),
+					range: {
+						start: { line: expect.any(Number), character: expect.any(Number) },
+						end: { line: expect.any(Number), character: expect.any(Number) },
+					},
 				})
 			} finally {
 				const teardown = createTeardown()

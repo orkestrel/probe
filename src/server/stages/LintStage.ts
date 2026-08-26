@@ -266,13 +266,22 @@ export class LintStage implements LintStageInterface {
 
 	// Every issue here is one diagnostic Oxlint published about the text the caller supplied, so
 	// each one is that code failing. A server this stage cannot drive rejects the inspection
-	// instead, so no fault of its own reaches a caller as an issue.
+	// instead, so no fault of its own reaches a caller as an issue. The published range is already
+	// the zero-based UTF-16 span the issue stores, so no conversion happens here; each coordinate is
+	// read once into a span this package owns rather than the diagnostic's own object being carried
+	// into a value that outlives the inspection.
 	#issues(path: string, diagnostics: readonly LSPDiagnostic[]): readonly Issue[] {
 		return diagnostics.map((diagnostic): Issue => ({
 			origin: 'claimant',
 			path,
 			message: diagnostic.message,
-			line: diagnostic.range.start.line + 1,
+			range: {
+				start: {
+					line: diagnostic.range.start.line,
+					character: diagnostic.range.start.character,
+				},
+				end: { line: diagnostic.range.end.line, character: diagnostic.range.end.character },
+			},
 		}))
 	}
 }

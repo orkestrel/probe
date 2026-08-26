@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { LSPRange } from '@orkestrel/lsp'
 import type { PROBE_ERROR_CODES, PROBE_PARTIES, PROBE_STAGES } from './constants.js'
 
 /**
@@ -166,9 +167,18 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * path, the lint stage from the document URI it opened, and the runtime stage from the generated
  * specification it wrote to the test path the case declared.
  *
- * `line` is absent when the stage's tool reported no line, which happens for a whole-file
- * diagnostic. A runtime failure is not one of those: a failure Vitest reported at a stack frame
- * carries that frame's line.
+ * `range` is a half-open span in the zero-based UTF-16 coordinates the Language Server Protocol
+ * fixes, so one numbering carries every stage's location and each tool's own numbering is
+ * converted where it is read rather than where it is rendered. It is absent when the stage's tool
+ * reported no location, which happens for a whole-file diagnostic. A runtime failure is not one of
+ * those: a failure Vitest reported at a stack frame carries that frame's position.
+ *
+ * Each stage supplies the extent its own tool gives it. The type stage spans the diagnostic's
+ * reported length, and the lint stage carries the span the language server published. A tool that
+ * reports a point rather than a span, as a stack frame does, produces a zero-width range at that
+ * point, which is the same value a span of no width would carry.
+ *
+ * `formatIssue` renders `start.line` one-based, because that is the numbering an editor shows.
  *
  * @example
  * ```ts
@@ -176,7 +186,7 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
- * 	line: 1,
+ * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
  * }
  * ```
  */
@@ -187,8 +197,8 @@ export interface Issue {
 	readonly path: string
 	/** The diagnostic or failure message. */
 	readonly message: string
-	/** One-based line the tool reported, or absent when it reported none. */
-	readonly line?: number
+	/** Zero-based UTF-16 span the tool reported, or absent when it reported no location. */
+	readonly range?: LSPRange
 }
 
 /**
@@ -292,7 +302,7 @@ export interface Project {
  * 	origin: 'claimant',
  * 	path: 'src/core/farewell.ts',
  * 	message: 'not assignable',
- * 	line: 1,
+ * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
  * }
  * const verdict: Verdict = {
  * 	id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',

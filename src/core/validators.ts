@@ -21,6 +21,7 @@ import {
 	literalOf,
 	recordOf,
 } from '@orkestrel/contract'
+import { isLSPRange } from '@orkestrel/lsp'
 import { PROBE_PARTIES, PROBE_STAGES } from './constants.js'
 
 /**
@@ -172,8 +173,8 @@ export const isParty: Guard<Party> = literalOf(PROBE_PARTIES)
  * ```
  */
 export const isIssue: Guard<Issue> = recordOf(
-	{ origin: isParty, path: isString, message: isString, line: isNumber },
-	['line'],
+	{ origin: isParty, path: isString, message: isString, range: isLSPRange },
+	['range'],
 )
 
 /**

@@ -71,7 +71,23 @@ describe('core guards', () => {
 		expect(isClaim(claim)).toBe(true)
 		expect(isClaim({ ...claim, project: '' })).toBe(false)
 		expect(isIssue(issue)).toBe(true)
-		expect(isIssue({ ...issue, line: '1' })).toBe(false)
+		// The optional member is a span rather than a number, so a bare number, a half-built span,
+		// and a span carrying a non-numeric coordinate are each refused, while a whole span and an
+		// absent one are each admitted.
+		expect(
+			isIssue({
+				...issue,
+				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+			}),
+		).toBe(true)
+		expect(isIssue({ ...issue, range: 1 })).toBe(false)
+		expect(isIssue({ ...issue, range: { start: { line: 0, character: 0 } } })).toBe(false)
+		expect(
+			isIssue({
+				...issue,
+				range: { start: { line: '0', character: 0 }, end: { line: 0, character: 4 } },
+			}),
+		).toBe(false)
 		expect(isCheck(check)).toBe(true)
 		expect(isCheck({ ...check, elapsed: '17' })).toBe(false)
 		expect(isToolchain(toolchain)).toBe(true)

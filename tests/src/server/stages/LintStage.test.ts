@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { isProbeError } from '@src/core'
+import { formatIssue, isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import {
@@ -378,6 +378,42 @@ describe('lint stage', () => {
 			await stage.destroy()
 		}
 	})
+
+	// The language server publishes the zero-based span the issue stores, so the stored coordinates
+	// are the server's own. The offending statement sits on the third line, which separates a
+	// carried coordinate from a raised one and from a constant. The rendered line is read back
+	// through `formatIssue`, so the stored value and the one-based number a reader opens are pinned
+	// by the same case.
+	it(
+		'stores a published span zero-based and renders its line one-based',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new LintStage(ROOT)
+			const text = ['// padding', '// padding', 'debugger', ''].join('\n')
+			try {
+				const check = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-coordinates.test.ts', text },
+					},
+					{ signal: UNBOUNDED },
+				)
+
+				const issue = check.issues.find((row) => row.message.includes('debugger'))
+				expect(issue).toBeDefined()
+				expect(issue?.range?.start.line).toBe(2)
+				expect(issue?.range?.start.character).toBe(0)
+				expect(issue?.range?.end.line).toBe(2)
+				// The published span covers the statement, so it ends past where it starts.
+				expect(issue?.range?.end.character).toBeGreaterThan(0)
+				expect(formatIssue(issue ?? { origin: 'claimant', path: '', message: '' })).toContain(
+					'tests/src/server/lint-coordinates.test.ts:3 ',
+				)
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
 
 	it(
 		'serves sequential inspections of one declared path from one resident server',

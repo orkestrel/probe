@@ -30,25 +30,25 @@ itself.
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an absent
 optional field is absent rather than empty.
 
-| Name                | Kind      | Shape / Purpose                                                                                                                                      |
-| ------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Stage`             | type      | `'type' \| 'lint' \| 'runtime'` — the inspections every claim passes through, derived from `PROBE_STAGES`.                                           |
-| `Draft`             | interface | `{ path, text }` — one proposed file's contained workspace-relative path and its full contents. The path need not exist on disk.                     |
-| `Case`              | interface | `{ files, test }` — the candidate drafts a claim asserts about and the test that exercises them.                                                     |
-| `Control`           | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                    |
-| `Claim`             | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                    |
-| `Party`             | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on an issue or a failure.                                                      |
-| `Issue`             | interface | `{ origin, path, message, line? }` — one message a stage reported and the party that must act on it. `line` is absent when the tool reported none.   |
-| `Check`             | interface | `{ stage, elapsed, issues }` — one stage's outcome. An empty `issues` list is the clean result; there is no separate pass flag.                      |
-| `Toolchain`         | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                              |
-| `Project`           | interface | `{ path, digest }` — the resolved TypeScript project that judged the candidates, and the digest of its compiler options.                             |
-| `Verdict`           | interface | `{ id, digest, toolchain, project, reason?, case, control, elapsed, receipt? }` — the full result. `Probe.prove` always carries the control reason.  |
-| `ProbeEventMap`     | type      | The observation surface: `arm`, `prove`, `expire`, and `error`.                                                                                      |
-| `ProbeOptions`      | interface | `{ on?, error?, workspace?, deadline? }` — the construction input. `workspace` defaults to the working directory and `deadline` to 30,000 ms.        |
-| `ProbeInterface`    | interface | The coordinator contract; its readonly `emitter` and `toolchain` are data. See [`## Methods`](#methods).                                             |
-| `ProbeErrorCode`    | type      | `'refused' \| 'missing' \| 'malformed' \| 'destroyed' \| 'deadline'` — the condition that ended one operation.                                       |
-| `ProbeErrorContext` | interface | `{ stage?, path?, project?, name?, deadline?, value? }` — the structured detail a failure reports. Every member is absent unless the failure has it. |
-| `ProbeErrorOptions` | interface | `{ origin, code, context?, cause? }` — the construction input for a `ProbeError`. Both classification axes are required.                             |
+| Name                | Kind      | Shape / Purpose                                                                                                                                                                             |
+| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stage`             | type      | `'type' \| 'lint' \| 'runtime'` — the inspections every claim passes through, derived from `PROBE_STAGES`.                                                                                  |
+| `Draft`             | interface | `{ path, text }` — one proposed file's contained workspace-relative path and its full contents. The path need not exist on disk.                                                            |
+| `Case`              | interface | `{ files, test }` — the candidate drafts a claim asserts about and the test that exercises them.                                                                                            |
+| `Control`           | interface | `Case` plus `{ stage, reason }` — the negative control, naming the stage it must fail at and why.                                                                                           |
+| `Claim`             | interface | `{ project, case, control }` — everything one `prove` call needs.                                                                                                                           |
+| `Party`             | type      | `'claimant' \| 'workspace' \| 'instrument'` — the party that must act on an issue or a failure.                                                                                             |
+| `Issue`             | interface | `{ origin, path, message, range? }` — one message a stage reported and the party that must act on it. `range` is a zero-based UTF-16 `LSPRange`, absent when the tool reported no location. |
+| `Check`             | interface | `{ stage, elapsed, issues }` — one stage's outcome. An empty `issues` list is the clean result; there is no separate pass flag.                                                             |
+| `Toolchain`         | interface | `{ typescript, oxlint, vitest }` — the resolved versions the verdict was produced with.                                                                                                     |
+| `Project`           | interface | `{ path, digest }` — the resolved TypeScript project that judged the candidates, and the digest of its compiler options.                                                                    |
+| `Verdict`           | interface | `{ id, digest, toolchain, project, reason?, case, control, elapsed, receipt? }` — the full result. `Probe.prove` always carries the control reason.                                         |
+| `ProbeEventMap`     | type      | The observation surface: `arm`, `prove`, `expire`, and `error`.                                                                                                                             |
+| `ProbeOptions`      | interface | `{ on?, error?, workspace?, deadline? }` — the construction input. `workspace` defaults to the working directory and `deadline` to 30,000 ms.                                               |
+| `ProbeInterface`    | interface | The coordinator contract; its readonly `emitter` and `toolchain` are data. See [`## Methods`](#methods).                                                                                    |
+| `ProbeErrorCode`    | type      | `'refused' \| 'missing' \| 'malformed' \| 'destroyed' \| 'deadline'` — the condition that ended one operation.                                                                              |
+| `ProbeErrorContext` | interface | `{ stage?, path?, project?, name?, deadline?, value? }` — the structured detail a failure reports. Every member is absent unless the failure has it.                                        |
+| `ProbeErrorOptions` | interface | `{ origin, code, context?, cause? }` — the construction input for a `ProbeError`. Both classification axes are required.                                                                    |
 
 ### Constants
 
@@ -100,7 +100,7 @@ and never throws.
 | `isCase`      | function | `(value: unknown) => value is Case`      | Admits a record whose `files` are drafts and whose `test` is one draft.                                                                                        |
 | `isControl`   | function | `(value: unknown) => value is Control`   | Admits a case that also carries a `stage` and a non-empty `reason`.                                                                                            |
 | `isClaim`     | function | `(value: unknown) => value is Claim`     | Admits a record carrying a non-empty `project`, a case, and a control. Exact: an unknown member is refused. Narrower than `CLAIM_SHAPE` on `Draft.path` alone. |
-| `isIssue`     | function | `(value: unknown) => value is Issue`     | Admits a record carrying an origin, a path, a message, and an optional line.                                                                                   |
+| `isIssue`     | function | `(value: unknown) => value is Issue`     | Admits a record carrying an origin, a path, a message, and an optional range.                                                                                  |
 | `isCheck`     | function | `(value: unknown) => value is Check`     | Admits a record carrying a stage, an elapsed number, and issues.                                                                                               |
 | `isToolchain` | function | `(value: unknown) => value is Toolchain` | Admits a record carrying every resolved tool version.                                                                                                          |
 | `isProject`   | function | `(value: unknown) => value is Project`   | Admits a record carrying a non-empty path and a non-empty digest.                                                                                              |
@@ -110,14 +110,14 @@ and never throws.
 
 Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 
-| Name                   | Kind     | Signature                                                 | Behavior                                                                                                                                       |
-| ---------------------- | -------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `formatIssue`          | function | `(issue: Issue) => string`                                | Renders one message as `[origin] path:line message`, dropping `:line` when the tool reported none.                                             |
-| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per issue.                                                                            |
-| `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each issue's origin and the receipt line.                       |
-| `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise. |
-| `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                         |
-| `matchesSpecification` | function | `(text: string, revision: string) => boolean`             | Reports whether one file's text is the generated specification written for that revision.                                                      |
+| Name                   | Kind     | Signature                                                 | Behavior                                                                                                                                                                                                |
+| ---------------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `formatIssue`          | function | `(issue: Issue) => string`                                | Renders one message as `[origin] path:line message`, converting the stored zero-based `range.start.line` to the one-based line an editor shows and dropping `:line` when the tool reported no location. |
+| `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per issue.                                                                                                                                     |
+| `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each issue's origin and the receipt line.                                                                                |
+| `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise.                                                          |
+| `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                                                                                  |
+| `matchesSpecification` | function | `(text: string, revision: string) => boolean`             | Reports whether one file's text is the generated specification written for that revision.                                                                                                               |
 
 ### Server contracts
 
@@ -750,6 +750,12 @@ an `Issue`. `@orkestrel/lsp` owns everything between them, and the hookup is fix
   for it: a second bound would race the caller's, and which one answered would depend on scheduling.
   `Probe` passes the deadline it already armed for the inspection, so one budget covers the wait and
   reports the overrun.
+- **The published span reaches `Issue.range` unconverted.** The client advertises UTF-16 positions
+  and the protocol numbers lines and characters from zero, which is the coordinate basis
+  `Issue.range` stores, so this stage copies each coordinate rather than adjusting one. The type
+  stage lowers nothing either, because the compiler answers in that basis too, and the runtime stage
+  lowers a Vitest frame by one because that frame numbers from one. `formatIssue` is the only place
+  the one-based line a reader opens is derived.
 
 Each limit that split produces is the client's decision rather than this package's:
 

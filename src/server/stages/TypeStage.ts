@@ -455,7 +455,14 @@ export class TypeStage implements TypeStageInterface {
 		}
 		const path = relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
 		if (diagnostic.start === undefined) return { origin: 'claimant', path, message }
-		const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
-		return { origin: 'claimant', path, message, line: position.line + 1 }
+		// The compiler already answers in the zero-based UTF-16 coordinates the issue stores, so the
+		// position is carried across rather than converted. `length` is the extent the compiler
+		// reported for this diagnostic, and a diagnostic that reported none is a point: the end
+		// resolves to the start, which is the zero-width range the issue's own contract names.
+		const start = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
+		const end = diagnostic.file.getLineAndCharacterOfPosition(
+			diagnostic.start + (diagnostic.length ?? 0),
+		)
+		return { origin: 'claimant', path, message, range: { start, end } }
 	}
 }

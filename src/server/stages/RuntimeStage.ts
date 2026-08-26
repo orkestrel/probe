@@ -918,7 +918,13 @@ export class RuntimeStage implements StageInterface {
 			if (!('line' in stack) || typeof stack.line !== 'number') {
 				return { origin: 'claimant', path, message }
 			}
-			return { origin: 'claimant', path, message, line: stack.line }
+			// A reported frame numbers its line and its column from one, so both are lowered into the
+			// zero-based coordinates the issue stores. A frame names a point rather than a span, so
+			// the end resolves to the start and the stored range is zero-width there. A frame
+			// carrying no numeric column names the line alone, which starts at its first character.
+			const character = 'column' in stack && typeof stack.column === 'number' ? stack.column - 1 : 0
+			const position = { line: stack.line - 1, character }
+			return { origin: 'claimant', path, message, range: { start: position, end: position } }
 		}
 		return { origin: 'claimant', path: original, message }
 	}

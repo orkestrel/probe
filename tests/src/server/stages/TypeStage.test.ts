@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { captureError, createTeardown, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { TypeStage, normalizePath } from '@src/server'
-import { isProbeError } from '@src/core'
+import { formatIssue, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../../setup.js'
 
@@ -111,6 +111,42 @@ describe('type stage', () => {
 			await stage.destroy()
 		}
 	})
+
+	// The compiler already answers in the zero-based coordinates the issue stores, so the stored
+	// line is the compiler's own. The offending declaration sits on the third line, which separates
+	// a carried coordinate from a raised one and from a constant. The compiler also reports the
+	// extent of this diagnostic, so the stored span has real width rather than collapsing onto its
+	// start. The rendered line is read back through `formatIssue`, so the stored value and the
+	// one-based number a reader opens are pinned by the same case.
+	it(
+		'stores a diagnostic zero-based with its reported extent and renders its line one-based',
+		{ timeout: 60_000 },
+		async () => {
+			const stage = new TypeStage(ROOT)
+			const text = ['// padding', '// padding', "export const VALUE: number = 'bad'", ''].join('\n')
+			try {
+				const broken = await stage.inspect({
+					files: [{ path: 'src/core/type-coordinates.ts', text }],
+					test: {
+						path: 'tests/src/core/type-coordinates.test.ts',
+						text: "import { test } from 'vitest'\ntest('loads', () => {})\n",
+					},
+				})
+
+				const issue = broken.issues.find((row) => row.path === 'src/core/type-coordinates.ts')
+				expect(issue).toBeDefined()
+				expect(issue?.range?.start.line).toBe(2)
+				expect(issue?.range?.end.line).toBe(2)
+				// The diagnostic names a declaration rather than a point, so its span has width.
+				expect(issue?.range?.end.character).toBeGreaterThan(issue?.range?.start.character ?? 0)
+				expect(formatIssue(issue ?? { origin: 'claimant', path: '', message: '' })).toContain(
+					'src/core/type-coordinates.ts:3 ',
+				)
+			} finally {
+				await stage.destroy()
+			}
+		},
+	)
 
 	it(
 		'changes its verdict after an imported dependency changes on disk',
