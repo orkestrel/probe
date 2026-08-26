@@ -127,6 +127,7 @@ From [`types.ts`](../src/server/types.ts).
 | ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Inspection`           | interface | `{ subject, claim }` — one queued inspection: the case a stage reads and the claim it belongs to.                                                                                                                                                                                                                                                                                                                     |
 | `InspectionOptions`    | interface | `{ signal }` — the bound a caller holds over one stage inspection. The lint stage's inspection is the only one that reads it; the type and runtime stages accept no options and honor no cancellation.                                                                                                                                                                                                                |
+| `OverlayOptions`       | interface | `{ sensitive? }` — the construction options `Overlay` accepts.                                                                                                                                                                                                                                                                                                                                                        |
 | `OverlayInterface`     | interface | The candidate set one inspection substitutes for files on disk; its readonly `revision` and `paths` are data. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                           |
 | `StageInterface`       | interface | The resident-stage contract; its readonly `stage` names the inspection it performs, and its readonly `progress` rises when claimant-owned work is admitted. When a stage later awaits work of its own, it returns `progress` to its pre-inspection reading first; `RuntimeStage` does this before eviction and cleanup, so an expiry there reads level with the coordinator's snapshot. See [`## Methods`](#methods). |
 | `TypeStageInterface`   | interface | `StageInterface` plus a project-aware `inspect`. See [`## Methods`](#methods).                                                                                                                                                                                                                                                                                                                                        |
@@ -166,10 +167,21 @@ Each stage takes one optional `workspace` argument and defaults to the working d
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
 are building your own coordinator.
 
-`new Overlay()` takes no arguments, so a coordinator of your own can mint one. Mint it per
-inspection and release it when that inspection ends. An overlay shared across inspections keeps the
-identity a resident tool caches its answers against, so the second inspection reads the first one's
-answer as a fresh one. Each stage in this package mints its own for that reason.
+`new Overlay(options)` takes an optional `sensitive` flag, so a coordinator of your own can mint
+one. Mint it per inspection and release it when that inspection ends. An overlay shared across
+inspections keeps the identity a resident tool caches its answers against, so the second inspection
+reads the first one's answer as a fresh one. Each stage in this package mints its own for that
+reason.
+
+Pass `sensitive` as the file-name case sensitivity you declare to the tool that overlay serves; it
+defaults to `true`, which matches a lookup key against a recorded path exactly. On a host that
+resolves two spellings of one file name to one file, the tool keeps whichever spelling it met first
+— the committed file's, where the candidate shadows one — and asks the overlay under that, so an
+overlay matching keys exactly answers nothing and the tool reads the committed file instead.
+`TypeStage` mints its overlay from the workspace compiler's own `useCaseSensitiveFileNames` reading,
+which is the reading it declares to that compiler's language-service host. The folding reaches the
+lookup key alone: `paths` reports the recorded spelling, and `covers` compares a directory against
+that spelling unfolded.
 
 ### Server helpers
 
@@ -234,12 +246,12 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `OverlayInterface`
 
-| Method   | Returns               | Behavior                                                                                          |
-| -------- | --------------------- | ------------------------------------------------------------------------------------------------- |
-| `set`    | `void`                | Records one candidate's text against the absolute path it stands in for.                          |
-| `text`   | `string \| undefined` | Reads the candidate text recorded for one absolute path, or `undefined` when it holds none there. |
-| `covers` | `boolean`             | Reports whether a candidate sits beneath one absolute directory. Directory listings stay on disk. |
-| `clear`  | `void`                | Releases every candidate, so the paths this overlay held read from disk again.                    |
+| Method   | Returns               | Behavior                                                                                                                                                                 |
+| -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `set`    | `void`                | Records one candidate's text against the absolute path it stands in for.                                                                                                 |
+| `text`   | `string \| undefined` | Reads the candidate text recorded for one absolute path, or `undefined` when it holds none there. An overlay minted for a case-folding host folds the lookup key's case. |
+| `covers` | `boolean`             | Reports whether a candidate sits beneath one absolute directory. Directory listings stay on disk.                                                                        |
+| `clear`  | `void`                | Releases every candidate, so the paths this overlay held read from disk again.                                                                                           |
 
 #### `ProbeServerInterface`
 

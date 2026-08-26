@@ -152,8 +152,11 @@ export class TypeStage implements TypeStageInterface {
 		// Each inspection owns its candidate set and reads it through its own reference, so the
 		// clear that follows releases what this inspection recorded and nothing else. The resident
 		// services read whichever overlay is installed, so a caller admits one inspection at a
-		// time the way `Probe` does.
-		const overlay = new Overlay()
+		// time the way `Probe` does. The overlay matches its keys by the same reading this stage
+		// declares to the compiler: where the compiler resolves two spellings of one file name to
+		// one file it keeps the spelling its root file list already holds and asks the host for
+		// that, so a candidate spelled differently from the file on disk answers for it.
+		const overlay = new Overlay({ sensitive: this.#caseSensitive(typescript) })
 		this.#overlay = overlay
 		try {
 			this.#record(subject.test, overlay)

@@ -372,6 +372,82 @@ describe('type stage', () => {
 		},
 	)
 
+	// A case-folding volume resolves a draft's spelling and the disk spelling to one file, so the
+	// compiler keeps the spelling its root file list already holds — the disk one — and asks the host
+	// for that. An overlay matching its keys exactly never answers there, and the inspection reports
+	// the committed file: the broken draft passes and the clean draft carries the disk file's error.
+	// The matching-case pair runs first as this case's control, so a run that reddens shows the
+	// difference is the file-name case rather than the assertion.
+	it(
+		'reads the candidate text where a draft and its disk file differ in file-name case',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-type-case-' })
+			scratch.write('package.json', '{"type":"module"}\n')
+			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[],"strict":true},"include":["src/**/*.ts"]}\n',
+			)
+			scratch.write('src/signal.ts', "export const SIGNAL: string = 'disk'\n")
+			scratch.write('src/reading.ts', 'export const READING: string = MISSING\n')
+			// Case folding is the volume's property, so it is read from the volume this scratch
+			// workspace sits on rather than assumed from the platform name. Where the volume folds, the
+			// compiler reports the diagnostic against the disk spelling it kept.
+			const folding = existsSync(resolve(scratch.path, 'src/Signal.ts'))
+			const test = { path: 'tmp/probe/case.test.ts', text: 'export {}\n' }
+			const broken = "export const SIGNAL: number = 'draft'\n"
+			const clean = "export const READING: string = 'draft'\n"
+			const stage = new TypeStage(scratch.path)
+			try {
+				const matched = await stage.inspect(
+					{
+						files: [
+							{ path: 'src/signal.ts', text: broken },
+							{ path: 'src/reading.ts', text: clean },
+						],
+						test,
+					},
+					'tsconfig.json',
+				)
+				const diverged = await stage.inspect(
+					{
+						files: [
+							{ path: 'src/Signal.ts', text: broken },
+							{ path: 'src/Reading.ts', text: clean },
+						],
+						test,
+					},
+					'tsconfig.json',
+				)
+
+				expect(matched.issues).toStrictEqual([
+					{
+						origin: 'claimant',
+						path: 'src/signal.ts',
+						message: expect.stringContaining("not assignable to type 'number'"),
+						range: expect.anything(),
+					},
+				])
+				// The broken draft's own error is reported and the broken disk file the clean draft
+				// stands in for is not, so the overlay answered for both spellings of both files.
+				expect(diverged.issues).toStrictEqual([
+					{
+						origin: 'claimant',
+						path: folding ? 'src/signal.ts' : 'src/Signal.ts',
+						message: expect.stringContaining("not assignable to type 'number'"),
+						range: expect.anything(),
+					},
+				])
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
+
 	it.each(['first', 'middle', 'last'])(
 		'removes every applied overlay when an escaping source is %s',
 		{ timeout: 60_000 },

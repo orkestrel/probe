@@ -44,6 +44,22 @@ export interface InspectionOptions {
 }
 
 /**
+ * Carries the construction options `Overlay` accepts.
+ *
+ * @example
+ * ```ts
+ * const options: OverlayOptions = { sensitive: false }
+ * ```
+ */
+export interface OverlayOptions {
+	/**
+	 * If `true`, a lookup key matches a recorded path exactly; if `false`, it matches with file-name
+	 * case folded. Default: `true`
+	 */
+	readonly sensitive?: boolean
+}
+
+/**
  * Holds the candidate drafts one inspection substitutes for the files a tool would read from disk.
  *
  * @remarks

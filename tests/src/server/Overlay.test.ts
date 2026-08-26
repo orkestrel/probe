@@ -36,4 +36,45 @@ describe('overlay', () => {
 		expect(overlay.covers('C:\\workspace\\src')).toBe(true)
 		expect(overlay.covers('C:\\workspace\\source')).toBe(false)
 	})
+
+	// A stage that declares case-insensitive file names to its tool mints its overlay the same way,
+	// so the tool reaches the candidate under whichever spelling of the name it kept.
+	it('reads a candidate through a divergent-case spelling where the host ignores case', () => {
+		const overlay = new Overlay({ sensitive: false })
+		overlay.set('C:/workspace/src/Value.ts', "export const VALUE = 'candidate'\n")
+
+		expect(overlay.text('C:/workspace/src/value.ts')).toBe("export const VALUE = 'candidate'\n")
+		expect(overlay.text('c:\\WORKSPACE\\src\\VALUE.ts')).toBe("export const VALUE = 'candidate'\n")
+		// The recorded spelling is what a tool receives as a file name, so the folding decides the
+		// lookup and nothing a tool is handed.
+		expect(overlay.paths).toStrictEqual(['C:/workspace/src/Value.ts'])
+	})
+
+	it('reads a candidate by exact spelling where the host reads case', () => {
+		const overlay = new Overlay()
+		overlay.set('C:/workspace/src/Value.ts', "export const VALUE = 'candidate'\n")
+
+		expect(overlay.text('C:/workspace/src/Value.ts')).toBe("export const VALUE = 'candidate'\n")
+		expect(overlay.text('C:/workspace/src/value.ts')).toBeUndefined()
+	})
+
+	it('replaces a candidate whose path its own matching reads as one already recorded', () => {
+		const overlay = new Overlay({ sensitive: false })
+		overlay.set('C:/workspace/src/Value.ts', "export const VALUE = 'first'\n")
+		overlay.set('C:/workspace/src/value.ts', "export const VALUE = 'second'\n")
+
+		expect(overlay.paths).toStrictEqual(['C:/workspace/src/value.ts'])
+		expect(overlay.text('C:/workspace/src/VALUE.ts')).toBe("export const VALUE = 'second'\n")
+	})
+
+	// A directory spelled in another case names another directory here, whatever the host does with
+	// file names: this is a containment comparison rather than a lookup, so the folding stops at the
+	// key.
+	it('never folds case in a containment check', () => {
+		const overlay = new Overlay({ sensitive: false })
+		overlay.set('/srv/workspace/src/value.ts', '')
+
+		expect(overlay.covers('/srv/workspace/src')).toBe(true)
+		expect(overlay.covers('/srv/workspace/SRC')).toBe(false)
+	})
 })
