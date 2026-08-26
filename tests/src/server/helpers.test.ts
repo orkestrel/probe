@@ -22,7 +22,6 @@ import {
 	normalizePath,
 	normalizeValue,
 	overwriteFile,
-	parseContentLength,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
 	relativeWorkspaceMessage,
@@ -107,8 +106,6 @@ describe('server helper examples', () => {
 		).toBe('tmp/probe/greeting.test.probe-4821-9f0c.ts')
 		expect(matchesWorkspaceModule('src/core/greeting.ts')).toBe(true)
 		expect(matchesWorkspaceModule('src/styles/tokens.css')).toBe(false)
-		expect(parseContentLength('Content-Length: 128')).toBe(128)
-		expect(parseContentLength('Content-Type: application/json')).toBeUndefined()
 		expect(describeUnknown(new Error('The lint stage has been destroyed'))).toBe(
 			'The lint stage has been destroyed',
 		)
@@ -622,15 +619,7 @@ describe('server path helpers', () => {
 	})
 })
 
-describe('server wire helpers', () => {
-	it('parses valid content lengths and refuses missing, malformed, and unsafe values', () => {
-		expect(parseContentLength('Content-Type: application/json\r\nContent-Length: 12')).toBe(12)
-		expect(parseContentLength('content-length: 0')).toBe(0)
-		expect(parseContentLength('Content-Type: application/json')).toBeUndefined()
-		expect(parseContentLength('Content-Length: -1')).toBeUndefined()
-		expect(parseContentLength('Content-Length: 9007199254740992')).toBeUndefined()
-	})
-
+describe('server text helpers', () => {
 	it('matches each workspace module family and refuses unrelated files', () => {
 		for (const path of [
 			'value.ts',

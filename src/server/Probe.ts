@@ -415,7 +415,7 @@ export class Probe implements ProbeInterface {
 			return await this.#inspectStage(
 				stage,
 				stage.progress,
-				stage.inspect(inspection.subject, inspection.claim.project),
+				() => stage.inspect(inspection.subject, inspection.claim.project),
 				inspection.claim,
 			)
 		} finally {
@@ -424,19 +424,23 @@ export class Probe implements ProbeInterface {
 	}
 
 	#inspectLint(inspection: Inspection): Promise<Check> {
+		const stage = this.#lint
+		// The lint stage waits on a foreign language server's silence and reads this bound's signal to
+		// end that wait. The other stages take no signal and are abandoned and replaced instead.
 		return this.#inspectStage(
-			this.#lint,
-			this.#lint.progress,
-			this.#lint.inspect(inspection.subject),
+			stage,
+			stage.progress,
+			(signal) => stage.inspect(inspection.subject, { signal }),
 			inspection.claim,
 		)
 	}
 
 	#inspectRuntime(inspection: Inspection): Promise<Check> {
+		const stage = this.#runtime
 		return this.#inspectStage(
-			this.#runtime,
-			this.#runtime.progress,
-			this.#runtime.inspect(inspection.subject),
+			stage,
+			stage.progress,
+			() => stage.inspect(inspection.subject),
 			inspection.claim,
 		)
 	}
@@ -444,7 +448,7 @@ export class Probe implements ProbeInterface {
 	async #inspectStage(
 		stage: StageInterface,
 		progress: number,
-		operation: Promise<Check>,
+		operation: (signal: AbortSignal) => Promise<Check>,
 		claim: Claim,
 	): Promise<Check> {
 		try {
@@ -460,20 +464,29 @@ export class Probe implements ProbeInterface {
 		}
 	}
 
+	// Arms the deadline before the operation begins and hands the operation this deadline's signal.
+	// A stage that can cut its own wait short is then bounded by the deadline that reports the
+	// overrun rather than by a second bound of its own, and a stage that reads no signal is abandoned
+	// and replaced exactly as before.
 	async #bound<T>(
-		operation: Promise<T>,
+		operation: (signal: AbortSignal) => Promise<T>,
 		message: string,
 		stage: StageInterface,
 		progress: number,
 	): Promise<T> {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
+		const expiry = this.#expiry(timeout, message, stage, progress)
+		// The refusal is held as well as raced. An operation this signal aborts rejects with its own
+		// tool's cancellation, that rejection can settle the race first, and it names the tool rather
+		// than the stage that overran — so an expired deadline answers with this refusal either way.
+		const refusal = expiry.catch((error: unknown) => error)
 		try {
-			return await Promise.race([operation, this.#expiry(timeout, message, stage, progress)])
+			return await Promise.race([operation(timeout.signal), expiry])
 		} catch (error) {
 			if (!timeout.expired) throw error
 			await this.#recycle(stage)
-			throw error
+			throw await refusal
 		} finally {
 			timeout.clear()
 		}
@@ -540,7 +553,7 @@ export class Probe implements ProbeInterface {
 			const stage = this.#type
 			try {
 				return await this.#bound(
-					stage.resolve(claim.project),
+					() => stage.resolve(claim.project),
 					`The type stage project resolution exceeded ${this.#deadline} ms`,
 					stage,
 					stage.progress,
@@ -603,7 +616,7 @@ export class Probe implements ProbeInterface {
 	async #destroyStage(stage: StageInterface): Promise<void> {
 		try {
 			await this.#bound(
-				stage.destroy(),
+				() => stage.destroy(),
 				`The ${stage.stage} stage teardown exceeded ${this.#deadline} ms`,
 				stage,
 				stage.progress,

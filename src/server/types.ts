@@ -21,6 +21,29 @@ export interface Inspection {
 }
 
 /**
+ * Carries the bound a caller holds over one stage inspection.
+ *
+ * @remarks
+ * `LintStageInterface.inspect` is the only inspection in this package that reads the signal. Its
+ * wait is a foreign language server's silence, and abandoning that wait would leave the client
+ * holding a pending diagnostics request. The type and runtime stages accept no options and honor no
+ * cancellation: a coordinator abandons an overrunning one and replaces it, which is what `Probe`
+ * does when its own deadline expires.
+ *
+ * Supply the signal a coordinator already armed rather than minting a second bound here. A bound
+ * minted beside the coordinator's races it, and which one answers then depends on scheduling.
+ *
+ * @example
+ * ```ts
+ * const options: InspectionOptions = { signal: AbortSignal.timeout(30_000) }
+ * ```
+ */
+export interface InspectionOptions {
+	/** Aborts the inspection's wait for the resident tool's answer. */
+	readonly signal: AbortSignal
+}
+
+/**
  * Holds the candidate drafts one inspection substitutes for the files a tool would read from disk.
  *
  * @remarks
@@ -177,6 +200,38 @@ export interface TypeStageInterface extends StageInterface {
 	 * been destroyed
 	 */
 	resolve(project: string): Promise<Project>
+}
+
+/**
+ * Inspects one case under a bound the caller supplies.
+ *
+ * @remarks
+ * The lint stage carries a member the shared stage contract cannot. Its inspection waits for a
+ * foreign language server to publish, and only the caller knows how long that wait may run, so the
+ * bound belongs here rather than on `StageInterface`. The type and runtime stages read no signal
+ * and keep the shared one-argument `inspect`.
+ *
+ * `options` is optional because `StageInterface.inspect` accepts one argument and this contract
+ * extends it. An inspection that omits `options` is refused rather than served: a bound this stage
+ * minted for itself would race the coordinator's, and the client's own `timeout` covers the
+ * lifecycle exchanges alone.
+ *
+ * @example
+ * ```ts
+ * const check = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
+ * ```
+ */
+export interface LintStageInterface extends StageInterface {
+	/**
+	 * Inspects one case, under the bound the caller supplies.
+	 *
+	 * @param subject - The candidate drafts and test to inspect
+	 * @param options - The bound this inspection waits under
+	 * @returns One outcome for this stage
+	 * @throws When the caller supplies no bound, when the resident language server cannot start, or
+	 * when the stage has already been destroyed
+	 */
+	inspect(subject: Case, options?: InspectionOptions): Promise<Check>
 }
 
 /**

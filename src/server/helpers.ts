@@ -592,26 +592,6 @@ export function matchesWorkspaceModule(path: string): boolean {
 }
 
 /**
- * Reads a JSON-RPC frame's declared byte length.
- *
- * @param header - The frame header text without its terminating empty line
- * @returns The non-negative content length, or `undefined` for an invalid header
- *
- * @example
- * ```ts
- * parseContentLength('Content-Length: 128') // 128
- * parseContentLength('Content-Type: application/json') // undefined
- * ```
- */
-export function parseContentLength(header: string): number | undefined {
-	const match = /(?:^|\r\n)Content-Length:\s*(\d+)(?:\r\n|$)/i.exec(header)
-	const text = match?.[1]
-	if (text === undefined) return undefined
-	const length = Number.parseInt(text, 10)
-	return Number.isSafeInteger(length) && length >= 0 ? length : undefined
-}
-
-/**
  * Normalizes a caught or foreign error into readable text.
  *
  * @param value - The value to describe

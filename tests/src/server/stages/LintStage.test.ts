@@ -1,5 +1,5 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -18,18 +18,42 @@ import { WORKSPACE_ROOT } from '../../../setup.js'
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
 
+// The stage inspects only under a bound its caller supplies, and most rows here measure something
+// other than that bound. Each of those supplies a signal that never aborts, so the row reads the
+// stage's own answer rather than a deadline of its own making. A row whose subject is the bound
+// arms its own signal instead.
+const UNBOUNDED: AbortSignal = new AbortController().signal
+
+// The close notification the client writes for one document, rounded up from its framing, its
+// method, and a scratch-directory URI. The stall reading uses it as the follow-up write, so the
+// size it searches for is the size that holds exactly this write.
+const CLOSE_WRITE = 200
+
 // A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately and can read whether that child is still alive. Marker
-// files select how it ends: `frail` exits with a code on the first document,
+// the real child the stage owns privately and can read whether that child is still alive. Its
+// `initialize` result declares `textDocumentSync` with `openClose`, which is what a client checks
+// before it opens a document at all — real Oxlint declares the same capability, so a fixture that
+// omitted it would refuse every document the real server admits.
+//
+// Marker files select how it ends: `frail` exits with a code on the first document,
 // `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` exits
 // without replying to `initialize`, `silent-initialize` stays alive and never replies to
 // `initialize`, and `ignored-exit` answers `shutdown` and then stays alive through `exit`, which is
 // the one ending the protocol leaves to the client to force. Markers in a document's own text
 // select how it answers that document: `PROBE_SILENT` writes the document URI to `admitted` and
-// publishes nothing, and `PROBE_CLOSES_INPUT` closes the server's own standard input when that
-// document is closed.
+// publishes nothing, `PROBE_SLOW` publishes after 3 s, which is past the bound the stage's client
+// holds over its lifecycle exchanges, and `PROBE_CLOSES_INPUT` closes the server's own standard
+// input when that document is closed. Every document it admits appends its `didOpen` version to
+// `versions`, so a test reads the versions the client actually put on the wire.
+//
+// The `stall` marker selects a different conversation entirely, and its content is the one document
+// URI this server answers. It frames `initialize` with blocking reads on the descriptor itself, so
+// it owns no stream buffer of its own, replies, and then reads nothing ever again. Its timer
+// publishes empty diagnostics for the marked URI and records the publication in `published`, so a
+// document it never read is answered while every byte the client writes after the handshake stays
+// in a pipe nobody drains.
 const SERVER = [
-	"import { closeSync, existsSync, writeFileSync } from 'node:fs'",
+	"import { closeSync, existsSync, readFileSync, readSync, writeFileSync } from 'node:fs'",
 	'let buffer = Buffer.alloc(0)',
 	'let deferred',
 	"writeFileSync('server.pid', String(process.pid))",
@@ -38,7 +62,29 @@ const SERVER = [
 	'\tconst content = JSON.stringify(message)',
 	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
 	'}',
-	"process.stdin.on('data', (chunk) => {",
+	"if (existsSync('stall')) {",
+	"\tconst held = readFileSync('stall', 'utf8')",
+	'\tconst chunk = Buffer.alloc(65_536)',
+	'\tlet request',
+	'\twhile (request === undefined) {',
+	'\t\tconst read = readSync(0, chunk, 0, chunk.length, null)',
+	'\t\tbuffer = Buffer.concat([buffer, chunk.subarray(0, read)])',
+	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
+	'\t\tif (boundary < 0) continue',
+	"\t\tconst framing = /Content-Length: (\\d+)/i.exec(buffer.subarray(0, boundary).toString('ascii'))",
+	'\t\tif (framing === null) continue',
+	'\t\tconst size = Number(framing[1])',
+	'\t\tif (buffer.length < boundary + 4 + size) continue',
+	"\t\trequest = JSON.parse(buffer.subarray(boundary + 4, boundary + 4 + size).toString('utf8'))",
+	'\t}',
+	'\tconst opening = { openClose: true, change: 1 }',
+	"\tsend({ jsonrpc: '2.0', id: request.id, result: { capabilities: { textDocumentSync: opening } } })",
+	'\tsetTimeout(() => {',
+	"\t\tsend({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri: held, diagnostics: [] } })",
+	"\t\twriteFileSync('published', held)",
+	'\t}, 800)',
+	'}',
+	"if (!existsSync('stall')) process.stdin.on('data', (chunk) => {",
 	'\tbuffer = Buffer.concat([buffer, chunk])',
 	'\twhile (true) {',
 	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
@@ -57,15 +103,21 @@ const SERVER = [
 	'\t\t\t\treturn',
 	'\t\t\t}',
 	"\t\t\tif (existsSync('silent-initialize')) return",
-	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: { capabilities: {} } })",
+	'\t\t\tconst sync = { openClose: true, change: 1 }',
+	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: { capabilities: { textDocumentSync: sync } } })",
 	'\t\t}',
 	"\t\tif (message.method === 'textDocument/didOpen') {",
 	"\t\t\tif (existsSync('frail')) process.exit(7)",
 	'\t\t\tconst uri = message.params.textDocument.uri',
 	'\t\t\tconst text = message.params.textDocument.text',
+	"\t\t\twriteFileSync('versions', message.params.textDocument.version + '\\n', { flag: 'a' })",
 	"\t\t\tif (text.includes('PROBE_SILENT')) writeFileSync('admitted', uri)",
 	"\t\t\tif (text.includes('PROBE_CLOSES_INPUT')) deferred = uri",
-	"\t\t\tif (!text.includes('PROBE_SILENT')) {",
+	"\t\t\tconst held = text.includes('PROBE_SILENT') || text.includes('PROBE_SLOW')",
+	"\t\t\tif (text.includes('PROBE_SLOW')) {",
+	"\t\t\t\tsetTimeout(() => send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } }), 3_000)",
+	'\t\t\t}',
+	'\t\t\tif (!held) {',
 	"\t\t\t\tsend({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } })",
 	'\t\t\t}',
 	'\t\t}',
@@ -103,9 +155,11 @@ const HOST = [
 	// own resolver and the published build each do for it: the extension the source writes, and the
 	// core entry the server bundle externalizes `@src/core` to.
 	"const root = new URL('../../../', pathToFileURL(stage))",
+	"const owned = new URL('src/', root).href",
 	'registerHooks({',
 	'\tresolve(specifier, context, next) {',
-	"\t\tif (specifier.startsWith('.') && specifier.endsWith('.js')) {",
+	'\t\tconst inside = context.parentURL !== undefined && context.parentURL.startsWith(owned)',
+	"\t\tif (inside && specifier.startsWith('.') && specifier.endsWith('.js')) {",
 	"\t\t\treturn next(specifier.slice(0, -3) + '.ts', context)",
 	'\t\t}',
 	"\t\tif (specifier === '@src/core') {",
@@ -117,17 +171,20 @@ const HOST = [
 	'const { LintStage } = await import(pathToFileURL(stage).href)',
 	"const text = \"import { test } from 'vitest'\\ntest('passes', () => {})\\n\"",
 	'const dead = new LintStage(workspace)',
-	"await dead.inspect({ files: [], test: { path: 'tests/src/server/host-warm.test.ts', text } })",
+	// The host arms nothing: every inspection here is measured by the ending its server takes, so the
+	// bound each one carries must never be what ends it.
+	'const open = { signal: new AbortController().signal }',
+	"await dead.inspect({ files: [], test: { path: 'tests/src/server/host-warm.test.ts', text } }, open)",
 	"const announced = readFileSync(workspace + '/server.pid', 'utf8')",
 	"process.kill(Number.parseInt(announced, 10), 'SIGKILL')",
 	'await new Promise((settle) => setTimeout(settle, 250))',
 	'const refused = await dead',
-	"\t.inspect({ files: [], test: { path: 'tests/src/server/host-dead.test.ts', text } })",
+	"\t.inspect({ files: [], test: { path: 'tests/src/server/host-dead.test.ts', text } }, open)",
 	'\t.then(() => undefined, (error) => error.message)',
 	"if (refused === undefined) throw new Error('the inspection resolved against a dead server')",
 	'await dead.destroy()',
 	'const live = new LintStage(workspace)',
-	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } })",
+	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } }, open)",
 	'await live.destroy()',
 	'await new Promise((settle) => setTimeout(settle, 300))',
 	"console.log('refused ' + refused)",
@@ -208,16 +265,63 @@ async function readInputRefusal(signal?: NodeJS.Signals): Promise<string | undef
 	return refusal
 }
 
+// Reads whether each of two sized writes reaches the standard input of a child that never reads it.
+// A write settles when the host has taken every byte, so a write into a pipe already holding all the
+// host will hold never settles at all. The pair is what separates the two states: how much a host
+// takes is its own decision, and only a reading where the first write settled says anything about
+// the second.
+async function readPipeWrites(first: number, second: number): Promise<readonly [boolean, boolean]> {
+	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], {
+		stdio: ['pipe', 'ignore', 'ignore'],
+	})
+	child.stdin.on('error', () => {})
+	let settled = false
+	let following = false
+	child.stdin.write(Buffer.alloc(first, 0x61), () => {
+		settled = true
+	})
+	await waitForDelay(200)
+	child.stdin.write(Buffer.alloc(second, 0x62), () => {
+		following = true
+	})
+	await waitForDelay(200)
+	child.kill('SIGKILL')
+	return [settled, following]
+}
+
+// Reads the payload size that leaves this host's pipe with room for the document open and none for
+// the close that follows it. The search walks the one size the reading turns on — below it a later
+// close-sized write still settles, above it that write is held — and returns a size a little past
+// the turn so a host whose reading drifts by a few hundred bytes stays inside the band. Returns
+// `undefined` when the returned size does not reproduce the reading, which is how a host that takes
+// every write reports that this condition cannot be built on it.
+async function readStallPayload(): Promise<number | undefined> {
+	let low = 4_096
+	let high = 4_194_304
+	while (high - low > 1_024) {
+		const middle = low + Math.floor((high - low) / 2)
+		const [, following] = await readPipeWrites(middle, CLOSE_WRITE)
+		if (following) low = middle
+		else high = middle
+	}
+	const payload = high + 8_192
+	const [settled, following] = await readPipeWrites(payload, CLOSE_WRITE)
+	return settled && !following ? payload : undefined
+}
+
 // Everything a settled teardown owes a consumer, read through the public surface alone: teardown
 // resolves again without doing more work, and every later inspection is refused rather than left
 // waiting on a server that is gone.
 async function expectReleased(stage: LintStage): Promise<void> {
 	await expect(stage.destroy()).resolves.toBeUndefined()
 	await expect(
-		stage.inspect({
-			files: [],
-			test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
-		}),
+		stage.inspect(
+			{
+				files: [],
+				test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+			},
+			{ signal: UNBOUNDED },
+		),
 	).rejects.toThrow('The lint stage has been destroyed')
 }
 
@@ -250,10 +354,13 @@ describe('lint stage', () => {
 	it('reports a workspace lint issue at the declared path', { timeout: 60_000 }, async () => {
 		const stage = new LintStage(ROOT)
 		try {
-			const check = await stage.inspect({
-				files: [],
-				test: { path: 'tests/src/server/lint-candidate.test.ts', text: 'debugger\n' },
-			})
+			const check = await stage.inspect(
+				{
+					files: [],
+					test: { path: 'tests/src/server/lint-candidate.test.ts', text: 'debugger\n' },
+				},
+				{ signal: UNBOUNDED },
+			)
 			expect(check.issues.length).toBeGreaterThan(0)
 			expect(check.issues).toEqual(
 				expect.arrayContaining([
@@ -282,15 +389,18 @@ describe('lint stage', () => {
 				// Nothing distinguishes these documents but their text and the order they arrive in, so
 				// a server that answered from a cached document rather than the supplied one would
 				// repeat its earliest answer for every one of them.
-				const first = await stage.inspect({ files: [], test: { path, text: 'debugger\n' } })
-				const second = await stage.inspect({
-					files: [],
-					test: { path, text: 'export const VALUE = 1\n' },
-				})
-				const third = await stage.inspect({
-					files: [],
-					test: { path, text: 'debugger\ndebugger\n' },
-				})
+				const first = await stage.inspect(
+					{ files: [], test: { path, text: 'debugger\n' } },
+					{ signal: UNBOUNDED },
+				)
+				const second = await stage.inspect(
+					{ files: [], test: { path, text: 'export const VALUE = 1\n' } },
+					{ signal: UNBOUNDED },
+				)
+				const third = await stage.inspect(
+					{ files: [], test: { path, text: 'debugger\ndebugger\n' } },
+					{ signal: UNBOUNDED },
+				)
 				expect(first.issues.length).toBe(1)
 				expect(second.issues).toStrictEqual([])
 				expect(third.issues.length).toBe(2)
@@ -311,11 +421,13 @@ describe('lint stage', () => {
 		// arrives. Both name one path, and one URI carries one publication: without a refusal the
 		// second registration replaces the first and the first inspection waits for the life of
 		// the stage.
-		const held = stage.inspect({ files: [], test: source })
+		const held = stage.inspect({ files: [], test: source }, { signal: UNBOUNDED })
 		void held.catch(() => {})
 		try {
 			await waitForDelay(250)
-			await expect(stage.inspect({ files: [], test: source })).rejects.toThrow(
+			await expect(
+				stage.inspect({ files: [], test: source }, { signal: UNBOUNDED }),
+			).rejects.toThrow(
 				'The lint stage is already inspecting tests/src/server/lint-collision.test.ts',
 			)
 			await stage.destroy()
@@ -337,7 +449,7 @@ describe('lint stage', () => {
 			const path = 'tests/src/server/lint-progress.test.ts'
 			const source = { path, text: `${PASSING}// PROBE_SILENT\n` }
 			const baseline = stage.progress
-			const held = stage.inspect({ files: [], test: source })
+			const held = stage.inspect({ files: [], test: source }, { signal: UNBOUNDED })
 			void held.catch(() => {})
 			try {
 				await waitForCondition(
@@ -358,6 +470,206 @@ describe('lint stage', () => {
 	)
 
 	it(
+		'restores progress to its pre-inspection reading while its close cleanup is still pending',
+		{ timeout: 120_000 },
+		async (context) => {
+			// The control comes first: a small pair of writes both settle into a child that never
+			// reads its own standard input, so a later reading where the second write is held is
+			// evidence about a pipe this host has filled rather than about writes it refuses at all.
+			expect(await readPipeWrites(4_096, CLOSE_WRITE)).toStrictEqual([true, true])
+			const payload = await readStallPayload()
+			if (payload === undefined) {
+				context.skip(
+					true,
+					'this host settles a close-sized write into a child that never reads whatever came before it, so the pipe the stage writes its close into cannot be filled here',
+				)
+				return
+			}
+			const scratch = createScratch({ files: FIXTURE })
+			const path = 'tests/src/server/lint-stall.test.ts'
+			// The fixture reads its own standard input only until the handshake is framed, so it
+			// answers the document from the URI seeded here rather than from the one it was sent.
+			scratch.write('stall', pathToFileURL(resolve(scratch.path, path)).href)
+			const stage = new LintStage(scratch.path)
+			const baseline = stage.progress
+			const source = { path, text: `${PASSING}${'x'.repeat(payload - 512)}\n` }
+			let settled = false
+			const held = stage.inspect({ files: [], test: source }, { signal: UNBOUNDED })
+			void held.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+			try {
+				// A raised gauge here is this row's own control: the same reading taken after the
+				// diagnostics arrive measures the restore rather than a document never admitted.
+				await waitForCondition(
+					'the lint stage to admit the document whose close the pipe holds',
+					() => stage.progress > baseline,
+					{ budget: 10_000, interval: 20 },
+				)
+				await waitForCondition(
+					'the lint fixture to publish the diagnostics it answers that document with',
+					() => scratch.read('published') !== undefined,
+					{ budget: 10_000, interval: 20 },
+				)
+				await waitForDelay(500)
+				// The document open filled the pipe, so the `didClose` this stage owes its own
+				// instrument is still waiting for room, and the inspection has not returned. The
+				// gauge a coordinator compares with its snapshot reads level with it, so an expiry
+				// landing in this window names the instrument rather than the claimant.
+				expect(settled).toBe(false)
+				expect(stage.progress).toBe(baseline)
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
+	it(
+		'raises the document version it puts on the wire across consecutive inspections',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch({ files: FIXTURE })
+			const stage = new LintStage(scratch.path)
+			const path = 'tests/src/server/lint-version.test.ts'
+			try {
+				await stage.inspect({ files: [], test: { path, text: PASSING } }, { signal: UNBOUNDED })
+				await stage.inspect(
+					{ files: [], test: { path, text: `${PASSING}export const VALUE = 1\n` } },
+					{ signal: UNBOUNDED },
+				)
+				// One URI carries one document, and a server reads a version that failed to rise as
+				// text no older than the text it replaced. The fixture records what the client wrote,
+				// so this reads the wire rather than the gauge the version used to be taken from.
+				const versions = (scratch.read('versions') ?? '').trim().split('\n')
+				expect(versions.length).toBe(2)
+				expect(Number(versions[1])).toBeGreaterThan(Number(versions[0]))
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	it('refuses an inspection its caller supplies no bound for', { timeout: 20_000 }, async () => {
+		const scratch = createScratch({ files: FIXTURE })
+		const stage = new LintStage(scratch.path)
+		const source = {
+			files: [],
+			test: { path: 'tests/src/server/lint-unbounded.test.ts', text: PASSING },
+		}
+		try {
+			// The shared stage contract takes one argument, so the type admits this call and the stage
+			// refuses it. Serving it would mean minting a bound beside the caller's own, and the two
+			// would race for the answer.
+			await expect(stage.inspect(source)).rejects.toMatchObject({
+				name: 'ProbeError',
+				message: 'The lint stage inspects only under a bound its caller supplies',
+				origin: 'claimant',
+				code: 'refused',
+				context: { stage: 'lint' },
+			})
+			// The control is the same case under a bound. Without it a stage that refused every
+			// inspection would pass the preceding assertion.
+			const served = await stage.inspect(source, { signal: UNBOUNDED })
+			expect(served.issues).toStrictEqual([])
+		} finally {
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
+		}
+	})
+
+	it(
+		"waits for diagnostics past the bound its client holds over the server's lifecycle",
+		{ timeout: 30_000 },
+		async () => {
+			const scratch = createScratch({ files: FIXTURE })
+			const stage = new LintStage(scratch.path)
+			try {
+				// The control comes first: a document this server answers at once returns well inside
+				// the client's own 2 s bound, so the reading that follows measures the diagnostics wait
+				// rather than the warm that precedes it.
+				const prompt = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-prompt.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
+				expect(prompt.issues).toStrictEqual([])
+				// This server publishes after 3 s. The client's `timeout` is 2 s and reaches the
+				// `initialize` and `shutdown` exchanges alone, so the caller's signal is the only thing
+				// that could end this wait, and it permits the wait to run.
+				const started = performance.now()
+				const served = await stage.inspect(
+					{
+						files: [],
+						test: {
+							path: 'tests/src/server/lint-slow.test.ts',
+							text: `${PASSING}// PROBE_SLOW\n`,
+						},
+					},
+					{ signal: UNBOUNDED },
+				)
+				expect(performance.now() - started).toBeGreaterThan(2_000)
+				expect(served.issues).toStrictEqual([])
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	it(
+		'stops the diagnostics wait at the bound its caller supplied',
+		{ timeout: 30_000 },
+		async () => {
+			const scratch = createScratch({ files: FIXTURE })
+			const stage = new LintStage(scratch.path)
+			const path = 'tests/src/server/lint-abandoned.test.ts'
+			try {
+				// This server admits the document and publishes nothing, so nothing but the caller's own
+				// signal can end the wait. The refusal names the caller rather than the instrument,
+				// because the instrument was told to stop rather than failing.
+				const started = performance.now()
+				await expect(
+					stage.inspect(
+						{ files: [], test: { path, text: `${PASSING}// PROBE_SILENT\n` } },
+						{ signal: AbortSignal.timeout(500) },
+					),
+				).rejects.toMatchObject({
+					name: 'ProbeError',
+					message: 'The lint stage inspection stopped at the bound its caller supplied',
+					origin: 'claimant',
+					code: 'deadline',
+					context: { stage: 'lint', path },
+				})
+				// The interval separates the caller's bound from the client's 2 s one: a wait that
+				// timeout still governed would have run past it before answering.
+				const elapsed = performance.now() - started
+				expect(elapsed).toBeGreaterThan(300)
+				expect(elapsed).toBeLessThan(2_000)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	it(
 		'reports nothing for a path the target workspace excludes from linting',
 		{ timeout: 60_000 },
 		async () => {
@@ -365,17 +677,23 @@ describe('lint stage', () => {
 			try {
 				// `.gitignore` holds `tmp`, and Oxlint honours version-control ignore files, so this
 				// workspace's own gate never lints this path. The stage reports what that gate reports.
-				const excluded = await stage.inspect({
-					files: [],
-					test: { path: 'tmp/probe/lint-excluded.test.ts', text: 'debugger\n' },
-				})
+				const excluded = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tmp/probe/lint-excluded.test.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(excluded.issues).toStrictEqual([])
 				// The control is the same text under a path the gate does lint. Without it a stage that
 				// reported nothing at all would pass the preceding assertion.
-				const reported = await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-excluded.test.ts', text: 'debugger\n' },
-				})
+				const reported = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-excluded.test.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(reported.issues.length).toBe(1)
 			} finally {
 				await stage.destroy()
@@ -392,17 +710,23 @@ describe('lint stage', () => {
 			try {
 				// `.oxlintrc.json` exempts `*.config.ts` from `import/no-default-export`, so a probe that
 				// reported this candidate would refuse code the workspace's own gate accepts.
-				const exempt = await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-override.config.ts', text },
-				})
+				const exempt = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-override.config.ts', text },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text under a path the exemption does not reach. Without it a
 				// stage that reported nothing at all would pass the preceding assertion.
-				const reported = await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-override.ts', text },
-				})
+				const reported = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-override.ts', text },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(reported.issues).toEqual(
 					expect.arrayContaining([
 						expect.objectContaining({
@@ -427,18 +751,24 @@ describe('lint stage', () => {
 			try {
 				// The workspace exempts `configs/**` from `no-debugger`, so a candidate declared there
 				// has to reach Oxlint under a path that override still selects.
-				const exempt = await stage.inspect({
-					files: [],
-					test: { path: 'configs/candidate.ts', text: 'debugger\n' },
-				})
+				const exempt = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'configs/candidate.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text under a directory the override does not reach. Both
 				// candidates carry one declared directory and one declared name, so the only thing that
 				// can separate these two answers is the directory the stage kept.
-				const reported = await stage.inspect({
-					files: [],
-					test: { path: 'lib/candidate.ts', text: 'debugger\n' },
-				})
+				const reported = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'lib/candidate.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -464,17 +794,23 @@ describe('lint stage', () => {
 			try {
 				// `guides/candidate*.ts` reaches one directory and one name stem, so a stage that kept
 				// the directory and dropped the name selects the workspace's default rules instead.
-				const exempt = await stage.inspect({
-					files: [],
-					test: { path: 'guides/candidate.ts', text: 'debugger\n' },
-				})
+				const exempt = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'guides/candidate.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(exempt.issues).toStrictEqual([])
 				// The control is a different name in the same directory, so the directory cannot be
 				// what separates these two answers.
-				const reported = await stage.inspect({
-					files: [],
-					test: { path: 'guides/other.ts', text: 'debugger\n' },
-				})
+				const reported = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'guides/other.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -500,17 +836,23 @@ describe('lint stage', () => {
 			try {
 				// `lib/exempt.ts` names one file and nothing else, so only the declared path itself
 				// selects this override. No identity distinct from that path can reach it.
-				const exempt = await stage.inspect({
-					files: [],
-					test: { path: 'lib/exempt.ts', text: 'debugger\n' },
-				})
+				const exempt = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'lib/exempt.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(exempt.issues).toStrictEqual([])
 				// The control is the same text in the same directory under a path the override does not
 				// name, so the directory cannot be what separates these two answers.
-				const reported = await stage.inspect({
-					files: [],
-					test: { path: 'lib/reported.ts', text: 'debugger\n' },
-				})
+				const reported = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'lib/reported.ts', text: 'debugger\n' },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(reported.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -553,7 +895,10 @@ describe('lint stage', () => {
 			const path = 'tmp/probe/arm-runtime-89ab.test.ts'
 			const violation = `debugger\n${PASSING}`
 			try {
-				const violating = await stage.inspect({ files: [], test: { path, text: violation } })
+				const violating = await stage.inspect(
+					{ files: [], test: { path, text: violation } },
+					{ signal: UNBOUNDED },
+				)
 				expect(violating.issues).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -563,15 +908,21 @@ describe('lint stage', () => {
 				])
 				// The `clean` control is the boot control's own clean text at the same path. Without it a
 				// stage that reported an issue for everything would pass the preceding assertion.
-				const clean = await stage.inspect({ files: [], test: { path, text: PASSING } })
+				const clean = await stage.inspect(
+					{ files: [], test: { path, text: PASSING } },
+					{ signal: UNBOUNDED },
+				)
 				expect(clean.issues).toStrictEqual([])
 				// The `elsewhere` control is the same violation under the same file name outside that
 				// directory, where the workspace leaves the rule off. It makes the preceding issue
 				// evidence that the declared directory selected the rule set.
-				const elsewhere = await stage.inspect({
-					files: [],
-					test: { path: 'lib/arm-runtime-89ab.test.ts', text: violation },
-				})
+				const elsewhere = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'lib/arm-runtime-89ab.test.ts', text: violation },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(elsewhere.issues).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
@@ -584,10 +935,13 @@ describe('lint stage', () => {
 
 	it('abandons an inspection and destroys idempotently', { timeout: 60_000 }, async () => {
 		const stage = new LintStage(ROOT)
-		const inspection = stage.inspect({
-			files: [],
-			test: { path: 'tests/src/server/lint-destroy.test.ts', text: 'debugger\n' },
-		})
+		const inspection = stage.inspect(
+			{
+				files: [],
+				test: { path: 'tests/src/server/lint-destroy.test.ts', text: 'debugger\n' },
+			},
+			{ signal: UNBOUNDED },
+		)
 		void inspection.catch(() => {})
 		await Promise.all([stage.destroy(), stage.destroy()])
 		await expect(inspection).rejects.toThrow('The lint stage has been destroyed')
@@ -600,16 +954,22 @@ describe('lint stage', () => {
 		async () => {
 			const scratch = createScratch({ files: FIXTURE })
 			const stage = new LintStage(scratch.path)
-			const held = stage.inspect({
-				files: [{ path: 'src/core/held.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' }],
-				test: { path: 'tests/src/server/held.test.ts', text: PASSING },
-			})
+			const held = stage.inspect(
+				{
+					files: [{ path: 'src/core/held.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' }],
+					test: { path: 'tests/src/server/held.test.ts', text: PASSING },
+				},
+				{ signal: UNBOUNDED },
+			)
 			void held.catch(() => {})
 			try {
-				const served = await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/served.test.ts', text: PASSING },
-				})
+				const served = await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/served.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				expect(served.stage).toBe('lint')
 				expect(served.issues).toStrictEqual([])
 			} finally {
@@ -621,14 +981,51 @@ describe('lint stage', () => {
 		},
 	)
 
+	it(
+		'ends the language server process it owns when teardown settles',
+		{ timeout: 20_000 },
+		async (context) => {
+			const scratch = createScratch({ files: FIXTURE })
+			try {
+				const stage = new LintStage(scratch.path)
+				await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-owned-process.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
+				// The stage keeps its child private, so the fixture announces the process id the
+				// stage actually spawned and this row reads the real child rather than a handle
+				// the stage handed out.
+				const owned = readFixtureServer(scratch)
+				await context.annotate(`the lint stage owns language server process ${owned}`)
+				// The control comes first: signal zero reaches that process while the stage still
+				// holds it, so a refusal afterwards is evidence about the teardown rather than
+				// about a process id nothing could ever reach.
+				expect(isProcessLive(owned)).toBe(true)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				// Signal zero is refused for a process the host has reaped, which is what separates
+				// a released child from an orphan the stage abandoned to the host's lifetime.
+				expect(isProcessLive(owned)).toBe(false)
+				await expectReleased(stage)
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('settles teardown after the language server dies by signal', { timeout: 20_000 }, async () => {
 		const scratch = createScratch({ files: FIXTURE })
 		try {
 			const signalled = new LintStage(scratch.path)
-			await signalled.inspect({
-				files: [],
-				test: { path: 'tests/src/server/lint-signal-teardown.test.ts', text: PASSING },
-			})
+			await signalled.inspect(
+				{
+					files: [],
+					test: { path: 'tests/src/server/lint-signal-teardown.test.ts', text: PASSING },
+				},
+				{ signal: UNBOUNDED },
+			)
 			const owned = readFixtureServer(scratch)
 			killFixtureServer(scratch)
 			await waitForDelay(250)
@@ -641,10 +1038,13 @@ describe('lint stage', () => {
 			// The control is the death the guard already handled. A teardown that settles only for a
 			// signalled server would report the same pass as one that settles for neither.
 			const closed = new LintStage(scratch.path)
-			await closed.inspect({
-				files: [],
-				test: { path: 'tests/src/server/lint-clean-teardown.test.ts', text: PASSING },
-			})
+			await closed.inspect(
+				{
+					files: [],
+					test: { path: 'tests/src/server/lint-clean-teardown.test.ts', text: PASSING },
+				},
+				{ signal: UNBOUNDED },
+			)
 			const answering = readFixtureServer(scratch)
 			const exited = performance.now()
 			await expect(closed.destroy()).resolves.toBeUndefined()
@@ -685,10 +1085,13 @@ describe('lint stage', () => {
 			const scratch = createScratch({ files: { ...FIXTURE, 'unanswered-shutdown': '' } })
 			try {
 				const unanswered = new LintStage(scratch.path)
-				await unanswered.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-unanswered-shutdown.test.ts', text: PASSING },
-				})
+				await unanswered.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-unanswered-shutdown.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				const owned = readFixtureServer(scratch)
 				const asked = performance.now()
 				await expect(unanswered.destroy()).resolves.toBeUndefined()
@@ -704,10 +1107,13 @@ describe('lint stage', () => {
 			const answering = createScratch({ files: FIXTURE })
 			try {
 				const stage = new LintStage(answering.path)
-				await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-answered-shutdown.test.ts', text: PASSING },
-				})
+				await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-answered-shutdown.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				const owned = readFixtureServer(answering)
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
@@ -727,10 +1133,13 @@ describe('lint stage', () => {
 			const scratch = createScratch({ files: { ...FIXTURE, 'ignored-exit': '' } })
 			try {
 				const stage = new LintStage(scratch.path)
-				await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-ignored-exit.test.ts', text: PASSING },
-				})
+				await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-ignored-exit.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				const owned = readFixtureServer(scratch)
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
@@ -753,10 +1162,13 @@ describe('lint stage', () => {
 		async () => {
 			const scratch = createScratch({ files: { ...FIXTURE, 'unanswered-initialize': '' } })
 			const stage = new LintStage(scratch.path)
-			const inspection = stage.inspect({
-				files: [],
-				test: { path: 'tests/src/server/lint-unanswered-initialize.test.ts', text: PASSING },
-			})
+			const inspection = stage.inspect(
+				{
+					files: [],
+					test: { path: 'tests/src/server/lint-unanswered-initialize.test.ts', text: PASSING },
+				},
+				{ signal: UNBOUNDED },
+			)
 			void inspection.catch(() => {})
 			try {
 				// The server exits a quarter second after it reads `initialize`, so teardown starts
@@ -765,7 +1177,14 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				await expect(inspection).rejects.toThrow('The Oxlint language server exited with code 0')
+				// Teardown settles the outstanding `initialize` itself rather than leaving it for
+				// the ending the server takes a moment later, so the inspection parked on warming
+				// is refused on the stage's own terms.
+				await expect(inspection).rejects.toThrow('The lint stage has been destroyed')
+				// The gauge is what separates that refusal from one raised at the entry guard: this
+				// inspection was admitted before teardown and never reached a document, so nothing
+				// but the interrupted warming can have settled it.
+				expect(stage.progress).toBe(0)
 				await expectReleased(stage)
 			} finally {
 				scratch.destroy()
@@ -782,10 +1201,13 @@ describe('lint stage', () => {
 			// rather than off an event it never receives.
 			const stage = new LintStage(resolve(scratch.path, 'missing'))
 			const failure: unknown = await stage
-				.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-unspawnable.test.ts', text: PASSING },
-				})
+				.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-unspawnable.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				.catch((error: unknown) => error)
 			expect(isProbeError(failure)).toBe(true)
 			expect(failure).toMatchObject({
@@ -813,10 +1235,13 @@ describe('lint stage', () => {
 			const scratch = createScratch({ files: FIXTURE })
 			const stage = new LintStage(scratch.path)
 			try {
-				await stage.inspect({
-					files: [],
-					test: { path: 'tests/src/server/lint-before-signal.test.ts', text: PASSING },
-				})
+				await stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-before-signal.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				)
 				killFixtureServer(scratch)
 				await waitForDelay(250)
 				// The control comes first: a child this host never killed ends on its own code, so an
@@ -824,10 +1249,13 @@ describe('lint stage', () => {
 				expect(await readHostEnding()).toBe('code 0')
 				const ending = await readHostEnding('SIGKILL')
 				await expect(
-					stage.inspect({
-						files: [],
-						test: { path: 'tests/src/server/lint-after-signal.test.ts', text: PASSING },
-					}),
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-after-signal.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
 				).rejects.toThrow(`The Oxlint language server exited with ${ending}`)
 			} finally {
 				const teardown = createTeardown()
@@ -846,10 +1274,13 @@ describe('lint stage', () => {
 			const stage = new LintStage(scratch.path)
 			try {
 				await expect(
-					stage.inspect({
-						files: [],
-						test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
-					}),
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
 				).rejects.toMatchObject({
 					name: 'ProbeError',
 					message: 'The Oxlint language server exited with code 7',
@@ -861,10 +1292,13 @@ describe('lint stage', () => {
 				// later inspection of that same path is admitted and refused on its own terms rather
 				// than colliding with one still registered.
 				await expect(
-					stage.inspect({
-						files: [],
-						test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
-					}),
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-frail.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
 				).rejects.toThrow('The Oxlint language server exited with code 7')
 			} finally {
 				const teardown = createTeardown()
@@ -886,13 +1320,16 @@ describe('lint stage', () => {
 				// candidate in this file that drives a real language server into a code exit, so it is
 				// what establishes that a candidate's own text can reach that ending at all.
 				await expect(
-					stage.inspect({
-						files: [],
-						test: {
-							path: 'tests/src/server/lint-surrogate.test.ts',
-							text: `const VALUE = '${String.fromCharCode(0xd800)}'\n`,
+					stage.inspect(
+						{
+							files: [],
+							test: {
+								path: 'tests/src/server/lint-surrogate.test.ts',
+								text: `const VALUE = '${String.fromCharCode(0xd800)}'\n`,
+							},
 						},
-					}),
+						{ signal: UNBOUNDED },
+					),
 				).rejects.toThrow('The Oxlint language server exited with code 0')
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
@@ -926,20 +1363,38 @@ describe('lint stage', () => {
 			try {
 				// Closing this document is what makes the server close its input, so the write that
 				// meets the broken pipe is the next inspection's rather than a timer's.
-				await stage.inspect({
-					files: [],
-					test: {
-						path: 'tests/src/server/lint-closes-input.test.ts',
-						text: `${PASSING}// PROBE_CLOSES_INPUT\n`,
-					},
-				})
-				await waitForDelay(250)
-				await expect(
-					stage.inspect({
+				await stage.inspect(
+					{
 						files: [],
-						test: { path: 'tests/src/server/lint-refused.test.ts', text: PASSING },
-					}),
-				).rejects.toThrow('EPIPE')
+						test: {
+							path: 'tests/src/server/lint-closes-input.test.ts',
+							text: `${PASSING}// PROBE_CLOSES_INPUT\n`,
+						},
+					},
+					{ signal: UNBOUNDED },
+				)
+				await waitForDelay(250)
+				// The client owns the write, so the refusal reaches the caller as the notification
+				// that could not be delivered rather than as the host's own pipe code. What the row
+				// proves is unchanged: the inspection is refused as a stage fault instead of
+				// waiting for a reply a dead input can never carry.
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-refused.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toMatchObject({
+					name: 'ProbeError',
+					origin: 'instrument',
+					code: 'malformed',
+					context: { stage: 'lint' },
+					message: expect.stringContaining(
+						"The LSP notification 'textDocument/didOpen' could not be written",
+					),
+				})
 				await expect(stage.destroy()).resolves.toBeUndefined()
 			} finally {
 				const teardown = createTeardown()

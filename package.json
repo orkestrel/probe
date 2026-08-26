@@ -94,6 +94,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
+		"@orkestrel/lsp": "file:../lsp/tmp/tarballs/orkestrel-lsp-0.0.1.tgz",
 		"@orkestrel/mcp": "^0.0.24",
 		"@orkestrel/queue": "^0.0.10",
 		"@orkestrel/timeout": "^0.0.8",
