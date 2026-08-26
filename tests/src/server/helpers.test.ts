@@ -132,9 +132,12 @@ describe('server helper examples', () => {
 
 describe('workspace message paths', () => {
 	it('rewrites every contained spelling and leaves an uncontained path alone', () => {
+		// The rewrite removes the root and keeps the separator the tool wrote, so the native spelling
+		// leaves the host's own relative form while the URL spelling leaves forward slashes on every
+		// host.
 		const contained = resolve(ROOT, 'src/core/greeting.ts')
 		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${contained}`)).toBe(
-			'Cannot find src/core/greeting.ts',
+			`Cannot find ${relative(ROOT, contained)}`,
 		)
 		expect(relativeWorkspaceMessage(ROOT, `Cannot find ${pathToFileURL(contained).href}`)).toBe(
 			'Cannot find src/core/greeting.ts',
@@ -198,8 +201,10 @@ describe('workspace message paths', () => {
 			`Failed to load ${complete}`,
 		)
 		const generated = createRevisionFile(ROOT, 'tmp/probe/greeting.test.ts', `${process.pid}-1f0c`)
+		// The root is removed even from a marker-carrying name, and the remainder keeps the separator
+		// the tool wrote rather than the forward-slash form `Issue.path` uses.
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${generated}`)).toBe(
-			`Failed to load ${relativeWorkspaceFile(ROOT, generated)}`,
+			`Failed to load ${relative(ROOT, generated)}`,
 		)
 	})
 })
@@ -397,8 +402,8 @@ describe('server path helpers', () => {
 			const target = scratch.write('boot/value.ts', 'export const VALUE = 1\n')
 			overwriteFile(target, 'export const VALUE = 22\n')
 			expect(readFileSync(target, 'utf8')).toBe('export const VALUE = 22\n')
-			// Shorter text leaves no tail of the longer text behind, which is what `O_TRUNC` decides
-			// rather than the position a descriptor opens at.
+			// Shorter text leaves no tail of the longer text behind, which is what the `ftruncateSync`
+			// call through the held descriptor decides rather than the position a descriptor opens at.
 			overwriteFile(target, 'export const VALUE = 3\n')
 			expect(readFileSync(target, 'utf8')).toBe('export const VALUE = 3\n')
 

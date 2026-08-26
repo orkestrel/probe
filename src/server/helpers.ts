@@ -6,6 +6,7 @@ import type * as VitestNode from 'vitest/node'
 import {
 	closeSync,
 	constants,
+	ftruncateSync,
 	lstatSync,
 	openSync,
 	readFileSync,
@@ -137,11 +138,17 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
  * A containment walk and the write that follows it are separate calls, so a process that swaps the
  * final component between them decides where the bytes land. `writeFileSync` opens with the default
  * `w` flag, which follows a symbolic link at that component and creates the file when it is absent,
- * so the walk's reading does not bind the write. Opening `O_WRONLY | O_TRUNC | O_NOFOLLOW` moves
- * that decision into the call that writes: a link at the final component refuses the open, and the
+ * so the walk's reading does not bind the write. Opening `O_WRONLY | O_NOFOLLOW` moves that
+ * decision into the call that writes: a link at the final component refuses the open, and the
  * omitted `O_CREAT` fails `ENOENT` for a target that has gone since the walk saw it. This is the
  * mutating counterpart of the `wx` flag every create in this package uses. Which code the refusal
  * carries is the host's; Linux with Node v22.22.2 reported `ELOOP` on 2026-08-24.
+ *
+ * Truncation runs through the held descriptor rather than through an `O_TRUNC` flag, so it reaches
+ * the file the open bound. A Windows host refuses the numeric `O_TRUNC` without `O_CREAT` outright:
+ * measured on 2026-08-26 on Windows 11 with Node v24.19.0 over NTFS, `openSync` reported `EINVAL`
+ * for `O_WRONLY | O_TRUNC` and for `O_RDWR | O_TRUNC` while `O_WRONLY` alone opened, and adding
+ * `O_CREAT` would trade that refusal for the create this function must never perform.
  *
  * A directory component stays open, because Node exposes no descriptor-relative call to walk and
  * write through one set of descriptors. Where a host's Node build defines no `O_NOFOLLOW`, that flag
@@ -162,8 +169,9 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
  * ```
  */
 export function overwriteFile(file: string, text: string): void {
-	const descriptor = openSync(file, constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW)
+	const descriptor = openSync(file, constants.O_WRONLY | constants.O_NOFOLLOW)
 	try {
+		ftruncateSync(descriptor, 0)
 		writeFileSync(descriptor, text, 'utf8')
 	} finally {
 		closeSync(descriptor)
