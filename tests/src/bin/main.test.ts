@@ -5,7 +5,12 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { createMCPClient } from '@orkestrel/mcp'
+import {
+	MCP_FALLBACK_VERSION,
+	MCP_MODERN_VERSION,
+	createMCPClient,
+	createMCPLegacyClientTransport,
+} from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
@@ -455,20 +460,30 @@ describe('bin entry', () => {
 			const directory = resolve(ROOT, 'tmp/probe/bin')
 			mkdirSync(directory, { recursive: true })
 			const client = createMCPClient({
-				transport: createStdioClientTransport({
-					command: process.execPath,
-					args: [BUILT_ENTRY],
-				}),
+				transport: createMCPLegacyClientTransport(
+					createStdioClientTransport({
+						command: process.execPath,
+						args: [BUILT_ENTRY],
+					}),
+					{
+						identity: { name: 'probe-foreign-client', version: '1.0.0' },
+						version: MCP_FALLBACK_VERSION,
+						// Well above the handshake default, because the first forwarded call waits on
+						// arming and this deadline is here to catch a hang rather than to grade the host.
+						timeout: 300_000,
+					},
+				),
 				identity: { name: 'probe-foreign-client', version: '1.0.0' },
 				// Well above the client's own default, because the first call waits on arming and this
 				// deadline is here to catch a hang rather than to grade the host.
 				timeout: 300_000,
-				version: '2025-06-18',
 			})
 			try {
 				await client.connect()
 				expect(client.connected).toBe(true)
-				expect(client.version).toBe('2025-06-18')
+				// The adapter is modern-facing: the pinned legacy revision rides the wire while the
+				// client reads the modern era.
+				expect(client.version).toBe(MCP_MODERN_VERSION)
 				const tools = await client.tools()
 				expect(tools.map((tool) => tool.name)).toStrictEqual(['prove'])
 				expect(tools[0]?.description).toContain('measure before proving')
