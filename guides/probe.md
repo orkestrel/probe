@@ -492,26 +492,44 @@ every `ProbeOptions` member for it, because `start()` seizes this process's stan
 output: a host that starts one has given the process to it. `destroy()` gives the process back and
 tears the probe down with it.
 
-**A successful `tools/call` answers with one text block, not with the `Verdict` record.** The result
-carries a single `content` entry of `type: 'text'`, and its text is what `formatVerdict` rendered:
-the identity, claim, toolchain, project, and reason lines, then every case and control stage, then
-the closing line. That closing line is where the receipt lives, spelled `receipt <token>` when the
-claim proved itself and `no receipt` when it did not, so a client reads the outcome from the last
-line rather than inferring it from the rest. Nothing on the wire carries `verdict.id`,
-`verdict.digest`, or the per-stage `elapsed` values as data. A caller that needs the record itself
-holds a `Probe` in its own process and reads what `prove` returns.
+**A successful `tools/call` answers with the `Verdict` record and its rendered text together.** The
+result carries the record in `structuredContent` and a single `content` entry of `type: 'text'`
+whose text is what `formatVerdict` rendered: the identity, claim, toolchain, project, and reason
+lines, then every case and control stage, then the closing line. That closing line is where the
+receipt lives, spelled `receipt <token>` when the claim proved itself and `no receipt` when it did
+not, so a client reads the outcome from the last line rather than inferring it from the rest.
+`structuredContent` is the record `prove` returns in this process, unchanged, so a client reads
+`verdict.id`, `verdict.digest`, and the per-stage `elapsed` values as data rather than off the
+prose. A client that prefers a result's structured content over its content blocks receives the
+record and renders the text itself when it wants it; the `@orkestrel/mcp` client is one.
 
-The server sends no `structuredContent` beside that text, so a client cannot read the verdict as
-data over the wire. That decision is deferred rather than settled: publishing the `Verdict` as
-structured content fixes a second wire shape this package then owes compatibility to, and no
-consumer of this package needs one.
+**The text block carries `formatVerdict`'s prose rather than the record's serialized JSON, which
+departs from the specification's recommendation.** The tools specification recommends that a tool
+returning structured content also return the serialized JSON in a text content block. The receipt's
+closing line has to stay quotable verbatim, so the text block keeps the rendered form and the record
+travels beside it in `structuredContent`. A client that wants the serialized JSON serializes
+`structuredContent` itself.
+
+**The server publishes a key bound above the `@orkestrel/mcp` default, because a verdict's breadth
+is the claimant's.** That package bounds a produced tool-call result by its total enumerable key
+count as well as by its bytes, and applies one bound to inbound metadata and to produced tool
+content alike; its default leaf is sized for metadata. Measured on 2026-08-27 against
+`@orkestrel/mcp` 0.0.25, over the `Verdict` shape this page documents, a verdict costs 38 keys with
+no issues and 11 more for each issue a stage reports, so under the default a verdict whose control
+refuses one declaration travels and the next
+one does not — and it fails by replacing the whole answer with `-32603 Server execution returned an
+invalid tool result` rather than by dropping the record alone. The published bound of 4096 keys
+leaves the byte bounds the binding ones for a verdict a real claim produces; it reaches inbound
+metadata too, whose own 16 KiB byte limit is unchanged. Where a verdict still exceeds those bounds,
+the result carries the text block alone, so the receipt answers even when the record cannot travel.
 
 **One third-party client drives this entry: the `@orkestrel/mcp` stdio client.** It spawns the
-shipped `dist/bin/main.js`, negotiates the era itself, lists `prove`, and hands back the rendered
-text described earlier, and [`main.test.ts`](../tests/src/bin/main.test.ts) runs that round trip
-against the built entry. No other third-party client has been driven against this server, so treat
-a claim about another one as untested. The transport facts stated earlier were established against
-this repository's own hand-written line client, and the driven client meets them too.
+shipped `dist/bin/main.js`, negotiates the era itself, lists `prove`, and hands back the record
+described earlier, and [`main.test.ts`](../tests/src/bin/main.test.ts) runs that round trip against
+the built entry on the current revision and through the legacy projection. No other third-party
+client has been driven against this server, so treat a claim about another one as untested. The
+transport facts stated earlier were established against this repository's own hand-written line
+client, and the driven client meets them too.
 
 **The advertised schema is wider than the admission rule, at `Draft.path`.** The `prove` tool
 publishes `compileSchema(CLAIM_SHAPE)` and admits a call with `isClaim`, and the two agree on every
@@ -993,13 +1011,13 @@ inspection rather than the common one.
   [`RuntimeStage.test.ts`](../tests/src/server/stages/RuntimeStage.test.ts) — the resident stages
   against their real tools.
 - [`ProbeServer.test.ts`](../tests/src/server/ProbeServer.test.ts) — what `start` seizes and what
-  `destroy` gives back, standard input's flow included, and what a host attaches while the server is
-  serving.
+  `destroy` gives back, standard input's flow included, what a host attaches while the server is
+  serving, and the key bound the installed package applies to a record-bearing result.
 - [`Overlay.test.ts`](../tests/src/server/Overlay.test.ts) — the candidate set's identity,
   containment, and release.
 - [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by this repository's
-  own line client and by the `@orkestrel/mcp` stdio client, and the signals delivered to it during
-  boot and in service.
+  own line client and by the `@orkestrel/mcp` stdio client, the record and the rendered text its
+  reply carries on both eras, and the signals delivered to it during boot and in service.
 - [`distribution.test.ts`](../tests/distribution.test.ts) — the packed package installed outside the
   repository and driven through its public exports.
 

@@ -4,7 +4,7 @@ import type { ToolResult } from '@orkestrel/tool'
 import type { ProbeServerInterface } from './types.js'
 import { PassThrough } from 'node:stream'
 import { compileSchema, schemaToParameters } from '@orkestrel/contract'
-import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import { DEFAULT_MCP_LIMITS, createMCPLegacy, createMCPServer, isBoundedJSON } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
@@ -54,6 +54,20 @@ export class ProbeServer implements ProbeServerInterface {
 	readonly #close: () => void
 	readonly #error: (error: Error) => void
 	readonly #signal: () => void
+	// The bounds this server judges its own answer by, and the source of the key bound it
+	// publishes. `@orkestrel/mcp` counts total enumerable keys across a bounded value and applies
+	// one bound to inbound metadata and to produced tool content alike, and its default leaf is
+	// sized for metadata: a verdict costs 38 keys empty and 11 more for each issue a stage reports,
+	// so the default carries a verdict whose control refuses one declaration and stops carrying the
+	// next one. It stops by replacing the whole answer with a JSON-RPC internal error, which costs
+	// the rendered text and its receipt as well as the record. This bound leaves the byte bounds the
+	// binding ones for a verdict a real claim produces. It reaches inbound metadata too, whose own
+	// 16 KiB byte limit is unchanged.
+	readonly #limits = {
+		bytes: DEFAULT_MCP_LIMITS.content,
+		keys: 4096,
+		depth: DEFAULT_MCP_LIMITS.depth,
+	}
 	#owns: boolean | undefined
 	#closing: Promise<void> | undefined
 
@@ -178,6 +192,7 @@ export class ProbeServer implements ProbeServerInterface {
 		return createMCPServer({
 			identity: { name: 'probe', version },
 			tools,
+			limit: { keys: this.#limits.keys },
 			execution: this.#execute.bind(this),
 		})
 	}
@@ -209,9 +224,17 @@ export class ProbeServer implements ProbeServerInterface {
 				context: { value: result.value },
 			})
 		}
-		return {
+		const rendered: MCPCallResult = {
 			resultType: 'complete',
 			content: [{ type: 'text', text: formatVerdict(result.value) }],
 		}
+		// The record travels beside the text rather than in place of it, and `isBoundedJSON` is what
+		// admits a `Verdict` into a field the protocol types as JSON. The rendered text is the answer
+		// a client always gets: a result the published bounds refuse reaches it as a JSON-RPC
+		// internal error instead, which would cost the receipt to carry the record, so an unbounded
+		// pair falls back to the text alone.
+		if (!isBoundedJSON(result.value, this.#limits)) return rendered
+		const carried: MCPCallResult = { ...rendered, structuredContent: result.value }
+		return isBoundedJSON(carried, this.#limits) ? carried : rendered
 	}
 }

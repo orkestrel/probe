@@ -1,4 +1,6 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
+import type { JSONValue } from '@orkestrel/contract'
+import type { Interface } from 'node:readline'
 import { version } from '../../../package.json' with { type: 'json' }
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -10,10 +12,12 @@ import {
 	MCP_MODERN_VERSION,
 	createMCPClient,
 	createMCPLegacyClientTransport,
+	isJSONObject,
 } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
+import { formatVerdict, isVerdict } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { readSignalEnding } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
@@ -53,6 +57,18 @@ const HANDLED = [
 // The same child with no handler. It cannot exit 0 on a signal, which is what makes it the control
 // for the reading that follows.
 const UNHANDLED = ["process.stdout.write('armed')", 'setTimeout(() => {}, 10_000)'].join('\n')
+// The module text a claim's case carries, and the text its control carries in place of it. The
+// control's annotation refuses the string literal beside it, so the type stage reports one issue.
+const CLEAN = "export const VALUE = 'ok'\n"
+const BROKEN = "export const VALUE: number = 'bad'\n"
+// The same refusal repeated, so the type stage reports an issue per declaration. `@orkestrel/mcp`
+// bounds a tool-call result by total enumerable keys as well as by bytes, and a verdict's key count
+// grows with the issues its stages report, so this control is what drives the record past the key
+// bound the package defaults to.
+const WIDE = Array.from(
+	{ length: 30 },
+	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
+).join('\n')
 
 function readWorkbench(directory: string): readonly string[] {
 	try {
@@ -109,6 +125,50 @@ function writeTarget(scratch: ScratchInterface): void {
 		'vite.config.ts',
 		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
 	)
+}
+
+// Reads one JSON-RPC response line as the `result` record it carries, or `undefined` when the line
+// carries an error or anything else. `isJSONObject` is the installed guard, so nothing here
+// re-implements the envelope's shape.
+function readAnswer(line: string): Readonly<Record<string, JSONValue>> | undefined {
+	const message: unknown = JSON.parse(line)
+	if (!isJSONObject(message)) return undefined
+	const answer = message['result']
+	return isJSONObject(answer) ? answer : undefined
+}
+
+// Collects newline-delimited JSON-RPC responses from a child's standard output until the expected
+// number of non-empty frames has arrived.
+async function readFrames(output: Interface, expected: number): Promise<readonly string[]> {
+	const frames: string[] = []
+	for await (const line of output) {
+		if (line.trim() !== '') frames.push(line)
+		if (frames.length === expected) break
+	}
+	return frames
+}
+
+// One claim that earns a receipt in this workspace, named so two claims never share a draft path.
+// `control` is the text the named module carries in the control phase, which is what decides how
+// many issues the type stage reports for it.
+function buildClaim(name: string, control: string): Readonly<Record<string, unknown>> {
+	const specification = {
+		path: `tmp/probe/bin/${name}-runtime.test.ts`,
+		text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
+	}
+	return {
+		project: 'configs/src/tsconfig.core.json',
+		case: {
+			files: [{ path: `src/core/${name}.ts`, text: CLEAN }],
+			test: specification,
+		},
+		control: {
+			files: [{ path: `src/core/${name}.ts`, text: control }],
+			test: specification,
+			stage: 'type',
+			reason: 'the source assigns a string to a number',
+		},
+	}
 }
 
 describe('bin entry', () => {
@@ -369,94 +429,215 @@ describe('bin entry', () => {
 		},
 	)
 
+	// The reply shape § Registering the server documents, read off the raw wire on both eras: the
+	// record in `structuredContent` and the rendered text in the result's one content block. The
+	// text is compared against `formatVerdict` applied to the record that arrived beside it, so the
+	// two wire fields have to agree about the same verdict rather than each being plausible alone.
+	// A plain spawn rather than a pseudo-terminal, because this claim is about the reply and not
+	// about what a terminal does to the worker's output.
+	it(
+		'carries the verdict record beside the rendered text on both eras',
+		{ timeout: 300_000 },
+		async () => {
+			const modern = {
+				'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+				'io.modelcontextprotocol/clientCapabilities': {},
+				'io.modelcontextprotocol/clientInfo': { name: 'probe-test', version: '1.0.0' },
+			}
+			const requests = [
+				{
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'initialize',
+					params: {
+						protocolVersion: '2025-06-18',
+						capabilities: {},
+						clientInfo: { name: 'probe-test', version: '1.0.0' },
+					},
+				},
+				{
+					jsonrpc: '2.0',
+					id: 2,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: buildClaim('era-legacy', BROKEN) },
+				},
+				{
+					jsonrpc: '2.0',
+					id: 3,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: buildClaim('era-modern', BROKEN), _meta: modern },
+				},
+			]
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: ROOT,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const errors: Buffer[] = []
+			child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+			const output = createInterface({ input: child.stdout })
+			try {
+				child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
+				const frames = await readFrames(output, requests.length)
+				expect(Buffer.concat(errors).toString('utf8')).not.toContain('Error')
+				// The handshake first, so a failure there is not read as a failure of the two calls.
+				expect(readAnswer(frames[0] ?? '')).toMatchObject({
+					protocolVersion: '2025-06-18',
+					serverInfo: { name: 'probe', version },
+				})
+				for (const frame of frames.slice(1)) {
+					const answer = readAnswer(frame)
+					expect(answer, `no result on ${frame}`).toBeDefined()
+					if (answer === undefined) continue
+					const record = answer['structuredContent']
+					expect(isVerdict(record), `no verdict on ${frame}`).toBe(true)
+					if (!isVerdict(record)) continue
+					expect(answer['content']).toStrictEqual([{ type: 'text', text: formatVerdict(record) }])
+					expect(record.receipt).toMatch(/^probe:/)
+					expect(answer['isError']).toBeUndefined()
+				}
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// The record's breadth is the claimant's, not this package's: a control that refuses one
+	// declaration reports one issue, and a control that refuses many reports many. `@orkestrel/mcp`
+	// counts total enumerable keys across a produced result and refuses one that exceeds the bound,
+	// so a bound sized for request metadata would answer the case above and turn this one into a
+	// JSON-RPC error carrying neither the record nor the receipt.
+	it(
+		'carries a record whose control reports an issue per refused declaration',
+		{ timeout: 300_000 },
+		async () => {
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: ROOT,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const output = createInterface({ input: child.stdout })
+			try {
+				child.stdin.write(
+					JSON.stringify({
+						jsonrpc: '2.0',
+						id: 1,
+						method: 'tools/call',
+						params: { name: 'prove', arguments: buildClaim('wide', WIDE) },
+					}) + '\n',
+				)
+				const frames = await readFrames(output, 1)
+				const answer = readAnswer(frames[0] ?? '')
+				expect(answer, `no result on ${frames[0] ?? ''}`).toBeDefined()
+				if (answer === undefined) return
+				const record = answer['structuredContent']
+				expect(isVerdict(record), `no verdict on ${frames[0] ?? ''}`).toBe(true)
+				if (!isVerdict(record)) return
+				expect(answer['content']).toStrictEqual([{ type: 'text', text: formatVerdict(record) }])
+				// Measured against the installed package: its default key bound carries a verdict whose
+				// control reports one issue and refuses the next one, so a control reporting more than
+				// that is what separates the published bound from the default.
+				const broke = record.control.find((check) => check.stage === 'type')
+				expect(broke?.issues.length).toBeGreaterThan(2)
+				expect(record.receipt).toMatch(/^probe:/)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
+			}
+		},
+	)
+
 	// A foreign client, not this file's own line writer: `@orkestrel/mcp`'s stdio client spawns the
 	// shipped entry, negotiates the era, and correlates the reply itself. What it hands back is the
-	// reply shape § Registering the server documents — one rendered text block whose closing line
-	// carries the receipt — read through a client that knows nothing about this package.
-	it('answers a driven third-party client with one text block', { timeout: 120_000 }, async () => {
-		const claim = {
-			project: 'configs/src/tsconfig.core.json',
-			case: {
-				files: [{ path: 'src/core/client.ts', text: "export const VALUE = 'ok'\n" }],
-				test: {
-					path: 'tmp/probe/bin/client-runtime.test.ts',
-					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-				},
-			},
-			control: {
-				files: [{ path: 'src/core/client.ts', text: "export const VALUE: number = 'bad'\n" }],
-				test: {
-					path: 'tmp/probe/bin/client-runtime.test.ts',
-					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-				},
-				stage: 'type',
-				reason: 'the source assigns a string to a number',
-			},
-		}
-		const directory = resolve(ROOT, 'tmp/probe/bin')
-		mkdirSync(directory, { recursive: true })
-		const client = createMCPClient({
-			transport: createStdioClientTransport({
-				command: process.execPath,
-				args: [BUILT_ENTRY],
-			}),
-			identity: { name: 'probe-foreign-client', version: '1.0.0' },
-			// Well above the client's own default, because the first call waits on arming and this
-			// deadline is here to catch a hang rather than to grade the host.
-			timeout: 300_000,
-		})
-		try {
-			await client.connect()
-			expect(client.connected).toBe(true)
-			expect(client.version).toBeDefined()
-			const tools = await client.tools()
-			expect(tools.map((tool) => tool.name)).toStrictEqual(['prove'])
-			expect(tools[0]?.description).toContain('measure before proving')
-			expect(tools[0]?.description).toContain("import.meta.env.MODE === 'benchmark'")
-			const outcome = await client.call('prove', claim)
-			expect(outcome.resultType).toBe('complete')
-			if (outcome.resultType !== 'complete') return
-			// A string rather than a record: the tool answers with rendered text, so a client holding
-			// the reply holds `formatVerdict`'s output and not the `Verdict` the process built.
-			expect(typeof outcome.value).toBe('string')
-			const text = String(outcome.value)
-			expect(text.startsWith('probe ')).toBe(true)
-			expect(text.trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
-		} finally {
-			const teardown = createTeardown()
-			teardown.add(() => {
-				try {
-					rmdirSync(directory)
-				} catch {}
+	// reply shape § Registering the server documents — the `Verdict` record, because a client of
+	// this package prefers a result's `structuredContent` over its content blocks — read through a
+	// client that knows nothing about this package.
+	it(
+		'answers a driven third-party client with the verdict record',
+		{ timeout: 120_000 },
+		async () => {
+			const claim = buildClaim('client', BROKEN)
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const client = createMCPClient({
+				transport: createStdioClientTransport({
+					command: process.execPath,
+					args: [BUILT_ENTRY],
+				}),
+				identity: { name: 'probe-foreign-client', version: '1.0.0' },
+				// Well above the client's own default, because the first call waits on arming and this
+				// deadline is here to catch a hang rather than to grade the host.
+				timeout: 300_000,
 			})
-			teardown.add(() => client.disconnect())
-			await teardown.destroy()
-		}
-	})
+			try {
+				await client.connect()
+				expect(client.connected).toBe(true)
+				expect(client.version).toBeDefined()
+				const tools = await client.tools()
+				expect(tools.map((tool) => tool.name)).toStrictEqual(['prove'])
+				expect(tools[0]?.description).toContain('measure before proving')
+				expect(tools[0]?.description).toContain("import.meta.env.MODE === 'benchmark'")
+				const outcome = await client.call('prove', claim)
+				expect(outcome.resultType).toBe('complete')
+				if (outcome.resultType !== 'complete') return
+				// A record rather than a string: this client prefers a result's `structuredContent` over
+				// its content blocks, so a client holding the reply holds the `Verdict` the process built.
+				// The rendered text rides beside it in the result's one content block, which the raw-wire
+				// drives read.
+				expect(isVerdict(outcome.value)).toBe(true)
+				if (!isVerdict(outcome.value)) return
+				expect(formatVerdict(outcome.value).trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(() => client.disconnect())
+				await teardown.destroy()
+			}
+		},
+	)
 
 	it(
 		'answers a pinned legacy client through the initialize path',
 		{ timeout: 120_000 },
 		async () => {
-			const claim = {
-				project: 'configs/src/tsconfig.core.json',
-				case: {
-					files: [{ path: 'src/core/legacy.ts', text: "export const VALUE = 'ok'\n" }],
-					test: {
-						path: 'tmp/probe/bin/legacy-runtime.test.ts',
-						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-					},
-				},
-				control: {
-					files: [{ path: 'src/core/legacy.ts', text: "export const VALUE: number = 'bad'\n" }],
-					test: {
-						path: 'tmp/probe/bin/legacy-runtime.test.ts',
-						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-					},
-					stage: 'type',
-					reason: 'the source assigns a string to a number',
-				},
-			}
+			const claim = buildClaim('legacy', BROKEN)
 			const directory = resolve(ROOT, 'tmp/probe/bin')
 			mkdirSync(directory, { recursive: true })
 			const client = createMCPClient({
@@ -491,12 +672,12 @@ describe('bin entry', () => {
 				const outcome = await client.call('prove', claim)
 				expect(outcome.resultType).toBe('complete')
 				if (outcome.resultType !== 'complete') return
-				// A string rather than a record: the tool answers with rendered text, so a client holding
-				// the reply holds `formatVerdict`'s output and not the `Verdict` the process built.
-				expect(typeof outcome.value).toBe('string')
-				const text = String(outcome.value)
-				expect(text.startsWith('probe ')).toBe(true)
-				expect(text.trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
+				// The record survives the legacy projection: `createMCPLegacy` drops the modern stamp
+				// and carries `structuredContent` through, so a client pinned to the legacy revision
+				// reads the same `Verdict` a modern client reads.
+				expect(isVerdict(outcome.value)).toBe(true)
+				if (!isVerdict(outcome.value)) return
+				expect(formatVerdict(outcome.value).trimEnd().split('\n').at(-1)).toMatch(/^receipt probe:/)
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => {

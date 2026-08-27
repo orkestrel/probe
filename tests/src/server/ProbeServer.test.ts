@@ -1,14 +1,82 @@
+import type { MCPLimitOptions } from '@orkestrel/mcp'
+import type { JSONValue } from '@orkestrel/contract'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { captureError, createRecorder, createTeardown, waitForDelay } from '@orkestrel/test'
-import { createToolManager } from '@orkestrel/tool'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
+
+// A verdict carrying one issue per refused declaration, which is what a control refusing several
+// declarations at once produces. The shape is the `Verdict` record `isVerdict` admits; the values
+// are inert, because what is read here is how the installed package bounds the record rather than
+// what the record says.
+function buildRecord(issues: number): JSONValue {
+	return {
+		id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+		digest: '6ca20c3bff623031d3955b9d1a76d71d',
+		toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
+		project: { path: 'configs/src/tsconfig.core.json', digest: '3b674fdf121c85efb9ed1bab25ceeec8' },
+		case: [{ stage: 'type', elapsed: 61, issues: [] }],
+		control: [
+			{
+				stage: 'type',
+				elapsed: 58,
+				issues: Array.from({ length: issues }, (_, index) => ({
+					origin: 'claimant',
+					path: `src/core/wide-${String(index)}.ts`,
+					message: 'not assignable',
+					range: {
+						start: { line: index, character: 6 },
+						end: { line: index, character: 13 },
+					},
+				})),
+			},
+		],
+		elapsed: 549,
+		receipt: 'probe:6ca20c3bff623031d3955b9d1a76d71d:type',
+	}
+}
+
+// Dispatches one `tools/call` against a server composed the way `ProbeServer` composes its own —
+// an explicit execution policy answering with a complete result that carries the record beside one
+// rendered text block — and returns the parsed JSON-RPC message the dispatcher answered with.
+async function readCall(record: JSONValue, limit: MCPLimitOptions): Promise<unknown> {
+	const tools = createToolManager()
+	tools.add(
+		createTool({
+			name: 'prove',
+			description: 'Answers whether a TypeScript edit compiles, lints, and passes its test',
+			parameters: { type: 'object', properties: {} },
+			execute: () => record,
+		}),
+	)
+	const server = createMCPServer({
+		identity: { name: 'probe', version: '0.0.0' },
+		tools,
+		limit,
+		execution: () =>
+			Promise.resolve({
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'probe rendered\nreceipt probe:6ca20c' }],
+				structuredContent: record,
+			}),
+	})
+	const answer = await createMCPLegacy(server).handle(
+		JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: { name: 'prove', arguments: {} },
+		}),
+	)
+	return typeof answer === 'string' ? JSON.parse(answer) : undefined
+}
 
 // Every following count is a delta against the moment it was read. A sibling test in this project
 // holds listeners of its own, and the worker these run in is not a fresh process.
@@ -270,5 +338,31 @@ describe('probe server', () => {
 		expect(stream.listenerCount('data')).toBe(0)
 		expect(stream.listenerCount('close')).toBe(0)
 		expect(stream.listenerCount('error')).toBe(0)
+	})
+
+	// The installed bound behind `ProbeServer`'s own `limit`. `@orkestrel/mcp` bounds a produced
+	// tool-call result by total enumerable keys as well as by bytes, and its package default is
+	// sized for request metadata. A verdict's key count grows with the issues its stages report, so
+	// the default carries a verdict whose control refuses one declaration and stops carrying the
+	// next one — and it stops by replacing the whole answer with a JSON-RPC internal error, which
+	// costs the rendered text and its receipt as well as the record. That is why the server
+	// publishes a key bound of its own rather than leaving the leaf absent.
+	it('refuses a record-bearing result under the package default key bound', async () => {
+		expect(await readCall(buildRecord(1), {})).toMatchObject({
+			id: 1,
+			result: { structuredContent: buildRecord(1) },
+		})
+		expect(await readCall(buildRecord(8), {})).toMatchObject({
+			id: 1,
+			error: { message: 'Server execution returned an invalid tool result' },
+		})
+		// The same record under a bound above the default, which is the fix the server applies.
+		expect(await readCall(buildRecord(8), { keys: 4096 })).toMatchObject({
+			id: 1,
+			result: {
+				structuredContent: buildRecord(8),
+				content: [{ type: 'text', text: 'probe rendered\nreceipt probe:6ca20c' }],
+			},
+		})
 	})
 })
