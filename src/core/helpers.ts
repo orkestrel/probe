@@ -61,6 +61,56 @@ export function formatCheck(check: Check): string {
 }
 
 /**
+ * Renders the closing line a rendered verdict ends with: the receipt it earned, or its absence.
+ *
+ * @remarks
+ * One implementation serves every rendering of that line, so the line a reader quotes off a whole
+ * verdict and the line a bounded reply falls back to cannot drift apart.
+ *
+ * @param verdict - The verdict whose `receipt` decides the line
+ * @returns `receipt <token>` when the verdict carries a receipt, and `no receipt` when it does not
+ *
+ * @example
+ * ```ts
+ * formatProof(proven)
+ * // 'receipt probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * formatProof(disproven) // 'no receipt'
+ * ```
+ */
+export function formatProof(verdict: Verdict): string {
+	return verdict.receipt === undefined ? 'no receipt' : `receipt ${verdict.receipt}`
+}
+
+/**
+ * Renders the smallest text a verdict can travel as: what it judged, and how it ended.
+ *
+ * @remarks
+ * A reply whose bounds refuse both the record and the whole rendering answers with this text, so it
+ * carries what a reader cannot recompute — the call's identity, the claim's digest, and the
+ * control's reason when the verdict carries one — and closes with the same line `formatVerdict`
+ * closes with. Every line here is a line `formatVerdict` renders at the same position relative to
+ * the ones around it, so a reader meets one shape whichever answer arrived.
+ *
+ * @param verdict - The verdict to render
+ * @returns The identity and claim lines, the reason when present, then the closing receipt line
+ *
+ * @example
+ * ```ts
+ * formatReceipt(disproven).split('\n')
+ * // ['probe 88a5addc-7d33-40dc-9a5a-104b71f8787d (549 ms)', 'claim 6ca20c3bff623031d3955b9d1a76d71d', 'no receipt']
+ * ```
+ */
+export function formatReceipt(verdict: Verdict): string {
+	const reason = verdict.reason === undefined ? [] : [`reason ${verdict.reason}`]
+	return [
+		`probe ${verdict.id} (${verdict.elapsed} ms)`,
+		`claim ${verdict.digest}`,
+		...reason,
+		formatProof(verdict),
+	].join('\n')
+}
+
+/**
  * Renders a whole verdict as the text an agent reads.
  *
  * @remarks
@@ -88,7 +138,6 @@ export function formatVerdict(verdict: Verdict): string {
 	const tools = `toolchain typescript ${typescript}, oxlint ${oxlint}, vitest ${vitest}`
 	const project = `project ${verdict.project.path} ${verdict.project.digest}`
 	const reason = verdict.reason === undefined ? [] : [`reason ${verdict.reason}`]
-	const proof = verdict.receipt === undefined ? 'no receipt' : `receipt ${verdict.receipt}`
 	return [
 		`probe ${verdict.id} (${verdict.elapsed} ms)`,
 		`claim ${verdict.digest}`,
@@ -97,7 +146,7 @@ export function formatVerdict(verdict: Verdict): string {
 		...reason,
 		...verdict.case.map((check) => `case ${formatCheck(check)}`),
 		...verdict.control.map((check) => `control ${formatCheck(check)}`),
-		proof,
+		formatProof(verdict),
 	].join('\n')
 }
 

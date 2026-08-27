@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { formatIssue, isProbeError } from '@src/core'
+import { LINT_DEADLINE, formatIssue, isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import {
@@ -632,7 +632,7 @@ describe('lint stage', () => {
 			const stage = new LintStage(scratch.path)
 			try {
 				// The control comes first: a document this server answers at once returns well inside
-				// the client's own 2 s bound, so the reading that follows measures the diagnostics wait
+				// the client's own `LINT_DEADLINE` bound, so the reading that follows measures the diagnostics wait
 				// rather than the warm that precedes it.
 				const prompt = await stage.inspect(
 					{
@@ -642,7 +642,7 @@ describe('lint stage', () => {
 					{ signal: UNBOUNDED },
 				)
 				expect(prompt.issues).toStrictEqual([])
-				// This server publishes after 3 s. The client's `timeout` is 2 s and reaches the
+				// This server publishes after 3 s. The client's `timeout` is `LINT_DEADLINE` and reaches the
 				// `initialize` and `shutdown` exchanges alone, so the caller's signal is the only thing
 				// that could end this wait, and it permits the wait to run.
 				const started = performance.now()
@@ -656,7 +656,7 @@ describe('lint stage', () => {
 					},
 					{ signal: UNBOUNDED },
 				)
-				expect(performance.now() - started).toBeGreaterThan(2_000)
+				expect(performance.now() - started).toBeGreaterThan(LINT_DEADLINE)
 				expect(served.issues).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
@@ -691,11 +691,11 @@ describe('lint stage', () => {
 					code: 'deadline',
 					context: { stage: 'lint', path },
 				})
-				// The interval separates the caller's bound from the client's 2 s one: a wait that
+				// The interval separates the caller's bound from the client's `LINT_DEADLINE` one: a wait that
 				// timeout still governed would have run past it before answering.
 				const elapsed = performance.now() - started
 				expect(elapsed).toBeGreaterThan(300)
-				expect(elapsed).toBeLessThan(2_000)
+				expect(elapsed).toBeLessThan(LINT_DEADLINE)
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())

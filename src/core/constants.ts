@@ -101,8 +101,8 @@ export const PROBE_DEADLINE = 30_000
  * It does not reach the diagnostics an inspection waits for, which the caller's own signal bounds.
  * The transport's cooperative window is half of it, so a child that ignores its ending is
  * signalled and released inside the same bound rather than outliving the client's own wait for
- * the close. Orchestrator measurement of record, 2026-08-27: the workspace oxlint `--lsp` answers
- * `initialize` in 155 ms, so this value is right for that exchange.
+ * the close. Measured 2026-08-27: the workspace `oxlint --lsp` answers `initialize` in 155 ms, so
+ * this bound is more than ten times that reply.
  *
  * @example
  * ```ts
@@ -118,8 +118,10 @@ export const LINT_DEADLINE = 2_000
  * @remarks
  * `@orkestrel/mcp`'s default leaf is sized for metadata: a verdict costs 38 keys empty and 11 more
  * for each issue a stage reports, so the default carries a verdict whose control refuses one
- * declaration and stops carrying the next one. This bound leaves the byte bounds the binding ones
- * for a verdict a real claim produces.
+ * declaration and stops carrying the next one. A whole tool-call result carrying the record beside
+ * its rendering costs 44 keys plus 11 for each issue, so this bound carries a record reporting up
+ * to 368 issues. Past that the reply falls back to the rendered text, and past the 4 MiB content
+ * bound to the receipt block.
  *
  * @example
  * ```ts

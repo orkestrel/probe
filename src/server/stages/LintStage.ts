@@ -53,12 +53,6 @@ import {
  */
 export class LintStage implements LintStageInterface {
 	readonly #workspace: string
-	// The bound this stage holds over the lifecycle exchanges the protocol leaves to the server: the
-	// `initialize` reply warming waits for and the `shutdown` reply ending waits for. It does not
-	// reach the diagnostics an inspection waits for, which the caller's own signal bounds. The
-	// transport's cooperative window is half of it, so a child that ignores its ending is signalled
-	// and released inside the same bound rather than outliving the client's own wait for the close.
-	readonly #deadline = LINT_DEADLINE
 	readonly #documents = new Set<string>()
 	readonly #warmth: Promise<LSPClientInterface>
 	// Teardown reads the constructed client rather than the warming result, because a warming that
@@ -151,10 +145,10 @@ export class LintStage implements LintStageInterface {
 					command: [process.execPath, binary, '--lsp'],
 					directory: this.#workspace,
 				},
-				grace: this.#deadline / 2,
+				grace: LINT_DEADLINE / 2,
 			}),
 			workspace: pathToFileURL(this.#workspace).href,
-			timeout: this.#deadline,
+			timeout: LINT_DEADLINE,
 		})
 		this.#client = client
 		client.emitter.on('exit', (exit) => this.#retire(exit))

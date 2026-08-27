@@ -6,6 +6,8 @@ import {
 	computeReceipt,
 	formatCheck,
 	formatIssue,
+	formatProof,
+	formatReceipt,
 	formatSpecification,
 	formatVerdict,
 	matchesSpecification,
@@ -192,6 +194,72 @@ describe('core formatting helpers', () => {
 			'project configs/src/tsconfig.core.json 3b674fdf121c85efb9ed1bab25ceeec8',
 		)
 		expect(rendered[4]).toBe('case type: 0 issues (61 ms)')
+	})
+
+	it('states the receipt on the line the whole rendering closes with', () => {
+		const verdict: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			case: [{ stage: 'type', elapsed: 61, issues: [] }],
+			control: [{ stage: 'type', elapsed: 58, issues: [] }],
+			elapsed: 549,
+			receipt: TOKEN,
+		}
+		const { receipt: _, ...disproven } = verdict
+		expect(formatProof(verdict)).toBe(`receipt ${TOKEN}`)
+		expect(formatProof(disproven)).toBe('no receipt')
+		// One implementation renders that line, so a whole rendering and the fallback below cannot
+		// state different outcomes for one verdict.
+		expect(formatVerdict(verdict).split('\n').at(-1)).toBe(formatProof(verdict))
+		expect(formatVerdict(disproven).split('\n').at(-1)).toBe(formatProof(disproven))
+	})
+
+	it('renders the fallback text as lines the whole rendering also carries, in that order', () => {
+		const verdict: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			reason: 'a string literal assigned to a number must not compile',
+			case: [{ stage: 'type', elapsed: 61, issues: [] }],
+			control: [{ stage: 'type', elapsed: 58, issues: [] }],
+			elapsed: 549,
+			receipt: TOKEN,
+		}
+		expect(formatReceipt(verdict).split('\n')).toStrictEqual([
+			'probe 88a5addc-7d33-40dc-9a5a-104b71f8787d (549 ms)',
+			'claim 6ca20c3bff623031d3955b9d1a76d71d',
+			'reason a string literal assigned to a number must not compile',
+			`receipt ${TOKEN}`,
+		])
+		// Every line the fallback carries is a line the whole rendering carries, at a position after
+		// the one before it, so a reader meets one shape whichever answer arrived. The two render
+		// their shared lines separately, and this is what refuses a drift between them.
+		const rendered = formatVerdict(verdict).split('\n')
+		const positions = formatReceipt(verdict)
+			.split('\n')
+			.map((line) => rendered.indexOf(line))
+		expect(positions).not.toContain(-1)
+		expect([...positions].sort((first, second) => first - second)).toStrictEqual(positions)
+	})
+
+	it('omits the reason line for a verdict carrying no reason', () => {
+		const verdict: Verdict = {
+			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+			digest: '6ca20c3bff623031d3955b9d1a76d71d',
+			toolchain: TOOLCHAIN,
+			project: PROJECT,
+			case: [{ stage: 'type', elapsed: 61, issues: [] }],
+			control: [{ stage: 'type', elapsed: 58, issues: [] }],
+			elapsed: 549,
+		}
+		expect(formatReceipt(verdict).split('\n')).toStrictEqual([
+			'probe 88a5addc-7d33-40dc-9a5a-104b71f8787d (549 ms)',
+			'claim 6ca20c3bff623031d3955b9d1a76d71d',
+			'no receipt',
+		])
 	})
 })
 

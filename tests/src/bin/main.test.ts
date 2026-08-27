@@ -69,6 +69,32 @@ const WIDE = Array.from(
 	{ length: 30 },
 	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
 ).join('\n')
+// The same refusal repeated past the key bound the server publishes. A whole result costs 44 keys
+// plus 11 for each issue, so `PROBE_KEYS` carries a record reporting up to 368 issues; this control
+// reports past that, which makes the record the part of the answer that cannot travel.
+const WIDER = Array.from(
+	{ length: 400 },
+	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
+).join('\n')
+// The reserved metadata a current-revision request carries, and extension keys past the installed
+// default key bound of 64. `PROBE_KEYS` reaches inbound metadata as well as produced content, so a
+// request the default would refuse is admitted here.
+const RESERVED = {
+	'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+	'io.modelcontextprotocol/clientCapabilities': {},
+} as const
+const EXTENSIONS = Object.fromEntries(
+	Array.from({ length: 200 }, (_, index) => [`probe.test/extension-${String(index)}`, index]),
+)
+// A control whose test throws a message longer than the 4 MiB content bound. The string is built
+// inside the child rather than sent to it, so a claim of a few hundred bytes produces a rendering
+// the reply cannot carry — which is the one input under which the rendered text is refused too.
+const THROWING =
+	"import { test } from 'vitest'\ntest('breaks', () => {\n\tthrow new Error('A'.repeat(5_000_000))\n})\n"
+// The test text every case phase runs. It asserts against no draft, so a control breaking at the
+// type stage and one breaking at the runtime stage differ only in the draft each replaces.
+const PASSING =
+	"import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n"
 
 function readWorkbench(directory: string): readonly string[] {
 	try {
@@ -137,6 +163,31 @@ function readAnswer(line: string): Readonly<Record<string, JSONValue>> | undefin
 	return isJSONObject(answer) ? answer : undefined
 }
 
+// Pairs each answered frame with the request id it carries, so a reader takes the reply to one
+// request rather than the frame that happened to arrive first.
+function indexFrames(frames: readonly string[]): ReadonlyMap<number, string> {
+	const answered = new Map<number, string>()
+	for (const frame of frames) {
+		const message: unknown = JSON.parse(frame)
+		if (isJSONObject(message) && typeof message['id'] === 'number') {
+			answered.set(message['id'], frame)
+		}
+	}
+	return answered
+}
+
+// Reads the text of the one content block a result carries, or `undefined` when the result carries
+// anything else. The block count is part of the reading: every reply this server produces carries
+// exactly one, and a reader that took the first of several would not notice the second.
+function readText(answer: Readonly<Record<string, JSONValue>>): string | undefined {
+	const content = answer['content']
+	if (!Array.isArray(content) || content.length !== 1) return undefined
+	const block = content[0]
+	if (!isJSONObject(block) || block['type'] !== 'text') return undefined
+	const text = block['text']
+	return typeof text === 'string' ? text : undefined
+}
+
 // Collects newline-delimited JSON-RPC responses from a child's standard output until the expected
 // number of non-empty frames has arrived.
 async function readFrames(output: Interface, expected: number): Promise<readonly string[]> {
@@ -152,10 +203,7 @@ async function readFrames(output: Interface, expected: number): Promise<readonly
 // `control` is the text the named module carries in the control phase, which is what decides how
 // many issues the type stage reports for it.
 function buildClaim(name: string, control: string): Readonly<Record<string, unknown>> {
-	const specification = {
-		path: `tmp/probe/bin/${name}-runtime.test.ts`,
-		text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
-	}
+	const specification = { path: `tmp/probe/bin/${name}-runtime.test.ts`, text: PASSING }
 	return {
 		project: 'configs/src/tsconfig.core.json',
 		case: {
@@ -558,6 +606,158 @@ describe('bin entry', () => {
 				const broke = record.control.find((check) => check.stage === 'type')
 				expect(broke?.issues.length).toBeGreaterThan(2)
 				expect(record.receipt).toMatch(/^probe:/)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// The size the record stops travelling at, driven through the shipped entry against a real claim.
+	// A whole result costs 44 keys plus 11 for each issue, so `PROBE_KEYS` carries a record reporting
+	// up to 368 issues and refuses the next one. The reply keeps the rendered text there rather than
+	// failing, so the receipt still answers. The same child reads the other direction that published
+	// bound reaches: a request whose `_meta` carries extension keys past the installed default of 64
+	// is admitted rather than refused as malformed metadata.
+	it(
+		'answers a record past the published key bound with the rendered text alone',
+		{ timeout: 300_000 },
+		async () => {
+			const requests = [
+				{
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: buildClaim('wider', WIDER) },
+				},
+				{
+					jsonrpc: '2.0',
+					id: 2,
+					method: 'tools/list',
+					params: { _meta: { ...RESERVED, ...EXTENSIONS } },
+				},
+			]
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: ROOT,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const output = createInterface({ input: child.stdout })
+			try {
+				child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
+				const answered = indexFrames(await readFrames(output, requests.length))
+				const wide = answered.get(1) ?? ''
+				expect(wide, 'no frame answered the wide claim').not.toBe('')
+				expect(wide).not.toContain('-32603')
+				const answer = readAnswer(wide)
+				expect(answer, `no result on ${wide.slice(0, 200)}`).toBeDefined()
+				if (answer === undefined) return
+				expect(answer['structuredContent']).toBeUndefined()
+				const text = readText(answer)
+				expect(text, 'the result carries no single text block').toBeDefined()
+				if (text === undefined) return
+				// The whole rendering rather than the fallback: the stage lines are what the fallback
+				// drops, and the issues this control reports are what put the record past the bound.
+				const reported = /^control type: (\d+) issues/m.exec(text)?.[1]
+				expect(Number(reported)).toBeGreaterThan(368)
+				expect(text.split('\n').at(-1)).toMatch(/^receipt probe:/)
+				const listed = answered.get(2) ?? ''
+				expect(readAnswer(listed), `no result on ${listed.slice(0, 200)}`).toBeDefined()
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => {
+					try {
+						rmdirSync(directory)
+					} catch {}
+				})
+				teardown.add(async () => {
+					if (child.exitCode === null) {
+						const exited = new Promise<void>((resolveExit) => {
+							child.once('exit', () => resolveExit())
+						})
+						child.kill('SIGTERM')
+						await exited
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// The size the rendered text itself stops travelling at. The control's test throws a message
+	// past the 4 MiB content bound, so neither the record nor the whole rendering can be carried,
+	// and the reply answers with what `formatReceipt` renders: the identity, the claim, the reason,
+	// and the closing receipt line. The claim is written here rather than through the builder above
+	// because it is the one claim in this file whose control replaces the test instead of the module.
+	it(
+		'answers a rendering past the content bound with the receipt block',
+		{ timeout: 300_000 },
+		async () => {
+			const specification = { path: 'tmp/probe/bin/throwing-runtime.test.ts', text: PASSING }
+			const module = { path: 'src/core/throwing.ts', text: CLEAN }
+			const reason = 'the test throws a message longer than the reply can carry'
+			const request = {
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'tools/call',
+				params: {
+					name: 'prove',
+					arguments: {
+						project: 'configs/src/tsconfig.core.json',
+						case: { files: [module], test: specification },
+						control: {
+							files: [module],
+							test: { path: specification.path, text: THROWING },
+							stage: 'runtime',
+							reason,
+						},
+					},
+				},
+			}
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: ROOT,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const output = createInterface({ input: child.stdout })
+			try {
+				child.stdin.write(JSON.stringify(request) + '\n')
+				const frames = await readFrames(output, 1)
+				const frame = frames[0] ?? ''
+				expect(frame).not.toContain('-32603')
+				const answer = readAnswer(frame)
+				expect(answer, `no result on ${frame.slice(0, 200)}`).toBeDefined()
+				if (answer === undefined) return
+				expect(answer['structuredContent']).toBeUndefined()
+				const text = readText(answer)
+				expect(text, 'the result carries no single text block').toBeDefined()
+				if (text === undefined) return
+				const lines = text.split('\n')
+				expect(lines).toHaveLength(4)
+				expect(lines[0]).toMatch(/^probe [0-9a-f-]+ \(\d+ ms\)$/)
+				expect(lines[1]).toMatch(/^claim [0-9a-f]+$/)
+				expect(lines[2]).toBe(`reason ${reason}`)
+				expect(lines.at(-1)).toMatch(/^receipt probe:/)
+				// The stage lines separate this answer from the whole rendering.
+				expect(text).not.toContain('control runtime:')
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => {

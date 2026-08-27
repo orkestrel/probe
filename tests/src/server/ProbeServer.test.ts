@@ -6,6 +6,7 @@ import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { captureError, createRecorder, createTeardown, waitForDelay } from '@orkestrel/test'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { PROBE_KEYS } from '@src/core'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
@@ -75,7 +76,9 @@ async function readCall(record: JSONValue, limit: MCPLimitOptions): Promise<unkn
 			params: { name: 'prove', arguments: {} },
 		}),
 	)
-	return typeof answer === 'string' ? JSON.parse(answer) : undefined
+	if (typeof answer !== 'string') return undefined
+	const message: unknown = JSON.parse(answer)
+	return message
 }
 
 // Every following count is a delta against the moment it was read. A sibling test in this project
@@ -340,14 +343,17 @@ describe('probe server', () => {
 		expect(stream.listenerCount('error')).toBe(0)
 	})
 
-	// The installed bound behind `ProbeServer`'s own `limit`. `@orkestrel/mcp` bounds a produced
-	// tool-call result by total enumerable keys as well as by bytes, and its package default is
-	// sized for request metadata. A verdict's key count grows with the issues its stages report, so
-	// the default carries a verdict whose control refuses one declaration and stops carrying the
-	// next one — and it stops by replacing the whole answer with a JSON-RPC internal error, which
-	// costs the rendered text and its receipt as well as the record. That is why the server
-	// publishes a key bound of its own rather than leaving the leaf absent.
-	it('refuses a record-bearing result under the package default key bound', async () => {
+	// A pin on the installed dependency's own default, and on what `PROBE_KEYS` buys in its place.
+	// `@orkestrel/mcp` bounds a produced tool-call result by total enumerable keys as well as by
+	// bytes, and its package default is sized for request metadata. A verdict's key count grows with
+	// the issues its stages report, so the default carries a verdict whose control refuses one
+	// declaration and stops carrying the next one — and it stops by replacing the whole answer with a
+	// JSON-RPC internal error, which costs the rendered text and its receipt as well as the record.
+	// That is why the server publishes a key bound of its own rather than leaving the leaf absent.
+	// What the shipped composition does with these bounds is not readable here: `ProbeServer`
+	// publishes them to a dispatcher it owns, so `main.test.ts` drives the built entry against a real
+	// claim on each side of the bound instead.
+	it('refuses a record-bearing result under the installed default key bound', async () => {
 		expect(await readCall(buildRecord(1), {})).toMatchObject({
 			id: 1,
 			result: { structuredContent: buildRecord(1) },
@@ -356,8 +362,9 @@ describe('probe server', () => {
 			id: 1,
 			error: { message: 'Server execution returned an invalid tool result' },
 		})
-		// The same record under a bound above the default, which is the fix the server applies.
-		expect(await readCall(buildRecord(8), { keys: 4096 })).toMatchObject({
+		// The same record under the leaf `ProbeServer` supplies, read from the constant the server
+		// passes rather than from a second copy of its value.
+		expect(await readCall(buildRecord(8), { keys: PROBE_KEYS })).toMatchObject({
 			id: 1,
 			result: {
 				structuredContent: buildRecord(8),

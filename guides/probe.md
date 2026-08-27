@@ -54,16 +54,16 @@ optional field is absent rather than empty.
 
 From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 
-| Name                | Kind  | Value / Purpose                                                                                      |
-| ------------------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| `PROBE_STAGES`      | const | `['type', 'lint', 'runtime']` — the stage order a verdict reports. The `Stage` type derives from it. |
-| `PROBE_PARTIES`     | const | `['claimant', 'workspace', 'instrument']` — the parties an issue or a failure can name.              |
-| `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                      |
-| `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                    |
-| `PROBE_ERROR_CODES` | const | `['refused', 'missing', 'malformed', 'destroyed', 'deadline']` — the conditions the guard admits.    |
-| `PROBE_DEADLINE`    | const | `30_000` — the default inspection deadline `Probe` applies when construction omits one.              |
-| `LINT_DEADLINE`     | const | `2_000` — the lint stage's lifecycle bound over its `initialize` and `shutdown` exchanges.           |
-| `PROBE_KEYS`        | const | `4096` — the total enumerable key bound `ProbeServer` applies to inbound and produced content.       |
+| Name                | Kind  | Value / Purpose                                                                                                    |
+| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------ |
+| `PROBE_STAGES`      | const | `['type', 'lint', 'runtime']` — the stage order a verdict reports. The `Stage` type derives from it.               |
+| `PROBE_PARTIES`     | const | `['claimant', 'workspace', 'instrument']` — the parties an issue or a failure can name.                            |
+| `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                                    |
+| `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                                  |
+| `PROBE_ERROR_CODES` | const | `['refused', 'missing', 'malformed', 'destroyed', 'deadline']` — the conditions the guard admits.                  |
+| `PROBE_DEADLINE`    | const | `30_000` — the default inspection deadline `Probe` applies when construction omits one.                            |
+| `LINT_DEADLINE`     | const | `2_000` — the lint stage's lifecycle bound over its `initialize` and `shutdown` exchanges.                         |
+| `PROBE_KEYS`        | const | `4096` — the total enumerable key bound `ProbeServer` applies to inbound metadata and produced tool content alike. |
 
 ### Errors
 
@@ -117,6 +117,8 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 | ---------------------- | -------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `formatIssue`          | function | `(issue: Issue) => string`                                | Renders one message as `[origin] path:line message`, converting the stored zero-based `range.start.line` to the one-based line an editor shows and dropping `:line` when the tool reported no location. |
 | `formatCheck`          | function | `(check: Check) => string`                                | Renders one stage's summary line, then one indented line per issue.                                                                                                                                     |
+| `formatProof`          | function | `(verdict: Verdict) => string`                            | Renders the closing line a rendered verdict ends with: `receipt <token>` when the verdict carries a receipt, and `no receipt` when it does not.                                                         |
+| `formatReceipt`        | function | `(verdict: Verdict) => string`                            | Renders the smallest text a verdict can travel as: the identity and claim lines, the reason when present, then the closing receipt line.                                                                |
 | `formatVerdict`        | function | `(verdict: Verdict) => string`                            | Renders identity, claim, toolchain, project, and reason, then both phases with each issue's origin and the receipt line.                                                                                |
 | `computeReceipt`       | function | `(verdict: Verdict, stage: Stage) => string \| undefined` | Returns the token when both phases name every stage, the case ran clean, and the control broke only at `stage`; returns `undefined` otherwise.                                                          |
 | `formatSpecification`  | function | `(text: string, revision: string) => string`              | Renders the bytes the runtime stage writes: the caller's test text, then the marker naming the revision that wrote it.                                                                                  |
@@ -499,12 +501,15 @@ tears the probe down with it.
 result carries the record in `structuredContent` and a single `content` entry of `type: 'text'`
 whose text is what `formatVerdict` rendered: the identity, claim, toolchain, project, and reason
 lines, then every case and control stage, then the closing line. That closing line is where the
-receipt lives, spelled `receipt <token>` when the claim proved itself and `no receipt` when it did
-not, so a client reads the outcome from the last line rather than inferring it from the rest.
+receipt lives in the text block, spelled `receipt <token>` when the claim proved itself and
+`no receipt` when it did not, so a client reading the text block reads the outcome from its last
+line rather than inferring it from the rest. A client reading the record reads `verdict.receipt`
+instead: it carries the token itself, and it is absent when the claim was not proven.
 `structuredContent` is the record `prove` returns in this process, unchanged, so a client reads
-`verdict.id`, `verdict.digest`, and the per-stage `elapsed` values as data rather than off the
-prose. A client that prefers a result's structured content over its content blocks receives the
-record and renders the text itself when it wants it; the `@orkestrel/mcp` client is one.
+`verdict.id`, `verdict.digest`, `verdict.receipt`, and the per-stage `elapsed` values as data
+rather than off the prose. The `@orkestrel/mcp` client's outcome carries that record alone and
+drops the content blocks, so a caller of that client who wants the rendered form calls
+`formatVerdict` from `@orkestrel/probe` on the record, or reads the text block off the raw wire.
 
 **The text block carries `formatVerdict`'s prose rather than the record's serialized JSON, which
 departs from the specification's recommendation.** The tools specification recommends that a tool
@@ -521,10 +526,19 @@ content alike; its default leaf is sized for metadata. Measured on 2026-08-27 ag
 no issues and 11 more for each issue a stage reports, so under the default a verdict whose control
 refuses one declaration travels and the next
 one does not — and it fails by replacing the whole answer with `-32603 Server execution returned an
-invalid tool result` rather than by dropping the record alone. The published bound of 4096 keys
-leaves the byte bounds the binding ones for a verdict a real claim produces; it reaches inbound
-metadata too, whose own 16 KiB byte limit is unchanged. Where a verdict still exceeds those bounds,
-the result carries the text block alone, so the receipt answers even when the record cannot travel.
+invalid tool result` rather than by dropping the record alone. A whole result carrying the record
+beside its rendering costs 44 keys plus 11 for each issue, so the published bound of 4096 keys
+carries a record reporting up to 368 issues. That bound also widens the inbound `_meta` key bound,
+deliberately: bytes and depth still bind there, the 16 KiB metadata byte limit is unchanged, and
+the process on the other end of a stdio transport is the harness that spawned this one.
+
+**The reply falls back rather than failing, and the receipt answers at every size.** The server
+admits each answer against those bounds before returning it and takes the widest one they admit.
+Past 368 issues the record is refused and the result carries the rendered text alone. Past the
+4 MiB content bound the rendered text is refused too, and the result carries what `formatReceipt`
+renders instead: the identity and claim lines, the reason when present, and the same closing
+receipt line. A client therefore reads the outcome off the last line of the text block whichever
+answer arrived.
 
 **One third-party client drives this entry: the `@orkestrel/mcp` stdio client.** It spawns the
 shipped `dist/bin/main.js`, negotiates the era itself, lists `prove`, and hands back the record
