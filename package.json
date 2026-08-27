@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/probe",
-	"version": "0.0.9",
+	"version": "0.0.10",
 	"description": "Prove a claim with type, lint, and runtime evidence from the workspace's own toolchain.",
 	"keywords": [
 		"agent",
@@ -95,15 +95,15 @@
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
 		"@orkestrel/lsp": "file:tmp/tarballs/orkestrel-lsp-0.0.3.tgz",
-		"@orkestrel/mcp": "^0.0.25",
-		"@orkestrel/queue": "^0.0.10",
+		"@orkestrel/mcp": "^0.0.26",
+		"@orkestrel/queue": "^0.0.11",
 		"@orkestrel/timeout": "^0.0.8",
 		"@orkestrel/tool": "^0.0.12"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
-		"@orkestrel/guide": "^0.0.14",
-		"@orkestrel/scaffold": "^0.0.54",
+		"@orkestrel/guide": "^0.0.15",
+		"@orkestrel/scaffold": "^0.0.58",
 		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.4.0",
 		"oxfmt": "^0.65.0",
