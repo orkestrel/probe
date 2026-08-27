@@ -100,9 +100,6 @@
 		"@orkestrel/timeout": "^0.0.8",
 		"@orkestrel/tool": "^0.0.12"
 	},
-	"overrides": {
-		"@orkestrel/process": "file:tmp/tarballs/orkestrel-process-0.0.6.tgz"
-	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
 		"@orkestrel/guide": "^0.0.14",
@@ -131,6 +128,9 @@
 		"vitest": {
 			"optional": true
 		}
+	},
+	"overrides": {
+		"@orkestrel/process": "file:tmp/tarballs/orkestrel-process-0.0.6.tgz"
 	},
 	"engines": {
 		"node": "^22.12.0 || >=24.0.0"
