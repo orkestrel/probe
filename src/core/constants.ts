@@ -79,3 +79,51 @@ export const RECEIPT_PREFIX = 'probe'
  * ```
  */
 export const RECEIPT_SEPARATOR = ':'
+
+/**
+ * Names the default inspection deadline a `Probe` applies when its construction omits one.
+ *
+ * @remarks
+ * `ProbeOptions.deadline` overrides this value per instance.
+ *
+ * @example
+ * ```ts
+ * PROBE_DEADLINE // 30_000
+ * ```
+ */
+export const PROBE_DEADLINE = 30_000
+
+/**
+ * Names the bound the lint stage holds over the lifecycle exchanges the protocol leaves to the
+ * server: the `initialize` reply warming waits for and the `shutdown` reply ending waits for.
+ *
+ * @remarks
+ * It does not reach the diagnostics an inspection waits for, which the caller's own signal bounds.
+ * The transport's cooperative window is half of it, so a child that ignores its ending is
+ * signalled and released inside the same bound rather than outliving the client's own wait for
+ * the close. Orchestrator measurement of record, 2026-08-27: the workspace oxlint `--lsp` answers
+ * `initialize` in 155 ms, so this value is right for that exchange.
+ *
+ * @example
+ * ```ts
+ * LINT_DEADLINE // 2_000
+ * ```
+ */
+export const LINT_DEADLINE = 2_000
+
+/**
+ * Names the total enumerable key bound `ProbeServer` applies to inbound metadata and to produced
+ * tool content alike.
+ *
+ * @remarks
+ * `@orkestrel/mcp`'s default leaf is sized for metadata: a verdict costs 38 keys empty and 11 more
+ * for each issue a stage reports, so the default carries a verdict whose control refuses one
+ * declaration and stops carrying the next one. This bound leaves the byte bounds the binding ones
+ * for a verdict a real claim produces.
+ *
+ * @example
+ * ```ts
+ * PROBE_KEYS // 4096
+ * ```
+ */
+export const PROBE_KEYS = 4096

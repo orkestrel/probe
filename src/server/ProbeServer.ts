@@ -9,6 +9,7 @@ import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	CLAIM_SHAPE,
+	PROBE_KEYS,
 	ProbeError,
 	createDestroyedError,
 	formatVerdict,
@@ -65,7 +66,7 @@ export class ProbeServer implements ProbeServerInterface {
 	// 16 KiB byte limit is unchanged.
 	readonly #limits = {
 		bytes: DEFAULT_MCP_LIMITS.content,
-		keys: 4096,
+		keys: PROBE_KEYS,
 		depth: DEFAULT_MCP_LIMITS.depth,
 	}
 	#owns: boolean | undefined

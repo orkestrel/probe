@@ -61,6 +61,9 @@ From [`constants.ts`](../src/core/constants.ts). Each is frozen.
 | `RECEIPT_PREFIX`    | const | `'probe'` — the leading token of every receipt.                                                      |
 | `RECEIPT_SEPARATOR` | const | `':'` — the character joining a receipt's fields.                                                    |
 | `PROBE_ERROR_CODES` | const | `['refused', 'missing', 'malformed', 'destroyed', 'deadline']` — the conditions the guard admits.    |
+| `PROBE_DEADLINE`    | const | `30_000` — the default inspection deadline `Probe` applies when construction omits one.              |
+| `LINT_DEADLINE`     | const | `2_000` — the lint stage's lifecycle bound over its `initialize` and `shutdown` exchanges.           |
+| `PROBE_KEYS`        | const | `4096` — the total enumerable key bound `ProbeServer` applies to inbound and produced content.       |
 
 ### Errors
 

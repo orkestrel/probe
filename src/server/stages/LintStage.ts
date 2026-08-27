@@ -4,7 +4,7 @@ import type { LSPClientInterface, LSPDiagnostic, LSPExit } from '@orkestrel/lsp'
 import { pathToFileURL } from 'node:url'
 import { createLSPClient } from '@orkestrel/lsp'
 import { createStdioTransport } from '@orkestrel/lsp/server'
-import { ProbeError, createDestroyedError } from '@src/core'
+import { LINT_DEADLINE, ProbeError, createDestroyedError } from '@src/core'
 import {
 	describeUnknown,
 	guardStage,
@@ -57,7 +57,7 @@ export class LintStage implements LintStageInterface {
 	// reach the diagnostics an inspection waits for, which the caller's own signal bounds. The
 	// transport's cooperative window is half of it, so a child that ignores its ending is signalled
 	// and released inside the same bound rather than outliving the client's own wait for the close.
-	readonly #deadline = 2_000
+	readonly #deadline = LINT_DEADLINE
 	readonly #documents = new Set<string>()
 	readonly #warmth: Promise<LSPClientInterface>
 	// Teardown reads the constructed client rather than the warming result, because a warming that

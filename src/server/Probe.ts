@@ -20,6 +20,7 @@ import { Emitter } from '@orkestrel/emitter'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import {
+	PROBE_DEADLINE,
 	ProbeError,
 	computeReceipt,
 	createDestroyedError,
@@ -84,7 +85,7 @@ export class Probe implements ProbeInterface {
 	 */
 	constructor(options?: ProbeOptions) {
 		this.#workspace = options?.workspace ?? process.cwd()
-		this.#deadline = createTimeout({ ms: options?.deadline ?? 30_000 }).ms
+		this.#deadline = createTimeout({ ms: options?.deadline ?? PROBE_DEADLINE }).ms
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
