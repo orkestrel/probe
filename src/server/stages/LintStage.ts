@@ -3,7 +3,7 @@ import type { InspectionOptions, LintStageInterface } from '../types.js'
 import type { LSPClientInterface, LSPDiagnostic, LSPExit } from '@orkestrel/lsp'
 import { pathToFileURL } from 'node:url'
 import { createLSPClient } from '@orkestrel/lsp'
-import { createStdioTransport } from '@orkestrel/lsp/server'
+import { createStdioClientTransport } from '@orkestrel/lsp/server'
 import { LINT_DEADLINE, ProbeError, createDestroyedError } from '@src/core'
 import {
 	describeUnknown,
@@ -19,10 +19,11 @@ import {
  *
  * @remarks
  * Construction starts the target workspace's Oxlint binary with its Language Server Protocol mode
- * and hands the conversation to `@orkestrel/lsp`: `createStdioTransport` owns the child process and
- * its bytes, and `createLSPClient` owns the framing, the request correlation, the capabilities this
- * stage advertises, and the choice between pulled and pushed diagnostics. This stage owns the
- * workspace, the candidate identity, and the projection from a diagnostic to an `Issue`.
+ * and hands the conversation to `@orkestrel/lsp`: `createStdioClientTransport` owns the child
+ * process and its bytes, and `createLSPClient` owns the framing, the request correlation, the
+ * capabilities this stage advertises, and the choice between pulled and pushed diagnostics. This
+ * stage owns the workspace, the candidate identity, and the projection from a diagnostic to an
+ * `Issue`.
  *
  * Each inspection opens the supplied text by URI, waits for the client's diagnostics, and closes the
  * document without writing it to disk. The caller's own signal is what bounds that wait, so a server
@@ -145,7 +146,7 @@ export class LintStage implements LintStageInterface {
 	async #warm(): Promise<LSPClientInterface> {
 		const binary = resolveWorkspaceBinary(this.#workspace, 'oxlint')
 		const client = createLSPClient({
-			transport: createStdioTransport({
+			transport: createStdioClientTransport({
 				server: {
 					command: [process.execPath, binary, '--lsp'],
 					directory: this.#workspace,

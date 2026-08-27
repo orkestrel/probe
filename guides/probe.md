@@ -767,8 +767,8 @@ carries. Put every candidate draft you want linted at a path version control tra
 The lint stage owns the workspace, the candidate's identity, and the projection from a diagnostic to
 an `Issue`. `@orkestrel/lsp` owns everything between them, and the hookup is fixed:
 
-- **The transport is `createStdioTransport` from `@orkestrel/lsp/server`.** Its command vector is
-  the current executable, the entry `resolveWorkspaceBinary` resolves for `oxlint` in the target
+- **The transport is `createStdioClientTransport` from `@orkestrel/lsp/server`.** Its command vector
+  is the current executable, the entry `resolveWorkspaceBinary` resolves for `oxlint` in the target
   workspace, and `--lsp`; its directory is that workspace. The child is therefore the workspace's
   own installed Oxlint entry rather than a `node_modules/.bin` shim, for the reason the
   **Prerequisites** section earlier gives.
@@ -1029,6 +1029,8 @@ inspection rather than the common one.
 - [`README.md`](README.md) — the guides index.
 - [`mcp.md`](mcp.md) — the dependency mirror for `@orkestrel/mcp`, whose server and stdio transport
   carry the `prove` tool.
+- [`lsp.md`](lsp.md) — the dependency mirror for `@orkestrel/lsp`, whose client and stdio client
+  transport carry the lint stage's conversation with the Oxlint language server.
 - [`tool.md`](tool.md) — the dependency mirror for `@orkestrel/tool`, whose registry holds it.
 - [`contract.md`](contract.md) — the dependency mirror for `@orkestrel/contract`, whose shapes
   compile both the published tool schema and the guards.
