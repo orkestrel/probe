@@ -114,9 +114,9 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"oxlint": "^1.77.0",
-		"typescript": "^6.0.0",
-		"vitest": "^4.1.0"
+		"oxlint": "^1.80.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.11"
 	},
 	"peerDependenciesMeta": {
 		"oxlint": {
