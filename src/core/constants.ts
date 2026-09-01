@@ -129,3 +129,38 @@ export const LINT_DEADLINE = 2_000
  * ```
  */
 export const PROBE_KEYS = 4096
+
+/**
+ * Names the specification lifetime the runtime stage replaces its resident Vitest service at.
+ *
+ * @remarks
+ * Vite retains one unresolved URL for every fresh specification path, so an inspection that writes
+ * a specification grows a map the resident service never releases. The stage replaces that service
+ * rather than deleting from each map it owns, and this is the count of specifications one service
+ * carries before the replacement. Any bound holds the retention flat, because the replacement
+ * releases everything the instance held; this value trades the cost of the replacement against how
+ * far the map grows between them. On 2026-08-20, over this package's own workspace on the host
+ * `guides/probe.md` § Cost names, two runs of 66 inspections put the crossing inspection at 480 ms
+ * and 269 ms against median inspections of 156 ms and 155 ms.
+ *
+ * @example
+ * ```ts
+ * PROBE_SPECIFICATIONS // 64
+ * ```
+ */
+export const PROBE_SPECIFICATIONS = 64
+
+/**
+ * Names the Vite plugin the runtime stage installs into a target workspace's Vitest configuration.
+ *
+ * @remarks
+ * The stage declares the plugin under this name and reads a configured project's plugin list for
+ * the same name to decide whether that project carries the overlay. One name feeds both, so a
+ * project the stage instrumented is never reported as a workspace project it could not reach.
+ *
+ * @example
+ * ```ts
+ * RUNTIME_PLUGIN // 'orkestrel-runtime-overlay'
+ * ```
+ */
+export const RUNTIME_PLUGIN = 'orkestrel-runtime-overlay'

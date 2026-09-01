@@ -43,6 +43,66 @@ export function normalizePath(path: string): string {
 }
 
 /**
+ * Reads the condition code a native fault carries.
+ *
+ * @remarks
+ * A caller catches `unknown`, so every reading of a caught value's own property calls into code
+ * this package does not own: a proxy whose `has` trap throws and a value whose `code` getter throws
+ * both arrive here. The read is guarded, so a fault that refuses inspection reports no code rather
+ * than raising a second fault over the first. A `code` the host reports as anything other than a
+ * string is no code this package compares against, so it reports none either.
+ *
+ * One reading serves every site that classifies a native fault, so a host condition is admitted the
+ * same way wherever it is read.
+ *
+ * @param error - The caught value to read
+ * @returns The fault's `code` when it carries a string one; `undefined` otherwise
+ *
+ * @example
+ * ```ts
+ * readFaultCode(Object.assign(new Error('no such file'), { code: 'ENOENT' })) // 'ENOENT'
+ * readFaultCode(new Error('the runtime stage was destroyed')) // undefined
+ * readFaultCode('ENOENT') // undefined
+ * ```
+ */
+export function readFaultCode(error: unknown): string | undefined {
+	if (typeof error !== 'object' || error === null) return undefined
+	const fault = error
+	const reading = attempt(() => ('code' in fault ? fault.code : undefined))
+	if (!reading.success) return undefined
+	return typeof reading.value === 'string' ? reading.value : undefined
+}
+
+/**
+ * Reports whether one path resolves outside the root it is read against.
+ *
+ * @remarks
+ * Containment decides which paths a claim may reach and which absolute paths a digest may rewrite,
+ * so one reading serves every site that asks the question. A target resolving to the root itself is
+ * contained, and each caller decides on its own what that empty relative path means for it.
+ *
+ * The test reads the relative path rather than a string prefix of the root, so a sibling directory
+ * whose name begins with the root's own text is outside rather than beneath it. An absolute
+ * relative path is the answer a host returns for two paths on different volumes, which no root
+ * contains.
+ *
+ * @param root - The root the target is read against
+ * @param target - The path to test, absolute or root-relative
+ * @returns True when the target resolves outside the root; false otherwise
+ *
+ * @example
+ * ```ts
+ * escapesRoot('/srv/checkout', 'src/core/greeting.ts') // false
+ * escapesRoot('/srv/checkout', '../secrets.env') // true
+ * escapesRoot('/srv/checkout', '/srv/checkout-backup/secrets.env') // true
+ * ```
+ */
+export function escapesRoot(root: string, target: string): boolean {
+	const path = relative(resolve(root), resolve(root, target))
+	return path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)
+}
+
+/**
  * Resolves a path inside a target workspace and rejects traversal outside it.
  *
  * @remarks
@@ -70,7 +130,7 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 	const root = resolve(workspace)
 	const file = resolve(root, target)
 	const path = relative(root, file)
-	if (path === '' || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
+	if (path === '' || escapesRoot(root, file)) {
 		throw new ProbeError(`Path escapes the workspace: ${target}`, {
 			origin: 'claimant',
 			code: 'refused',
@@ -85,16 +145,9 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 			descendant = resolve(descendant, segment)
 			const outcome = attempt(() => lstatSync(descendant))
 			if (!outcome.success) {
-				const error = outcome.error
-				if (
-					typeof error === 'object' &&
-					error !== null &&
-					'code' in error &&
-					(error.code === 'ENOENT' || error.code === 'ENOTDIR')
-				) {
-					break
-				}
-				throw error
+				const code = readFaultCode(outcome.error)
+				if (code === 'ENOENT' || code === 'ENOTDIR') break
+				throw outcome.error
 			}
 			if (outcome.value.isSymbolicLink()) {
 				throw new ProbeError(`Path crosses a symbolic link: ${target}`, {
@@ -104,8 +157,7 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 				})
 			}
 			const resolved = realpathSync(descendant)
-			const remainder = relative(canonical, resolved)
-			if (remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) {
+			if (escapesRoot(canonical, resolved)) {
 				throw new ProbeError(`Path escapes the workspace: ${target}`, {
 					origin: 'claimant',
 					code: 'refused',
@@ -115,11 +167,8 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 		}
 	} catch (error) {
 		if (error instanceof ProbeError) throw error
-		const claimant =
-			typeof error === 'object' &&
-			error !== null &&
-			'code' in error &&
-			(error.code === 'ENAMETOOLONG' || error.code === 'ERR_INVALID_ARG_VALUE')
+		const code = readFaultCode(error)
+		const claimant = code === 'ENAMETOOLONG' || code === 'ERR_INVALID_ARG_VALUE'
 		throw new ProbeError(`The workspace path cannot be inspected: ${target}`, {
 			origin: claimant ? 'claimant' : 'workspace',
 			code: claimant ? 'refused' : 'malformed',
@@ -214,11 +263,7 @@ export function overwriteFile(file: string, text: string): void {
  * ```
  */
 export function isRefusedName(file: string, error: unknown): boolean {
-	if (typeof error !== 'object' || error === null) return false
-	const fault = error
-	const reading = attempt(() => ('code' in fault ? fault.code : undefined))
-	if (!reading.success) return false
-	const code = reading.value
+	const code = readFaultCode(error)
 	if (code === 'ENAMETOOLONG') return true
 	if (code === 'ERR_INVALID_ARG_VALUE') return file.includes('\0')
 	if (code !== 'ENOENT') return false
@@ -328,11 +373,7 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
 	)
 	if (outcome.success) return outcome.value
 	const error = outcome.error
-	const missing =
-		typeof error === 'object' &&
-		error !== null &&
-		'code' in error &&
-		error.code === 'MODULE_NOT_FOUND'
+	const missing = readFaultCode(error) === 'MODULE_NOT_FOUND'
 	throw new ProbeError(`The workspace cannot resolve ${specifier}`, {
 		origin: 'workspace',
 		code: missing ? 'missing' : 'malformed',
@@ -367,11 +408,7 @@ export function loadWorkspaceModule(
 	})
 	if (outcome.success) return outcome.value
 	const error = outcome.error
-	const missing =
-		typeof error === 'object' &&
-		error !== null &&
-		'code' in error &&
-		error.code === 'MODULE_NOT_FOUND'
+	const missing = readFaultCode(error) === 'MODULE_NOT_FOUND'
 	throw new ProbeError(`The workspace cannot load ${specifier}`, {
 		origin: 'workspace',
 		code: missing ? 'missing' : 'malformed',
@@ -410,11 +447,8 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 	const reading = attempt(() => readFileSync(path, 'utf8'))
 	if (!reading.success) {
 		const error = reading.error
-		const missing =
-			typeof error === 'object' &&
-			error !== null &&
-			'code' in error &&
-			(error.code === 'ENOENT' || error.code === 'ENOTDIR')
+		const code = readFaultCode(error)
+		const missing = code === 'ENOENT' || code === 'ENOTDIR'
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
 			origin: 'workspace',
 			code: missing ? 'missing' : 'malformed',
@@ -727,7 +761,7 @@ export function normalizeValue(workspace: string, value: unknown): unknown {
 		if (!isAbsolute(value)) return value
 		const path = relative(root, resolve(value))
 		if (path === '') return '.'
-		if (path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) return value
+		if (escapesRoot(root, value)) return value
 		return normalizePath(path)
 	}
 	if (isArray(value)) return value.map((entry) => normalizeValue(workspace, entry))

@@ -23,7 +23,9 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
 import {
+	PROBE_SPECIFICATIONS,
 	ProbeError,
+	RUNTIME_PLUGIN,
 	createDestroyedError,
 	formatSpecification,
 	isProbeError,
@@ -39,6 +41,7 @@ import {
 	loadWorkspaceModule,
 	matchesWorkspaceModule,
 	normalizePath,
+	readFaultCode,
 	releaseListeners,
 	relativeWorkspaceFile,
 	relativeWorkspaceMessage,
@@ -371,7 +374,7 @@ export class RuntimeStage implements StageInterface {
 			plugins: [
 				...(config.plugins ?? []),
 				{
-					name: 'orkestrel-runtime-overlay',
+					name: RUNTIME_PLUGIN,
 					enforce: 'pre',
 					resolveId: this.#resolve.bind(this),
 					load: this.#load.bind(this),
@@ -520,9 +523,7 @@ export class RuntimeStage implements StageInterface {
 				context: { stage: this.stage, path },
 			})
 		}
-		if (
-			!project.vite.config.plugins.some((plugin) => plugin.name === 'orkestrel-runtime-overlay')
-		) {
+		if (!project.vite.config.plugins.some((plugin) => plugin.name === RUNTIME_PLUGIN)) {
 			return {
 				origin: 'workspace',
 				path,
@@ -626,14 +627,15 @@ export class RuntimeStage implements StageInterface {
 	// Reads the specification count rather than incrementing it. An inspection that writes no
 	// specification retains no URL, so counting it would recycle a runner that never grew.
 	#runner(): Promise<Vitest> {
-		// Vite retains one unresolved URL for each fresh specification path. A 64-specification
-		// lifetime bounds that internal map without giving up the resident runner on each call.
+		// Vite retains one unresolved URL for each fresh specification path. The
+		// `PROBE_SPECIFICATIONS` lifetime bounds that internal map without giving up the resident
+		// runner on each call.
 		const current = this.#vitest
-		if (current !== undefined && this.#specifications < 64) return current
+		if (current !== undefined && this.#specifications < PROBE_SPECIFICATIONS) return current
 		if (current !== undefined) return this.#store(this.#replace(current))
 		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
 		return this.#store(
-			this.#specifications < 64
+			this.#specifications < PROBE_SPECIFICATIONS
 				? this.#warm(runner.createVitest)
 				: this.#replace(undefined, runner.createVitest),
 		)
@@ -766,7 +768,7 @@ export class RuntimeStage implements StageInterface {
 			process.kill(id, 0)
 			return true
 		} catch (error) {
-			return error instanceof Error && 'code' in error && error.code === 'EPERM'
+			return readFaultCode(error) === 'EPERM'
 		}
 	}
 

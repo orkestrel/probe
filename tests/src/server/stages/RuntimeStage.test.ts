@@ -20,7 +20,13 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { captureError, createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { computeReceipt, formatIssue, formatSpecification, isProbeError } from '@src/core'
+import {
+	PROBE_SPECIFICATIONS,
+	computeReceipt,
+	formatIssue,
+	formatSpecification,
+	isProbeError,
+} from '@src/core'
 import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
@@ -1317,7 +1323,7 @@ describe('runtime stage', () => {
 					code: 'missing',
 					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
-				for (let index = 1; index <= 64; index += 1) {
+				for (let index = 1; index <= PROBE_SPECIFICATIONS; index += 1) {
 					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`
 					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
 						issues: [],
@@ -1325,7 +1331,7 @@ describe('runtime stage', () => {
 				}
 				expect(scratch.read('runtime-warms.txt')?.trim().split('\n')).toStrictEqual(['warm'])
 				scratch.write('refuse-warm', '')
-				const last = `import { expect, test } from 'vitest'\ntest('passes ${marker}-65', () => expect(1).toBe(1))\n`
+				const last = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${PROBE_SPECIFICATIONS + 1}', () => expect(1).toBe(1))\n`
 				const refused: unknown = await stage
 					.inspect({ files: [], test: { path, text: last } })
 					.catch((error: unknown) => error)

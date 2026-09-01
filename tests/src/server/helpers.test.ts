@@ -11,6 +11,7 @@ import {
 	computeDigest,
 	createRevisionFile,
 	describeUnknown,
+	escapesRoot,
 	findRefusedPaths,
 	guardStage,
 	inferDocumentLanguage,
@@ -22,6 +23,7 @@ import {
 	normalizePath,
 	normalizeValue,
 	overwriteFile,
+	readFaultCode,
 	readWorkspaceManifest,
 	relativeWorkspaceFile,
 	relativeWorkspaceMessage,
@@ -52,6 +54,14 @@ describe('server helper examples', () => {
 	it('returns the documented value for every documented server-helper example', () => {
 		expect(normalizePath('src\\core\\greeting.ts')).toBe('src/core/greeting.ts')
 		expect(normalizePath('src/core/greeting.ts')).toBe('src/core/greeting.ts')
+		expect(readFaultCode(Object.assign(new Error('no such file'), { code: 'ENOENT' }))).toBe(
+			'ENOENT',
+		)
+		expect(readFaultCode(new Error('the runtime stage was destroyed'))).toBeUndefined()
+		expect(readFaultCode('ENOENT')).toBeUndefined()
+		expect(escapesRoot(ROOT, 'src/core/greeting.ts')).toBe(false)
+		expect(escapesRoot(ROOT, '../secrets.env')).toBe(true)
+		expect(escapesRoot(ROOT, `${resolve(ROOT)}-backup/secrets.env`)).toBe(true)
 		expect(resolveWorkspaceFile(ROOT, 'src/core/greeting.ts')).toBe(
 			resolve(ROOT, 'src/core/greeting.ts'),
 		)
@@ -503,6 +513,54 @@ describe('server path helpers', () => {
 			message: 'this getter refuses the read',
 		})
 		expect(isRefusedName('tmp/probe/value.test.ts', throwing)).toBe(false)
+	})
+
+	// The shared reading every fault classification in this package runs through. Each value below
+	// is one it reports on rather than one it escapes through, because a caller outside this package
+	// hands it whatever it caught: a fault carrying no code, a code the host reports as a number, a
+	// value that is no object at all, and a fault whose own property reads throw.
+	it('reads a fault code, and reports none for every value that carries no string one', () => {
+		expect(readFaultCode(Object.assign(new Error('the write failed'), { code: 'ENOTDIR' }))).toBe(
+			'ENOTDIR',
+		)
+		expect(
+			readFaultCode(Object.assign(new Error('the write failed'), { code: 17 })),
+		).toBeUndefined()
+		expect(readFaultCode(new Error('the write failed'))).toBeUndefined()
+		expect(readFaultCode(undefined)).toBeUndefined()
+		expect(readFaultCode(null)).toBeUndefined()
+		expect(readFaultCode('ENOENT')).toBeUndefined()
+		expect(readFaultCode({ code: 'MODULE_NOT_FOUND' })).toBe('MODULE_NOT_FOUND')
+		const trapped = new Proxy(new Error('the write failed'), {
+			has(): boolean {
+				throw new Error('this trap refuses the membership test')
+			},
+		})
+		expect(readFaultCode(trapped)).toBeUndefined()
+		const throwing: { message: string; code?: unknown } = new Error('the write failed')
+		Object.defineProperty(throwing, 'code', {
+			get(): never {
+				throw new Error('this getter refuses the read')
+			},
+		})
+		expect(readFaultCode(throwing)).toBeUndefined()
+	})
+
+	// The containment test three callers share. A path resolving to the root itself is contained,
+	// because each caller decides on its own what an empty relative path means for it, and a sibling
+	// directory whose name begins with the root's own text is outside rather than beneath it.
+	it('reports containment against a root for a relative, an escaping, and an absolute path', () => {
+		expect(escapesRoot(ROOT, 'src/core/value.ts')).toBe(false)
+		expect(escapesRoot(ROOT, './src/../src/core/value.ts')).toBe(false)
+		expect(escapesRoot(ROOT, resolve(ROOT, 'src/core/value.ts'))).toBe(false)
+		expect(escapesRoot(ROOT, '')).toBe(false)
+		expect(escapesRoot(ROOT, '.')).toBe(false)
+		expect(escapesRoot(ROOT, '..')).toBe(true)
+		expect(escapesRoot(ROOT, '../secrets.env')).toBe(true)
+		expect(escapesRoot(ROOT, 'src/../../secrets.env')).toBe(true)
+		expect(escapesRoot(ROOT, `${resolve(ROOT)}-backup/secrets.env`)).toBe(true)
+		expect(escapesRoot(resolve(ROOT, 'src'), resolve(ROOT, 'src/core/value.ts'))).toBe(false)
+		expect(escapesRoot(resolve(ROOT, 'src'), resolve(ROOT, 'tests/setup.ts'))).toBe(true)
 	})
 
 	// `ERR_INVALID_ARG_VALUE` names every argument Node rejects, not the NUL byte alone, so the code
