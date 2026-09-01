@@ -92,7 +92,7 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.13",
+		"@orkestrel/contract": "^0.0.15",
 		"@orkestrel/emitter": "^0.0.8",
 		"@orkestrel/lsp": "^0.0.5",
 		"@orkestrel/mcp": "^0.0.27",
