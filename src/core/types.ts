@@ -30,9 +30,9 @@ export type Stage = (typeof PROBE_STAGES)[number]
  * ```
  */
 export interface Draft {
-	/** Workspace-relative path the stages resolve the text against. */
+	/** Names the workspace-relative path the stages resolve the text against. */
 	readonly path: string
-	/** The file's full contents. */
+	/** Holds the file's full contents. */
 	readonly text: string
 }
 
@@ -57,9 +57,9 @@ export interface Draft {
  * ```
  */
 export interface Case {
-	/** The candidate drafts the test imports, in the order the claim supplies them. */
+	/** Holds the candidate drafts the test imports, in the order the claim supplies them. */
 	readonly files: readonly Draft[]
-	/** The test that exercises those drafts. */
+	/** Holds the test that exercises those drafts. */
 	readonly test: Draft
 }
 
@@ -85,9 +85,9 @@ export interface Case {
  * ```
  */
 export interface Control extends Case {
-	/** The stage this control must report issues at. */
+	/** Names the stage this control must report issues at. */
 	readonly stage: Stage
-	/** Why the control fails there, in the claimant's own words. */
+	/** Explains why the control fails there, in the claimant's own words. */
 	readonly reason: string
 }
 
@@ -129,11 +129,14 @@ export interface Control extends Case {
  * ```
  */
 export interface Claim {
-	/** Workspace-relative path of the TypeScript project the candidate drafts are checked against. */
+	/**
+	 * Names the workspace-relative path of the TypeScript project the candidate drafts are checked
+	 * against.
+	 */
 	readonly project: string
-	/** The drafts and test the claim asserts about. */
+	/** Holds the drafts and test the claim asserts about. */
 	readonly case: Case
-	/** The negative control that must break, and where. */
+	/** Holds the negative control that must break, and where. */
 	readonly control: Control
 }
 
@@ -191,13 +194,15 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * ```
  */
 export interface Issue {
-	/** The party that must act on this message. */
+	/** Names the party that must act on this message. */
 	readonly origin: Party
-	/** Workspace-relative path this message is reported against. */
+	/** Names the workspace-relative path this message is reported against. */
 	readonly path: string
-	/** The diagnostic or failure message. */
+	/** Holds the diagnostic or failure message. */
 	readonly message: string
-	/** Zero-based UTF-16 span the tool reported, or absent when it reported no location. */
+	/**
+	 * Holds the zero-based UTF-16 span the tool reported, or is absent when it reported no location.
+	 */
 	readonly range?: LSPRange
 }
 
@@ -214,11 +219,11 @@ export interface Issue {
  * ```
  */
 export interface Check {
-	/** The stage that produced this outcome. */
+	/** Names the stage that produced this outcome. */
 	readonly stage: Stage
-	/** Milliseconds the stage took. */
+	/** Holds the milliseconds the stage took. */
 	readonly elapsed: number
-	/** Every message the stage's tool reported, in the tool's own order. */
+	/** Holds every message the stage's tool reported, in the tool's own order. */
 	readonly issues: readonly Issue[]
 }
 
@@ -236,11 +241,11 @@ export interface Check {
  * ```
  */
 export interface Toolchain {
-	/** Resolved `typescript` version the type stage ran. */
+	/** Names the resolved `typescript` version the type stage ran. */
 	readonly typescript: string
-	/** Resolved `oxlint` version the lint stage ran. */
+	/** Names the resolved `oxlint` version the lint stage ran. */
 	readonly oxlint: string
-	/** Resolved `vitest` version the runtime stage ran. */
+	/** Names the resolved `vitest` version the runtime stage ran. */
 	readonly vitest: string
 }
 
@@ -263,9 +268,12 @@ export interface Toolchain {
  * ```
  */
 export interface Project {
-	/** Resolved workspace-relative path of the project file the type stage applied. */
+	/** Names the resolved workspace-relative path of the project file the type stage applied. */
 	readonly path: string
-	/** Digest of that project's resolved compiler options, workspace-relative and key-sorted. */
+	/**
+	 * Holds the digest of that project's resolved compiler options, workspace-relative and
+	 * key-sorted.
+	 */
 	readonly digest: string
 }
 
@@ -330,26 +338,26 @@ export interface Project {
  * ```
  */
 export interface Verdict {
-	/** The revision identity this verdict was produced for, fresh per call. */
+	/** Names the revision identity this verdict was produced for, fresh per call. */
 	readonly id: string
-	/** Digest of the case and control this verdict answers. */
+	/** Holds the digest of the case and control this verdict answers. */
 	readonly digest: string
-	/** The tool versions that produced it. */
+	/** Names the tool versions that produced it. */
 	readonly toolchain: Toolchain
-	/** The TypeScript project the candidate drafts were judged against. */
+	/** Names the TypeScript project the candidate drafts were judged against. */
 	readonly project: Project
 	/**
-	 * The claimant's explanation for the selected control, when the verdict came from a claim. Part
-	 * of the control, so it enters `digest` and through it the receipt token.
+	 * Holds the claimant's explanation for the selected control, when the verdict came from a claim.
+	 * Part of the control, so it enters `digest` and through it the receipt token.
 	 */
 	readonly reason?: string
-	/** One outcome per stage for the claim's case. */
+	/** Holds one outcome per stage for the claim's case. */
 	readonly case: readonly Check[]
-	/** One outcome per stage for the claim's control. */
+	/** Holds one outcome per stage for the claim's control. */
 	readonly control: readonly Check[]
-	/** Milliseconds the whole call took, including both the case and the control. */
+	/** Holds the milliseconds the whole call took, including both the case and the control. */
 	readonly elapsed: number
-	/** The proof token, absent when either phase reports an instrument failure. */
+	/** Holds the proof token, absent when either phase reports an instrument failure. */
 	readonly receipt?: string
 }
 
@@ -371,13 +379,16 @@ export interface Verdict {
  * ```
  */
 export type ProbeEventMap = {
-	/** The boot control reported red and the instrument has begun answering calls. */
+	/** Fires when the boot control has reported red and the instrument has begun answering calls. */
 	readonly arm: readonly [toolchain: Toolchain]
-	/** A claim was answered. */
+	/** Fires when a claim is answered. */
 	readonly prove: readonly [verdict: Verdict]
-	/** The coordinator's deadline fired at one stage and that stage was replaced before this event. */
+	/** Fires after the coordinator's deadline fired at one stage and that stage was replaced. */
 	readonly expire: readonly [claim: Claim]
-	/** A fault surfaced for observation, once per fault, including a rejected arming attempt. */
+	/**
+	 * Fires when a fault surfaces for observation, once per fault, including a rejected arming
+	 * attempt.
+	 */
 	readonly error: readonly [error: unknown]
 }
 
@@ -400,15 +411,15 @@ export type ProbeEventMap = {
  * ```
  */
 export interface ProbeOptions {
-	/** Initial listeners, wired at construction. */
+	/** Declares the initial listeners, wired at construction. */
 	readonly on?: EmitterHooks<ProbeEventMap>
-	/** Handler for a listener throw. */
+	/** Holds the handler for a listener throw. */
 	readonly error?: EmitterErrorHandler
-	/** Target workspace root. Default: the current working directory. */
+	/** Names the target workspace root. Default: the current working directory. */
 	readonly workspace?: string
 	/**
-	 * Milliseconds one active stage inspection may take; an expired stage is replaced. Default:
-	 * 30,000 ms.
+	 * Holds the milliseconds one active stage inspection may take; an expired stage is replaced.
+	 * Default: 30,000 ms.
 	 */
 	readonly deadline?: number
 }
@@ -433,9 +444,9 @@ export interface ProbeOptions {
  * ```
  */
 export interface ProbeInterface {
-	/** Observation surface for arming, answers, deadline expiry, and faults. */
+	/** Publishes arming, answers, deadline expiry, and faults for observation. */
 	readonly emitter: EmitterInterface<ProbeEventMap>
-	/** The tool versions resolved from the workspace at construction. */
+	/** Names the tool versions resolved from the workspace at construction. */
 	readonly toolchain: Toolchain
 	/**
 	 * Answers one claim with every stage's evidence.
@@ -496,20 +507,20 @@ export type ProbeErrorCode = (typeof PROBE_ERROR_CODES)[number]
  * ```
  */
 export interface ProbeErrorContext {
-	/** The stage the failure belongs to, when one stage owns it. */
+	/** Names the stage the failure belongs to, when one stage owns it. */
 	readonly stage?: Stage
 	/**
-	 * The path involved, spelled as the refusing operation named it: workspace-relative for an
+	 * Names the path involved, spelled as the refusing operation named it: workspace-relative for an
 	 * input a caller supplied, absolute for a file this package resolved.
 	 */
 	readonly path?: string
-	/** The workspace-relative TypeScript project involved, for a project failure. */
+	/** Names the workspace-relative TypeScript project involved, for a project failure. */
 	readonly project?: string
-	/** The installed package name involved, for a workspace toolchain failure. */
+	/** Identifies the installed package involved, for a workspace toolchain failure. */
 	readonly name?: string
-	/** Milliseconds the expired budget allowed, for a deadline failure. */
+	/** Holds the milliseconds the expired budget allowed, for a deadline failure. */
 	readonly deadline?: number
-	/** The rejected value, for an input the guards refused. */
+	/** Holds the rejected value, for an input the guards refused. */
 	readonly value?: unknown
 }
 
@@ -531,12 +542,12 @@ export interface ProbeErrorContext {
  * ```
  */
 export interface ProbeErrorOptions {
-	/** The party that must act on this failure. */
+	/** Names the party that must act on this failure. */
 	readonly origin: Party
-	/** The condition that ended the operation. */
+	/** Names the condition that ended the operation. */
 	readonly code: ProbeErrorCode
-	/** Structured detail about the failure. */
+	/** Holds structured detail about the failure. */
 	readonly context?: ProbeErrorContext
-	/** The underlying fault, when one ended the operation. */
+	/** Holds the underlying fault, when one ended the operation. */
 	readonly cause?: unknown
 }

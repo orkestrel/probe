@@ -88,7 +88,7 @@ export function readFaultCode(error: unknown): string | undefined {
  *
  * @param root - The root the target is read against
  * @param target - The path to test, absolute or root-relative
- * @returns True when the target resolves outside the root; false otherwise
+ * @returns True if the target resolves outside the root; false otherwise
  *
  * @example
  * ```ts
@@ -250,7 +250,7 @@ export function overwriteFile(file: string, text: string): void {
  *
  * @param file - The path whose creation failed
  * @param error - The fault the failed operation raised
- * @returns True when the fault means the host refuses this name; false otherwise
+ * @returns True if the fault means the host refuses this name; false otherwise
  *
  * @example
  * ```ts
@@ -621,7 +621,7 @@ export function createRevisionFile(workspace: string, path: string, revision: st
  * Reports whether a path is a workspace module Vitest can cache.
  *
  * @param path - The candidate file path
- * @returns True for script, TypeScript, Vue, and JSON modules; false otherwise
+ * @returns True if the path is a script, TypeScript, Vue, or JSON module; false otherwise
  *
  * @example
  * ```ts

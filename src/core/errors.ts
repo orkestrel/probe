@@ -62,7 +62,7 @@ export class ProbeError extends Error {
  * condition all stay outside the type.
  *
  * @param value - The value to inspect
- * @returns True only for a `ProbeError` instance; false otherwise
+ * @returns True if the value is a `ProbeError` instance; false otherwise
  *
  * @example
  * ```ts

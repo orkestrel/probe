@@ -14,9 +14,9 @@ import type { Case, Check, Claim, Project, Stage } from '@src/core'
  * ```
  */
 export interface Inspection {
-	/** The candidate drafts and test one stage inspects. */
+	/** Holds the candidate drafts and test one stage inspects. */
 	readonly subject: Case
-	/** The claim the subject belongs to. */
+	/** Holds the claim the subject belongs to. */
 	readonly claim: Claim
 }
 
@@ -85,9 +85,9 @@ export interface OverlayOptions {
  * ```
  */
 export interface OverlayInterface {
-	/** Identity of the candidate set this overlay holds. */
+	/** Identifies the candidate set this overlay holds. */
 	readonly revision: string
-	/** Absolute path of every candidate this overlay holds. */
+	/** Names the absolute path of every candidate this overlay holds. */
 	readonly paths: readonly string[]
 	/**
 	 * Records one candidate's text against the absolute path it stands in for.
@@ -145,10 +145,10 @@ export interface OverlayInterface {
  * ```
  */
 export interface StageInterface {
-	/** The inspection this resident stage performs. */
+	/** Names the inspection this resident stage performs. */
 	readonly stage: Stage
 	/**
-	 * Claimant-owned progress the coordinator compares with its inspection snapshot.
+	 * Reports claimant-owned progress the coordinator compares with its inspection snapshot.
 	 *
 	 * @remarks
 	 * When claimant-owned work is admitted, raise `progress` before awaiting its result. When this
@@ -262,9 +262,9 @@ export interface LintStageInterface extends StageInterface {
  * ```
  */
 export interface WorkspaceManifest {
-	/** Absolute path of the package manifest. */
+	/** Names the absolute path of the package manifest. */
 	readonly path: string
-	/** Parsed manifest record. */
+	/** Holds the parsed manifest record. */
 	readonly contents: Readonly<Record<string, unknown>>
 }
 
