@@ -29,8 +29,8 @@ import {
 } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
+	buildRevisionPath,
 	computeDigest,
-	createRevisionFile,
 	describeUnknown,
 	overwriteFile,
 	readWorkspaceManifest,
@@ -75,8 +75,10 @@ export class Probe implements ProbeInterface {
 	readonly #surfaced = new WeakSet<ProbeError>()
 	#typeTail = Promise.resolve()
 	#arming: Promise<void>
+	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before
+	// anything it starts can suspend, so every later read of `#closing !== undefined` answers the
+	// question a second flag would have answered, and no second write can drift from this one.
 	#closing: Promise<void> | undefined
-	#destroyed = false
 
 	/**
 	 * Resolves the target toolchain and starts warming the resident stages.
@@ -137,7 +139,7 @@ export class Probe implements ProbeInterface {
 			this.#support()
 			this.#admit(claim)
 			await this.#ready()
-			if (this.#destroyed) throw createDestroyedError('probe')
+			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			const started = performance.now()
 			const id = randomUUID()
 			// Resolve the project before any inspection runs, so a project this workspace cannot parse
@@ -175,7 +177,6 @@ export class Probe implements ProbeInterface {
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
 		this.#closing = this.#destroy()
 		return this.#closing
 	}
@@ -194,7 +195,7 @@ export class Probe implements ProbeInterface {
 			await attempt
 			return
 		} catch (error) {
-			if (this.#destroyed) throw error
+			if (this.#closing !== undefined) throw error
 		}
 		if (this.#arming === attempt) {
 			this.#arming = this.#arm()
@@ -273,8 +274,8 @@ export class Probe implements ProbeInterface {
 		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
 		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
 		const revision = `${process.pid}-${randomUUID()}`
-		const typeDependency = createRevisionFile(this.#workspace, 'tmp/probe/arm-type.ts', revision)
-		const runtimeDependency = createRevisionFile(
+		const typeDependency = buildRevisionPath(this.#workspace, 'tmp/probe/arm-type.ts', revision)
+		const runtimeDependency = buildRevisionPath(
 			this.#workspace,
 			'tmp/probe/arm-runtime.ts',
 			revision,
@@ -497,7 +498,7 @@ export class Probe implements ProbeInterface {
 	// rather than the process. A resident server whose type, lint, or runtime stage stays destroyed
 	// answers every later claim with the destruction of a stage that caller never asked about.
 	async #recycle(stage: StageInterface): Promise<boolean> {
-		if (this.#destroyed) return false
+		if (this.#closing !== undefined) return false
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		try {
@@ -519,7 +520,7 @@ export class Probe implements ProbeInterface {
 		} finally {
 			timeout.clear()
 		}
-		if (this.#destroyed) return false
+		if (this.#closing !== undefined) return false
 		// Identity, not kind: a second expiry racing this one names the stage this call already
 		// replaced, and rebuilding on that report would discard a live stage the queues are using.
 		if (stage === this.#type) {
@@ -601,17 +602,25 @@ export class Probe implements ProbeInterface {
 
 	async #destroy(): Promise<void> {
 		try {
-			await this.#arming
-		} catch {}
-		// Tear the stages down and leave the queues running. A queue holds no host resource — no
-		// timer, no listener, no store — and stage teardown settles every entry still admitted, so
-		// each caller reads the stage's own refusal. Destroying a queue instead abandons those
-		// entries, and a stage rejecting after its queue stopped observing ends the host process.
-		await Promise.all([
-			this.#destroyStage(this.#type),
-			this.#destroyStage(this.#lint),
-			this.#destroyStage(this.#runtime),
-		])
+			try {
+				await this.#arming
+			} catch {}
+			// Tear the stages down and leave the queues running. A queue holds no host resource — no
+			// timer, no listener, no store — and stage teardown settles every entry still admitted, so
+			// each caller reads the stage's own refusal. Destroying a queue instead abandons those
+			// entries, and a stage rejecting after its queue stopped observing ends the host process.
+			await Promise.all([
+				this.#destroyStage(this.#type),
+				this.#destroyStage(this.#lint),
+				this.#destroyStage(this.#runtime),
+			])
+		} finally {
+			// Release the listener graph last, and release it on the teardown that failed as well:
+			// a stage whose teardown rejects is the moment a host most needs its listeners gone, and
+			// a plain trailing statement is the one skipped on exactly that path. `destroy` is
+			// idempotent, so no guard stands in front of it.
+			this.#emitter.destroy()
+		}
 	}
 
 	async #destroyStage(stage: StageInterface): Promise<void> {

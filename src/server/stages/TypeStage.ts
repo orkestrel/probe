@@ -59,9 +59,11 @@ export class TypeStage implements TypeStageInterface {
 	readonly #diagnostics = new Map<string, readonly Diagnostic[]>()
 	#overlay: OverlayInterface = new Overlay()
 	#recycled: string | undefined
+	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
+	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
+	// question a second flag would have answered, and no second write can drift from this one.
 	#closing: Promise<void> | undefined
 	#progress = 0
-	#destroyed = false
 
 	/**
 	 * Starts warming the target workspace's TypeScript service.
@@ -124,16 +126,15 @@ export class TypeStage implements TypeStageInterface {
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
 		this.#closing = guardStage(this.stage, this.#destroy())
 		return this.#closing
 	}
 
 	async #inspect(subject: Case, project?: string): Promise<Check> {
-		if (this.#destroyed) throw createDestroyedError('type stage')
+		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 		const started = performance.now()
 		const typescript = await this.#typescript
-		if (this.#destroyed) throw createDestroyedError('type stage')
+		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 		const resolved = subject.files.map((draft) => ({
 			draft,
 			path: resolveWorkspaceFile(this.#workspace, draft.path),
@@ -195,9 +196,9 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	async #resolve(project: string): Promise<Project> {
-		if (this.#destroyed) throw createDestroyedError('type stage')
+		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 		const typescript = await this.#typescript
-		if (this.#destroyed) throw createDestroyedError('type stage')
+		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 		const resolved = resolveWorkspaceFile(this.#workspace, project)
 		this.#progress += 1
 		this.#service(typescript, project)
@@ -257,7 +258,7 @@ export class TypeStage implements TypeStageInterface {
 	// this stage would then own past its own teardown.
 	async #unblock(): Promise<void> {
 		await setTimeout(0)
-		if (this.#destroyed) throw createDestroyedError('type stage')
+		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 	}
 
 	// Resolution happens here rather than in the overlay, because the workspace a candidate's

@@ -32,8 +32,8 @@ import {
 	matchesSpecification,
 } from '@src/core'
 import {
+	buildRevisionPath,
 	captureListeners,
-	createRevisionFile,
 	describeUnknown,
 	guardStage,
 	inferTestProject,
@@ -67,6 +67,11 @@ import { Overlay } from '../Overlay.js'
  * The runtime overlay leaves bare specifier resolution to Vite: it replaces a bare import only
  * after Vite resolves that import to a covered file. The type stage overlays the declared test
  * path, while this stage executes a generated sibling and overlays only the candidate files.
+ * This stage mints its overlay with the default exact-match sensitivity, because it declares no
+ * file-name case sensitivity to Vite. A covered path whose spelling an importer wrote differs from
+ * the recorded candidate path is therefore served by whatever answers first, and `#misses` reports
+ * it as `The workspace configuration served this module before the runtime overlay` with origin
+ * `workspace` rather than leaving it answered silently.
  *
  * Vite retains one unresolved URL for every specification path, so the stage replaces its whole
  * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
@@ -113,9 +118,11 @@ export class RuntimeStage implements StageInterface {
 	readonly #modules = new Map<string, string>()
 	readonly #revisions = new Set<string>()
 	#specifications = 0
+	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
+	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
+	// question a second flag would have answered, and no second write can drift from this one.
 	#closing: Promise<void> | undefined
 	#progress = 0
-	#destroyed = false
 
 	/**
 	 * Starts warming the target workspace's Vitest service.
@@ -142,20 +149,19 @@ export class RuntimeStage implements StageInterface {
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
 		this.#closing = guardStage(this.stage, this.#destroy())
 		return this.#closing
 	}
 
 	async #inspect(subject: Case): Promise<Check> {
-		if (this.#destroyed) throw createDestroyedError('runtime stage')
+		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
 		const started = performance.now()
 		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
 		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
 		// rather than assigning zero over a code the host set for itself.
 		const exitCode = process.exitCode
 		const vitest = await this.#runner()
-		if (this.#destroyed) throw createDestroyedError('runtime stage')
+		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
 		const project = this.#project(vitest, subject.test.path)
 		if ('message' in project) {
 			return {
@@ -440,7 +446,7 @@ export class RuntimeStage implements StageInterface {
 			// alone deletes a neighbour's specification out from under its run. The same revision
 			// goes into the file's own marker, so the sweep reads one value from two places.
 			const revision = `${process.pid}-${randomUUID()}`
-			const file = createRevisionFile(this.#workspace, test.path, revision)
+			const file = buildRevisionPath(this.#workspace, test.path, revision)
 			generated = file
 			const target = relative(this.#workspace, file)
 			resolveWorkspaceFile(this.#workspace, target, true)
@@ -649,7 +655,7 @@ export class RuntimeStage implements StageInterface {
 			const vitest = await current
 			await vitest.close()
 		}
-		if (this.#destroyed) throw createDestroyedError('runtime stage')
+		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
 		const runner = create ?? loadWorkspaceModule(this.#workspace, 'vitest/node').createVitest
 		const replacement = await this.#warm(runner)
 		this.#specifications = 0

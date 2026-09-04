@@ -19,7 +19,7 @@ import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { formatVerdict, isVerdict } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { readSignalEnding } from '../../setupServer.js'
+import { describeEnding, readChildEnding, readSignalEnding } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -230,6 +230,19 @@ describe('bin entry', () => {
 		const source = readFileSync(resolve(ROOT, ENTRY), 'utf8')
 		expect(source).toContain('new ProbeServer().start()')
 		expect(source).not.toContain('export')
+	})
+
+	// The reporter flattens a multi-line refusal onto one stderr line, so what it treats as a line
+	// ending decides what survives. A lone carriage return is a character inside a tool's own quoted
+	// text rather than an ending, and a reporter that broke a message there would report two joined
+	// fragments in place of the bytes the tool wrote. The entry runs on import and ends the process
+	// it is loaded into, so its rule is read here rather than driven: no refusal this package can
+	// construct carries a lone carriage return to it.
+	it('splits a reported message at a line ending and never at a bare carriage return', () => {
+		const source = readFileSync(resolve(ROOT, ENTRY), 'utf8')
+		expect(source).toContain('split(/\\r\\n|\\n/u)')
+		expect(source).not.toContain('\\r?')
+		expect(source).not.toContain('|\\r/')
 	})
 
 	it('reports a construction refusal as a formatted stderr line without a stack', async () => {
@@ -1015,7 +1028,7 @@ describe('bin entry', () => {
 				// next boot, which the orphan-sweep proofs cover.
 				context.skip(
 					ending.code !== 0,
-					`this host ends a child holding its own ${delivery.signal} handler as ${ending.signal === null ? `code ${ending.code}` : `signal ${ending.signal}`}, so child.kill runs no handler here and the entry's graceful teardown cannot be reached`,
+					`this host ends a child holding its own ${delivery.signal} handler as ${describeEnding(ending)}, so child.kill runs no handler here and the entry's graceful teardown cannot be reached`,
 				)
 				const scratch = createScratch()
 				writeTarget(scratch)
@@ -1024,11 +1037,7 @@ describe('bin entry', () => {
 					cwd: scratch.path,
 					stdio: ['pipe', 'pipe', 'pipe'],
 				})
-				const exited = new Promise<{ code: number | null; signal: string | null }>(
-					(resolveExit) => {
-						child.once('exit', (code, signal) => resolveExit({ code, signal }))
-					},
-				)
+				const exited = readChildEnding(child)
 				try {
 					if (delivery.phase === 'boot') await waitForArming(directory)
 					else await waitForArmed(directory)

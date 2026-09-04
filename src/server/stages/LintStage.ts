@@ -59,13 +59,15 @@ export class LintStage implements LintStageInterface {
 	// failed or that is still waiting for its answer still leaves a client and a child to release.
 	#client: LSPClientInterface | undefined
 	#ending: string | undefined
+	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
+	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
+	// question a second flag would have answered, and no second write can drift from this one.
 	#closing: Promise<void> | undefined
 	#progress = 0
 	// The version every document this stage opens carries. It counts admissions across the stage's
 	// whole life and never falls, because the gauge beside it does fall and a version that fell would
 	// tell the server this text is older than the text it replaced.
 	#revision = 0
-	#destroyed = false
 
 	/**
 	 * Starts warming the target workspace's Oxlint language server.
@@ -95,13 +97,12 @@ export class LintStage implements LintStageInterface {
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
-		this.#destroyed = true
 		this.#closing = guardStage(this.stage, this.#destroy())
 		return this.#closing
 	}
 
 	async #inspect(subject: Case, options: InspectionOptions | undefined): Promise<Check> {
-		if (this.#destroyed) throw createDestroyedError('lint stage')
+		if (this.#closing !== undefined) throw createDestroyedError('lint stage')
 		// The shared stage contract takes one argument, so this bound is optional in the type and
 		// required in fact. Serving without it would mean minting a bound beside the caller's, which
 		// is the racing pair this seam exists to remove.
@@ -114,7 +115,7 @@ export class LintStage implements LintStageInterface {
 		}
 		const started = performance.now()
 		const client = await this.#warmed()
-		if (this.#destroyed) throw createDestroyedError('lint stage')
+		if (this.#closing !== undefined) throw createDestroyedError('lint stage')
 		const issues: Issue[] = []
 		for (const draft of [...subject.files, subject.test]) {
 			issues.push(...(await this.#document(client, draft, options.signal)))
@@ -238,7 +239,7 @@ export class LintStage implements LintStageInterface {
 	// terms, a server that ended is named by the ending it took, and everything else is the
 	// client's own coded failure, which `guardStage` carries to the caller as this stage's fault.
 	#translate(error: unknown, path?: string): Error {
-		if (this.#destroyed) return createDestroyedError('lint stage')
+		if (this.#closing !== undefined) return createDestroyedError('lint stage')
 		const ending = this.#ending
 		if (ending !== undefined) {
 			return this.#fault(`The Oxlint language server exited with ${ending}`, error, path)

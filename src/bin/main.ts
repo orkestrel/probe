@@ -5,6 +5,6 @@ try {
 	new ProbeServer().start()
 } catch (error) {
 	if (!isProbeError(error)) throw error
-	console.error(`[${error.origin}] ${error.code}: ${error.message.split(/\r?\n|\r/u).join(' ')}`)
+	console.error(`[${error.origin}] ${error.code}: ${error.message.split(/\r\n|\n/u).join(' ')}`)
 	process.exitCode = 1
 }

@@ -27,7 +27,7 @@ import {
 	formatSpecification,
 	isProbeError,
 } from '@src/core'
-import { RuntimeStage, createRevisionFile, normalizePath } from '@src/server'
+import { RuntimeStage, buildRevisionPath, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest } from 'vitest/node'
 import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
@@ -62,7 +62,7 @@ describe('runtime stage', () => {
 	// at that suffix, which is what keeps an abandoned specification out of every suite while
 	// leaving it in the tree the type and lint gates read.
 	it('writes a generated specification no Vitest project collects', () => {
-		const file = createRevisionFile(
+		const file = buildRevisionPath(
 			ROOT,
 			'tmp/probe/greeting.test.ts',
 			`${process.pid}-${randomUUID()}`,
@@ -1587,7 +1587,7 @@ describe('runtime stage', () => {
 		const departed = spawnSync(process.execPath, ['--version'])
 		expect(departed.status).toBe(0)
 		const orphanRevision = `${departed.pid}-${randomUUID()}`
-		const orphan = createRevisionFile(scratch.path, 'tmp/probe/orphan.test.ts', orphanRevision)
+		const orphan = buildRevisionPath(scratch.path, 'tmp/probe/orphan.test.ts', orphanRevision)
 		const specification = "import { test } from 'vitest'\ntest('leaks', () => {})\n"
 		scratch.write(
 			relative(scratch.path, orphan),
@@ -1597,7 +1597,7 @@ describe('runtime stage', () => {
 		// the load-bearing pair: several hosts share one workspace routinely, so a sweep reading the
 		// name deletes a neighbour's specification while its run is reading it, and a consumer's own
 		// file that happens to carry the same name shape is theirs rather than this package's.
-		const live = createRevisionFile(
+		const live = buildRevisionPath(
 			scratch.path,
 			'tmp/probe/live.test.ts',
 			`${process.pid}-${randomUUID()}`,
@@ -1607,7 +1607,7 @@ describe('runtime stage', () => {
 		scratch.write('tmp/probe/notes.probe-draft.ts', 'export const NOTE = 1\n')
 		// A developer's own file, named exactly as this package names its own and carrying a dead
 		// identity, in a directory this package writes to only when a claim declares a test there.
-		const authored = createRevisionFile(
+		const authored = buildRevisionPath(
 			scratch.path,
 			'src/core/notes.ts',
 			`${departed.pid}-${randomUUID()}`,
@@ -1615,7 +1615,7 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, authored), 'export const NOTE = 1\n')
 		// The same file inside the workbench directory, so the rule is the marker rather than the
 		// location the flagship claim happens to use.
-		const drafted = createRevisionFile(
+		const drafted = buildRevisionPath(
 			scratch.path,
 			'tmp/probe/draft.test.ts',
 			`${departed.pid}-${randomUUID()}`,
@@ -1624,7 +1624,7 @@ describe('runtime stage', () => {
 		// A boot the host did not survive leaves its arming dependencies in the same directory.
 		// They are ordinary TypeScript in the consumer's tree, so they carry the same identity and
 		// the sweep reads them the same way.
-		const arming = createRevisionFile(
+		const arming = buildRevisionPath(
 			scratch.path,
 			'tmp/probe/arm-type.ts',
 			`${departed.pid}-${randomUUID()}`,
@@ -1632,7 +1632,7 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, arming), 'export type Signal = string\n')
 		const dependencyRevision = `${departed.pid}-${randomUUID()}`
 		const specificationRevision = `${departed.pid}-${randomUUID()}`
-		const boot = createRevisionFile(
+		const boot = buildRevisionPath(
 			scratch.path,
 			`tmp/probe/arm-runtime.probe-${dependencyRevision}.test.ts`,
 			specificationRevision,
@@ -1642,7 +1642,7 @@ describe('runtime stage', () => {
 			formatSpecification("export const SIGNAL = 'before'\n", specificationRevision),
 		)
 		const adjacentRevision = `${departed.pid}-${randomUUID()}`
-		const adjacent = createRevisionFile(
+		const adjacent = buildRevisionPath(
 			scratch.path,
 			`tmp/probe/adjacent.probe-${dependencyRevision}.ts`,
 			adjacentRevision,
@@ -1651,7 +1651,7 @@ describe('runtime stage', () => {
 			relative(scratch.path, adjacent),
 			formatSpecification("export const SIGNAL = 'before'\n", adjacentRevision),
 		)
-		const serving = createRevisionFile(
+		const serving = buildRevisionPath(
 			scratch.path,
 			'tmp/probe/arm-runtime.ts',
 			`${process.pid}-${randomUUID()}`,

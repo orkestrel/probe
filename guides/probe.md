@@ -186,9 +186,13 @@ resolves two spellings of one file name to one file, the tool keeps whichever sp
 — the committed file's, where the candidate shadows one — and asks the overlay under that, so an
 overlay matching keys exactly answers nothing and the tool reads the committed file instead.
 `TypeStage` mints its overlay from the workspace compiler's own `useCaseSensitiveFileNames` reading,
-which is the reading it declares to that compiler's language-service host. The folding reaches the
-lookup key alone: `paths` reports the recorded spelling, and `covers` compares a directory against
-that spelling unfolded.
+which is the reading it declares to that compiler's language-service host. `RuntimeStage` mints its
+overlay with the default instead, because it declares no case sensitivity to Vite: a covered path
+whose spelling an importer wrote differs from the recorded candidate path is served by whatever
+answers first, and the stage reports it as the `workspace` issue `The workspace configuration served
+this module before the runtime overlay` rather than leaving it answered silently. The folding
+reaches the lookup key alone: `paths` reports the recorded spelling, and `covers` compares a
+directory against that spelling unfolded.
 
 ### Server helpers
 
@@ -211,7 +215,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `inferTypeProject`         | function | `(path: string) => string`                                                                  | Selects the scoped TypeScript project for one candidate path, and throws for a path outside `src` and `app`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `inferTestProject`         | function | `(path: string) => string \| undefined`                                                     | Selects the Vitest project whose environment matches one test path, or `undefined` when none collects it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `inferDocumentLanguage`    | function | `(path: string) => string`                                                                  | Selects the Language Server Protocol language identifier a path's extension names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `createRevisionFile`       | function | `(workspace: string, path: string, revision: string) => string`                             | Builds the fresh sibling path one runtime inspection writes its specification to.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `buildRevisionPath`        | function | `(workspace: string, path: string, revision: string) => string`                             | Builds the fresh sibling path one runtime inspection writes its specification to.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `matchesWorkspaceModule`   | function | `(path: string) => boolean`                                                                 | Reports whether a path is a script, TypeScript, Vue, or JSON module Vitest can cache.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `describeUnknown`          | function | `(value: unknown) => string`                                                                | Normalizes a caught or foreign error into readable text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `guardStage`               | function | `<T>(stage: Stage, operation: Promise<T>) => Promise<T>`                                    | Guards one resident-stage operation, passing a `ProbeError` through unchanged and translating every other failure to `instrument`/`malformed` with the original fault on `cause`.                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -251,7 +255,6 @@ The public call-signature members of each behavioral interface, one table per in
 | Method    | Returns          | Behavior                                                                                                                                                                                                                 |
 | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `inspect` | `Promise<Check>` | Inspects one case under the bound its caller supplies, and refuses an inspection that omits one. The bound is optional in the type because the shared `StageInterface.inspect` takes one argument, and required in fact. |
-| `destroy` | `Promise<void>`  | Tears down the resident language server, abandoning every inspection it holds rather than waiting behind one.                                                                                                            |
 
 #### `OverlayInterface`
 
@@ -617,7 +620,7 @@ These things in it are load-bearing:
 This claim carries no absolute string, so `verdict.digest` is the same in any workspace that runs
 it. Change the control's `reason` and the digest changes with it, because the reason is part of the
 control the digest covers. The tool versions and the project digest in the receipt are this
-workspace's, taken on 2026-08-20.
+workspace's, and `tests/guides.test.ts` re-runs this claim and asserts the token this page carries.
 
 ## Reading a receipt
 
@@ -926,7 +929,11 @@ than the probe's — it decides which process reads the stdio, not when the engi
   never reaches a caller: a test that reads its own filename, through `import.meta.url` or through a
   frame in a failure it raised, reports the path the claim declared, because the stage rewrites the
   exact basename it generated back to the declared test's basename in every message it reports.
-- **Teardown.** `destroy()` releases every resident process and is idempotent. `ProbeServer.destroy`
+- **Teardown.** `destroy()` releases every resident process and is idempotent. It releases the
+  emitter last, and releases it on a teardown that failed too, so a listener registered through
+  `ProbeOptions.on` or through `probe.emitter` receives nothing after teardown settles and
+  `probe.emitter.destroyed` reads true. A refusal a later `prove` raises still reaches the caller
+  that asked for it, and reaches no listener. `ProbeServer.destroy`
   adds the process itself: it removes the listeners `start` attached — the `data`, `close`, and
   `error` forwarders on standard input, and the `SIGINT` and `SIGTERM` handlers on the process —
   and pauses the stream unless `start` found it already flowing, so the

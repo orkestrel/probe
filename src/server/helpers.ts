@@ -594,23 +594,24 @@ export function inferDocumentLanguage(path: string): string {
 }
 
 /**
- * Creates a fresh sibling identity while preserving a test's resolution directory.
+ * Builds the fresh sibling path a revision's file is written at, preserving the test's resolution
+ * directory.
  *
  * @param workspace - The target workspace root
  * @param path - The workspace-relative test path
  * @param revision - The fresh revision identity
- * @returns An absolute sibling file path
+ * @returns The absolute sibling path
  *
  * @example
  * ```ts
  * relativeWorkspaceFile(
  * 	'/srv/checkout',
- * 	createRevisionFile('/srv/checkout', 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+ * 	buildRevisionPath('/srv/checkout', 'tmp/probe/greeting.test.ts', '4821-9f0c'),
  * )
  * // 'tmp/probe/greeting.test.probe-4821-9f0c.ts'
  * ```
  */
-export function createRevisionFile(workspace: string, path: string, revision: string): string {
+export function buildRevisionPath(workspace: string, path: string, revision: string): string {
 	const file = resolveWorkspaceFile(workspace, path)
 	const extension = extname(file)
 	const stem = extension === '' ? file : file.slice(0, -extension.length)

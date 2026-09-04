@@ -3,14 +3,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import { LINT_DEADLINE, formatIssue, isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import {
-	isProcessLive,
+	createLintFixture,
+	describeEnding,
 	killFixtureServer,
 	readFixtureServer,
+	readHostEnding,
 	waitForFixtureServer,
 } from '../../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../../setup.js'
@@ -29,116 +31,9 @@ const UNBOUNDED: AbortSignal = new AbortController().signal
 // size it searches for is the size that holds exactly this write.
 const CLOSE_WRITE = 200
 
-// A protocol-faithful Oxlint language server. It announces its own process id, so a test can kill
-// the real child the stage owns privately and can read whether that child is still alive. Its
-// `initialize` result declares `textDocumentSync` with `openClose`, which is what a client checks
-// before it opens a document at all — real Oxlint declares the same capability, so a fixture that
-// omitted it would refuse every document the real server admits.
-//
-// Marker files select how it ends: `frail` exits with a code on the first document,
-// `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` exits
-// without replying to `initialize`, `silent-initialize` stays alive and never replies to
-// `initialize`, and `ignored-exit` answers `shutdown` and then stays alive through `exit`, which is
-// the one ending the protocol leaves to the client to force. Markers in a document's own text
-// select how it answers that document: `PROBE_SILENT` writes the document URI to `admitted` and
-// publishes nothing, `PROBE_SLOW` publishes after 3 s, which is past the bound the stage's client
-// holds over its lifecycle exchanges, and `PROBE_CLOSES_INPUT` closes the server's own standard
-// input when that document is closed. Every document it admits appends its `didOpen` version to
-// `versions`, so a test reads the versions the client actually put on the wire.
-//
-// The `stall` marker selects a different conversation entirely, and its content is the one document
-// URI this server answers. It frames `initialize` with blocking reads on the descriptor itself, so
-// it owns no stream buffer of its own, replies, and then reads nothing ever again. Its timer
-// publishes empty diagnostics for the marked URI and records the publication in `published`, so a
-// document it never read is answered while every byte the client writes after the handshake stays
-// in a pipe nobody drains.
-const SERVER = [
-	"import { closeSync, existsSync, readFileSync, readSync, writeFileSync } from 'node:fs'",
-	'let buffer = Buffer.alloc(0)',
-	'let deferred',
-	"writeFileSync('server.pid', String(process.pid))",
-	'setTimeout(() => process.exit(0), 60_000)',
-	'function send(message) {',
-	'\tconst content = JSON.stringify(message)',
-	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
-	'}',
-	"if (existsSync('stall')) {",
-	"\tconst held = readFileSync('stall', 'utf8')",
-	'\tconst chunk = Buffer.alloc(65_536)',
-	'\tlet request',
-	'\twhile (request === undefined) {',
-	'\t\tconst read = readSync(0, chunk, 0, chunk.length, null)',
-	'\t\tbuffer = Buffer.concat([buffer, chunk.subarray(0, read)])',
-	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
-	'\t\tif (boundary < 0) continue',
-	"\t\tconst framing = /Content-Length: (\\d+)/i.exec(buffer.subarray(0, boundary).toString('ascii'))",
-	'\t\tif (framing === null) continue',
-	'\t\tconst size = Number(framing[1])',
-	'\t\tif (buffer.length < boundary + 4 + size) continue',
-	"\t\trequest = JSON.parse(buffer.subarray(boundary + 4, boundary + 4 + size).toString('utf8'))",
-	'\t}',
-	'\tconst opening = { openClose: true, change: 1 }',
-	"\tsend({ jsonrpc: '2.0', id: request.id, result: { capabilities: { textDocumentSync: opening } } })",
-	'\tsetTimeout(() => {',
-	"\t\tsend({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri: held, diagnostics: [] } })",
-	"\t\twriteFileSync('published', held)",
-	'\t}, 800)',
-	'}',
-	"if (!existsSync('stall')) process.stdin.on('data', (chunk) => {",
-	'\tbuffer = Buffer.concat([buffer, chunk])',
-	'\twhile (true) {',
-	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
-	'\t\tif (boundary < 0) return',
-	"\t\tconst header = buffer.subarray(0, boundary).toString('ascii')",
-	'\t\tconst match = /Content-Length: (\\d+)/i.exec(header)',
-	'\t\tif (match === null) return',
-	'\t\tconst length = Number(match[1])',
-	'\t\tconst start = boundary + 4',
-	'\t\tif (buffer.length < start + length) return',
-	"\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))",
-	'\t\tbuffer = buffer.subarray(start + length)',
-	"\t\tif (message.method === 'initialize') {",
-	"\t\t\tif (existsSync('unanswered-initialize')) {",
-	'\t\t\t\tsetTimeout(() => process.exit(0), 250)',
-	'\t\t\t\treturn',
-	'\t\t\t}',
-	"\t\t\tif (existsSync('silent-initialize')) return",
-	'\t\t\tconst sync = { openClose: true, change: 1 }',
-	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: { capabilities: { textDocumentSync: sync } } })",
-	'\t\t}',
-	"\t\tif (message.method === 'textDocument/didOpen') {",
-	"\t\t\tif (existsSync('frail')) process.exit(7)",
-	'\t\t\tconst uri = message.params.textDocument.uri',
-	'\t\t\tconst text = message.params.textDocument.text',
-	"\t\t\twriteFileSync('versions', message.params.textDocument.version + '\\n', { flag: 'a' })",
-	"\t\t\tif (text.includes('PROBE_SILENT')) writeFileSync('admitted', uri)",
-	"\t\t\tif (text.includes('PROBE_CLOSES_INPUT')) deferred = uri",
-	"\t\t\tconst held = text.includes('PROBE_SILENT') || text.includes('PROBE_SLOW')",
-	"\t\t\tif (text.includes('PROBE_SLOW')) {",
-	"\t\t\t\tsetTimeout(() => send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } }), 3_000)",
-	'\t\t\t}',
-	'\t\t\tif (!held) {',
-	"\t\t\t\tsend({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } })",
-	'\t\t\t}',
-	'\t\t}',
-	"\t\tif (message.method === 'textDocument/didClose') {",
-	'\t\t\tif (message.params.textDocument.uri === deferred) closeSync(0)',
-	'\t\t}',
-	"\t\tif (message.method === 'shutdown') {",
-	"\t\t\tif (existsSync('unanswered-shutdown')) process.exit(0)",
-	"\t\t\tsend({ jsonrpc: '2.0', id: message.id, result: null })",
-	'\t\t}',
-	"\t\tif (message.method === 'exit' && !existsSync('ignored-exit')) process.exit(0)",
-	'\t}',
-	'})',
-].join('\n')
-
-const FIXTURE = {
-	'package.json': '{"type":"module"}\n',
-	'node_modules/oxlint/package.json':
-		'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
-	'node_modules/oxlint/fixture.js': SERVER,
-}
+// The workspace every row here drives the stage against, carrying the shared protocol-faithful
+// Oxlint language server. `createLintFixture` states which marker selects which conversation.
+const FIXTURE = createLintFixture().files
 
 const PASSING = "import { test } from 'vitest'\ntest('passes', () => {})\n"
 
@@ -203,29 +98,6 @@ const CLOSER = [
 	'})',
 	'setTimeout(() => {}, 10_000)',
 ].join('\n')
-
-// Reads how this host reports a child that ended, phrased the way the lint stage phrases an ending.
-// A kill lands as a signal on one host and as an exit code on another, and the door it came through
-// decides too, so this kills with `process.kill`, the door `killFixtureServer` uses, and the
-// assertion composes whatever came back. With no signal the child ends on its own, which is the
-// control: an instrument that reported a kill's ending for a child nobody killed would be measuring
-// nothing.
-async function readHostEnding(signal?: NodeJS.Signals): Promise<string> {
-	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 250)'], { stdio: 'ignore' })
-	const ended = new Promise<void>((settle) => {
-		child.on('exit', () => settle())
-	})
-	if (signal !== undefined) {
-		await new Promise<void>((ready) => {
-			child.on('spawn', () => ready())
-		})
-		const id = child.pid
-		if (id === undefined) throw new Error('The probe child never reported a process id')
-		process.kill(id, signal)
-	}
-	await ended
-	return child.signalCode === null ? `code ${child.exitCode}` : `signal ${child.signalCode}`
-}
 
 // Reads how this host reports a write to a child that closed its own standard input, which is the
 // mechanism the fixture server's `PROBE_CLOSES_INPUT` marker uses. A host that breaks the writing
@@ -332,12 +204,7 @@ async function expectReleased(stage: LintStage): Promise<void> {
 function createLintWorkspace(): ScratchInterface {
 	return createScratch({
 		files: {
-			'package.json': '{"type":"module"}\n',
-			'node_modules/oxlint/package.json': `${JSON.stringify({
-				name: 'oxlint',
-				version: '1.79.0',
-				bin: { oxlint: resolveWorkspaceBinary(ROOT, 'oxlint') },
-			})}\n`,
+			...createLintFixture({ binary: resolveWorkspaceBinary(ROOT, 'oxlint') }).files,
 			'.oxlintrc.json': `${JSON.stringify({
 				rules: { 'no-debugger': 'error' },
 				overrides: [
@@ -460,7 +327,14 @@ describe('lint stage', () => {
 		const held = stage.inspect({ files: [], test: source }, { signal: UNBOUNDED })
 		void held.catch(() => {})
 		try {
-			await waitForDelay(250)
+			// The fixture records the silenced document as it admits it, so the second inspection
+			// arrives against a registration the server has taken rather than against a handshake
+			// this host was slow to finish.
+			await waitForCondition(
+				'the lint fixture to admit the first document',
+				() => scratch.read('admitted') !== undefined,
+				{ budget: 10_000, interval: 20 },
+			)
 			await expect(
 				stage.inspect({ files: [], test: source }, { signal: UNBOUNDED }),
 			).rejects.toThrow(
@@ -915,12 +789,7 @@ describe('lint stage', () => {
 			// answers with the workspace's default rules and finds nothing.
 			const scratch = createScratch({
 				files: {
-					'package.json': '{"type":"module"}\n',
-					'node_modules/oxlint/package.json': `${JSON.stringify({
-						name: 'oxlint',
-						version: '1.79.0',
-						bin: { oxlint: resolveWorkspaceBinary(ROOT, 'oxlint') },
-					})}\n`,
+					...createLintFixture({ binary: resolveWorkspaceBinary(ROOT, 'oxlint') }).files,
 					'.oxlintrc.json': `${JSON.stringify({
 						rules: { 'no-debugger': 'off' },
 						overrides: [{ files: ['tmp/probe/**'], rules: { 'no-debugger': 'error' } }],
@@ -1039,11 +908,11 @@ describe('lint stage', () => {
 				// The control comes first: signal zero reaches that process while the stage still
 				// holds it, so a refusal afterwards is evidence about the teardown rather than
 				// about a process id nothing could ever reach.
-				expect(isProcessLive(owned)).toBe(true)
+				expect(isRunning(owned)).toBe(true)
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				// Signal zero is refused for a process the host has reaped, which is what separates
 				// a released child from an orphan the stage abandoned to the host's lifetime.
-				expect(isProcessLive(owned)).toBe(false)
+				expect(isRunning(owned)).toBe(false)
 				await expectReleased(stage)
 			} finally {
 				scratch.destroy()
@@ -1064,12 +933,18 @@ describe('lint stage', () => {
 			)
 			const owned = readFixtureServer(scratch)
 			killFixtureServer(scratch)
-			await waitForDelay(250)
+			// Teardown is measured against a server that is already gone, so this waits for the death
+			// itself rather than for a delay chosen to outlast it.
+			await waitForCondition(
+				'the killed language server to leave this host',
+				() => !isRunning(owned),
+				{ budget: 10_000, interval: 20 },
+			)
 			const killed = performance.now()
 			await expect(signalled.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - killed).toBeLessThan(5_000)
 			await expectReleased(signalled)
-			expect(isProcessLive(owned)).toBe(false)
+			expect(isRunning(owned)).toBe(false)
 
 			// The control is the death the guard already handled. A teardown that settles only for a
 			// signalled server would report the same pass as one that settles for neither.
@@ -1086,7 +961,7 @@ describe('lint stage', () => {
 			await expect(closed.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - exited).toBeLessThan(5_000)
 			await expectReleased(closed)
-			expect(isProcessLive(answering)).toBe(false)
+			expect(isRunning(answering)).toBe(false)
 		} finally {
 			scratch.destroy()
 		}
@@ -1102,12 +977,12 @@ describe('lint stage', () => {
 				// while it is still waiting for the answer the server owes it.
 				const silent = new LintStage(scratch.path)
 				const owned = await waitForFixtureServer(scratch)
-				expect(isProcessLive(owned)).toBe(true)
+				expect(isRunning(owned)).toBe(true)
 				const asked = performance.now()
 				await expect(silent.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(10_000)
 				await expectReleased(silent)
-				expect(isProcessLive(owned)).toBe(false)
+				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
 			}
@@ -1133,7 +1008,7 @@ describe('lint stage', () => {
 				await expect(unanswered.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
 				await expectReleased(unanswered)
-				expect(isProcessLive(owned)).toBe(false)
+				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
 			}
@@ -1155,7 +1030,7 @@ describe('lint stage', () => {
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
 				await expectReleased(stage)
-				expect(isProcessLive(owned)).toBe(false)
+				expect(isRunning(owned)).toBe(false)
 			} finally {
 				answering.destroy()
 			}
@@ -1185,7 +1060,7 @@ describe('lint stage', () => {
 				// decision rather than the server's.
 				expect(performance.now() - asked).toBeLessThan(5_000)
 				await expectReleased(stage)
-				expect(isProcessLive(owned)).toBe(false)
+				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
 			}
@@ -1207,9 +1082,14 @@ describe('lint stage', () => {
 			)
 			void inspection.catch(() => {})
 			try {
-				// The server exits a quarter second after it reads `initialize`, so teardown starts
-				// while the stage is still warming and the ending arrives with the request outstanding.
-				await waitForDelay(50)
+				// The server records that it read `initialize` and exits a quarter second later, so
+				// waiting for that record starts teardown inside the warming window: the stage is
+				// still waiting for its answer and the ending arrives with the request outstanding.
+				await waitForCondition(
+					'the lint fixture to record the initialize it never answers',
+					() => scratch.read('initialized') !== undefined,
+					{ budget: 10_000, interval: 10 },
+				)
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
@@ -1278,12 +1158,19 @@ describe('lint stage', () => {
 					},
 					{ signal: UNBOUNDED },
 				)
+				const owned = readFixtureServer(scratch)
 				killFixtureServer(scratch)
-				await waitForDelay(250)
+				// The later inspection is answered by the ending the stage read, so this waits for the
+				// death that produces that ending rather than for a delay chosen to outlast it.
+				await waitForCondition(
+					'the killed language server to leave this host',
+					() => !isRunning(owned),
+					{ budget: 10_000, interval: 20 },
+				)
 				// The control comes first: a child this host never killed ends on its own code, so an
 				// instrument returning the kill's phrase for it would be reading nothing about the kill.
-				expect(await readHostEnding()).toBe('code 0')
-				const ending = await readHostEnding('SIGKILL')
+				expect(describeEnding(await readHostEnding())).toBe('code 0')
+				const ending = describeEnding(await readHostEnding('SIGKILL'))
 				await expect(
 					stage.inspect(
 						{
@@ -1409,7 +1296,15 @@ describe('lint stage', () => {
 					},
 					{ signal: UNBOUNDED },
 				)
-				await waitForDelay(250)
+				// The fixture opens the record before it closes its own descriptor and writes the URI
+				// into it afterwards, so the record's contents land after the close. The write that
+				// follows this wait therefore meets a pipe that is already broken rather than one this
+				// host was slow to break.
+				await waitForCondition(
+					'the lint fixture to record the standard input it closed',
+					() => (scratch.read('closed') ?? '') !== '',
+					{ budget: 10_000, interval: 20 },
+				)
 				// The client owns the write, so the refusal reaches the caller as the notification
 				// that could not be delivered rather than as the host's own pipe code. What the row
 				// proves is unchanged: the inspection is refused as a stage fault instead of
@@ -1449,7 +1344,7 @@ describe('lint stage', () => {
 			try {
 				// The host kills the language server through `process.kill`, so the ending it reports is
 				// the one this host gives that door.
-				const ending = await readHostEnding('SIGKILL')
+				const ending = describeEnding(await readHostEnding('SIGKILL'))
 				const host = spawn(
 					process.execPath,
 					[

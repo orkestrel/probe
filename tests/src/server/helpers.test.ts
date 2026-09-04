@@ -7,9 +7,9 @@ import { compileGuard } from '@orkestrel/contract'
 import { captureError } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
+	buildRevisionPath,
 	captureListeners,
 	computeDigest,
-	createRevisionFile,
 	describeUnknown,
 	escapesRoot,
 	findRefusedPaths,
@@ -111,7 +111,7 @@ describe('server helper examples', () => {
 		expect(
 			relativeWorkspaceFile(
 				ROOT,
-				createRevisionFile(ROOT, 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+				buildRevisionPath(ROOT, 'tmp/probe/greeting.test.ts', '4821-9f0c'),
 			),
 		).toBe('tmp/probe/greeting.test.probe-4821-9f0c.ts')
 		expect(matchesWorkspaceModule('src/core/greeting.ts')).toBe(true)
@@ -210,7 +210,7 @@ describe('workspace message paths', () => {
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${complete}`)).toBe(
 			`Failed to load ${complete}`,
 		)
-		const generated = createRevisionFile(ROOT, 'tmp/probe/greeting.test.ts', `${process.pid}-1f0c`)
+		const generated = buildRevisionPath(ROOT, 'tmp/probe/greeting.test.ts', `${process.pid}-1f0c`)
 		// The root is removed even from a marker-carrying name, and the remainder keeps the separator
 		// the tool wrote rather than the forward-slash form `Issue.path` uses.
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${generated}`)).toBe(
@@ -341,11 +341,11 @@ describe('server path helpers', () => {
 		expect(normalizeValue(ROOT, resolve(ROOT, 'src/core/value.ts'))).toBe('src/core/value.ts')
 	})
 
-	it('creates sibling revision paths with and without extensions', () => {
-		expect(createRevisionFile(ROOT, 'tmp/probe/value.test.ts', 'revision')).toBe(
+	it('builds sibling revision paths with and without extensions', () => {
+		expect(buildRevisionPath(ROOT, 'tmp/probe/value.test.ts', 'revision')).toBe(
 			resolve(ROOT, 'tmp/probe/value.test.probe-revision.ts'),
 		)
-		expect(createRevisionFile(ROOT, 'tmp/probe/value', 'revision')).toBe(
+		expect(buildRevisionPath(ROOT, 'tmp/probe/value', 'revision')).toBe(
 			resolve(ROOT, 'tmp/probe/value.probe-revision'),
 		)
 	})

@@ -22,89 +22,23 @@ import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
 import { matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { createLintFixture } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
-// A protocol-faithful Oxlint language server that records every document session it is given. It
-// appends one line per `didOpen` carrying the number of documents open at that moment, waits, then
-// publishes an empty diagnostic set. A coordinator that admits two inspections at once shows a
-// count above one; a coordinator that admits them out of order shows the sessions transposed.
-const ORDERED = [
-	"import { appendFileSync } from 'node:fs'",
-	'let buffer = Buffer.alloc(0)',
-	'let open = 0',
-	'setTimeout(() => process.exit(0), 300_000)',
-	'function send(message) {',
-	'\tconst content = JSON.stringify(message)',
-	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
-	'}',
-	"process.stdin.on('data', (chunk) => {",
-	'\tbuffer = Buffer.concat([buffer, chunk])',
-	'\twhile (true) {',
-	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
-	'\t\tif (boundary < 0) return',
-	"\t\tconst header = buffer.subarray(0, boundary).toString('ascii')",
-	'\t\tconst match = /Content-Length: (\\d+)/i.exec(header)',
-	'\t\tif (match === null) return',
-	'\t\tconst length = Number(match[1])',
-	'\t\tconst start = boundary + 4',
-	'\t\tif (buffer.length < start + length) return',
-	"\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))",
-	'\t\tbuffer = buffer.subarray(start + length)',
-	"\t\tif (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { textDocumentSync: { openClose: true, change: 1 } } } })",
-	"\t\tif (message.method === 'textDocument/didOpen') {",
-	'\t\t\tconst uri = message.params.textDocument.uri',
-	'\t\t\topen += 1',
-	"\t\t\tappendFileSync('probe-lint.log', 'open ' + open + ' ' + uri + '\\n')",
-	"\t\t\tsetTimeout(() => send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } }), 100)",
-	'\t\t}',
-	"\t\tif (message.method === 'textDocument/didClose') {",
-	'\t\t\topen -= 1',
-	"\t\t\tappendFileSync('probe-lint.log', 'close ' + message.params.textDocument.uri + '\\n')",
-	'\t\t}',
-	"\t\tif (message.method === 'shutdown') send({ jsonrpc: '2.0', id: message.id, result: null })",
-	"\t\tif (message.method === 'exit') process.exit(0)",
-	'\t}',
-	'})',
-].join('\n')
+// The Oxlint language server every claim here is answered by. Its own exit budget sits above the
+// longest row's timeout, so a row reads the ending it drove rather than the server leaving on its
+// own. The `stall-lint` marker file silences every document, which is what holds the probe's boot
+// control past its deadline; the text marker `PROBE_SILENT` silences one document, which holds a
+// claim's candidate while the boot controls still answer.
+const STALLING = createLintFixture({ budget: 300_000 })
 
-// A protocol-faithful Oxlint language server that can be made to publish nothing. The `stall-lint`
-// marker file silences every document, which is what holds the probe's own boot control past its
-// deadline; the text marker `PROBE_SILENT` silences one document, which holds a claim's candidate
-// while the boot controls still answer.
-const STALLING = [
-	"import { existsSync } from 'node:fs'",
-	'let buffer = Buffer.alloc(0)',
-	'setTimeout(() => process.exit(0), 300_000)',
-	'function send(message) {',
-	'\tconst content = JSON.stringify(message)',
-	"\tprocess.stdout.write('Content-Length: ' + Buffer.byteLength(content) + '\\r\\n\\r\\n' + content)",
-	'}',
-	"process.stdin.on('data', (chunk) => {",
-	'\tbuffer = Buffer.concat([buffer, chunk])',
-	'\twhile (true) {',
-	"\t\tconst boundary = buffer.indexOf('\\r\\n\\r\\n')",
-	'\t\tif (boundary < 0) return',
-	"\t\tconst header = buffer.subarray(0, boundary).toString('ascii')",
-	'\t\tconst match = /Content-Length: (\\d+)/i.exec(header)',
-	'\t\tif (match === null) return',
-	'\t\tconst length = Number(match[1])',
-	'\t\tconst start = boundary + 4',
-	'\t\tif (buffer.length < start + length) return',
-	"\t\tconst message = JSON.parse(buffer.subarray(start, start + length).toString('utf8'))",
-	'\t\tbuffer = buffer.subarray(start + length)',
-	"\t\tif (message.method === 'initialize') send({ jsonrpc: '2.0', id: message.id, result: { capabilities: { textDocumentSync: { openClose: true, change: 1 } } } })",
-	"\t\tif (message.method === 'textDocument/didOpen') {",
-	'\t\t\tconst uri = message.params.textDocument.uri',
-	"\t\t\tconst stalled = existsSync('stall-lint') || message.params.textDocument.text.includes('PROBE_SILENT')",
-	"\t\t\tif (!stalled) send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri, diagnostics: [] } })",
-	'\t\t}',
-	"\t\tif (message.method === 'shutdown') send({ jsonrpc: '2.0', id: message.id, result: null })",
-	"\t\tif (message.method === 'exit') process.exit(0)",
-	'\t}',
-	'})',
-].join('\n')
+// The same server, publishing one document's diagnostics a tenth of a second after admitting it and
+// recording each session in `probe-lint.log`. A coordinator that admits two inspections at once
+// leaves a count above one in that record; one that admits them out of order leaves the sessions
+// transposed.
+const ORDERED = createLintFixture({ budget: 300_000, delay: 100 })
 
 // Builds one candidate draft whose type check costs about a second: 100 exclusions applied one
 // after another to a 10,000-member template-literal union, measured at 12.8 ms per exclusion in this
@@ -603,10 +537,9 @@ describe.sequential('probe', () => {
 			'{"name":"typescript","version":"7.0.2","type":"module","exports":{".":"./index.js","./package.json":"./package.json"}}\n',
 		)
 		scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
-		scratch.write(
-			'node_modules/oxlint/package.json',
-			'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
-		)
+		scratch.write('node_modules/oxlint/package.json', createLintFixture().manifest)
+		// The refusal this row reads lands before any stage runs, so the binary the manifest names
+		// never has to answer the protocol and a server that exits at once serves it.
 		scratch.write('node_modules/oxlint/fixture.js', 'process.exit(1)\n')
 		scratch.write(
 			'node_modules/vitest/package.json',
@@ -1034,11 +967,8 @@ describe.sequential('probe', () => {
 		scratch.write('package.json', '{"type":"module"}\n')
 		scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
 		scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
-		scratch.write(
-			'node_modules/oxlint/package.json',
-			'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
-		)
-		scratch.write('node_modules/oxlint/fixture.js', STALLING)
+		scratch.write('node_modules/oxlint/package.json', STALLING.manifest)
+		scratch.write('node_modules/oxlint/fixture.js', STALLING.program)
 		scratch.write(
 			'tsconfig.json',
 			'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
@@ -1135,11 +1065,8 @@ describe.sequential('probe', () => {
 			scratch.write('package.json', '{"type":"module"}\n')
 			scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
 			scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
-			scratch.write(
-				'node_modules/oxlint/package.json',
-				'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
-			)
-			scratch.write('node_modules/oxlint/fixture.js', STALLING)
+			scratch.write('node_modules/oxlint/package.json', STALLING.manifest)
+			scratch.write('node_modules/oxlint/fixture.js', STALLING.program)
 			scratch.write(
 				'tsconfig.json',
 				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
@@ -1452,7 +1379,7 @@ describe.sequential('probe', () => {
 	})
 
 	it(
-		'destroys idempotently and observes one error for a later proof',
+		'destroys idempotently and releases the listeners its host registered',
 		{ timeout: 60_000 },
 		async () => {
 			const directory = fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))
@@ -1464,6 +1391,9 @@ describe.sequential('probe', () => {
 				on: { error: failures.handler },
 			})
 			await Promise.all([probe.destroy(), probe.destroy()])
+			// The reading taken here is this row's own control: it is what a later reading is compared
+			// against, so a listener that fired before teardown cannot pass for one teardown released.
+			const released = failures.count
 			await expect(
 				probe.prove({
 					project: 'configs/src/tsconfig.core.json',
@@ -1489,7 +1419,10 @@ describe.sequential('probe', () => {
 				message: 'The probe has been destroyed',
 				code: 'destroyed',
 			})
-			expect(failures.count).toBe(1)
+			// Teardown releases the emitter last, so a refusal the destroyed coordinator raises reaches
+			// the caller that asked for it and reaches no listener the host registered before teardown.
+			expect(failures.count).toBe(released)
+			expect(probe.emitter.destroyed).toBe(true)
 			expect(
 				readdirSync(directory).filter((name) => name.startsWith('after-destroy.test.probe-')),
 			).toStrictEqual([])
@@ -1594,11 +1527,8 @@ describe.sequential('probe', () => {
 			scratch.write('package.json', '{"type":"module"}\n')
 			scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
 			scratch.link('node_modules/vitest', resolve(ROOT, 'node_modules/vitest'))
-			scratch.write(
-				'node_modules/oxlint/package.json',
-				'{"name":"oxlint","version":"1.79.0","type":"module","bin":{"oxlint":"fixture.js"}}\n',
-			)
-			scratch.write('node_modules/oxlint/fixture.js', ORDERED)
+			scratch.write('node_modules/oxlint/package.json', ORDERED.manifest)
+			scratch.write('node_modules/oxlint/fixture.js', ORDERED.program)
 			scratch.write(
 				'tsconfig.json',
 				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["vitest/globals"]}}\n',
