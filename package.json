@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/probe",
-	"version": "0.0.11",
+	"version": "0.0.12",
 	"description": "Prove a claim with type, lint, and runtime evidence from the workspace's own toolchain.",
 	"keywords": [
 		"agent",
@@ -92,19 +92,19 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.15",
-		"@orkestrel/emitter": "^0.0.8",
-		"@orkestrel/lsp": "^0.0.5",
-		"@orkestrel/mcp": "^0.0.27",
-		"@orkestrel/queue": "^0.0.11",
-		"@orkestrel/timeout": "^0.0.8",
-		"@orkestrel/tool": "^0.0.12"
+		"@orkestrel/contract": "^0.0.16",
+		"@orkestrel/emitter": "^0.0.9",
+		"@orkestrel/lsp": "^0.0.6",
+		"@orkestrel/mcp": "^0.0.28",
+		"@orkestrel/queue": "^0.0.12",
+		"@orkestrel/timeout": "^0.0.9",
+		"@orkestrel/tool": "^0.0.13"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
-		"@orkestrel/guide": "^0.0.15",
-		"@orkestrel/scaffold": "^0.0.60",
-		"@orkestrel/test": "^0.0.12",
+		"@orkestrel/guide": "^0.0.17",
+		"@orkestrel/scaffold": "^0.0.62",
+		"@orkestrel/test": "^0.0.13",
 		"@types/node": "^26.4.0",
 		"oxfmt": "^0.65.0",
 		"oxlint": "^1.80.0",
