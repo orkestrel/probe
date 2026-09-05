@@ -228,12 +228,16 @@ export interface Check {
 }
 
 /**
- * Names the tool versions a verdict was produced with.
+ * Names the version each tool's own installed manifest publishes in the target workspace.
  *
  * @remarks
  * A probe is worth running only when its verdict predicts the gate's verdict, which holds only
- * when the probe and the gate read one installed copy of each tool. Carrying the resolved versions
- * on the verdict makes that claim checkable rather than assumed.
+ * when the probe and the gate read one installed copy of each tool. Every member names the version
+ * that tool's own manifest publishes in the target workspace, which is the install the gate runs
+ * against, so the claim is checkable rather than assumed. A bridged workspace is the case that
+ * reading has to be held against: its type stage runs the 6.x compiler `@typescript/typescript6`
+ * republishes rather than the 7.x the workspace's own manifest names, so its type verdict predicts
+ * that workspace's gate only where the two compilers agree.
  *
  * @example
  * ```ts
@@ -241,11 +245,11 @@ export interface Check {
  * ```
  */
 export interface Toolchain {
-	/** Names the resolved `typescript` version the type stage ran. */
+	/** Names the `typescript` version that tool's own installed manifest publishes in the target workspace. */
 	readonly typescript: string
-	/** Names the resolved `oxlint` version the lint stage ran. */
+	/** Names the `oxlint` version that tool's own installed manifest publishes in the target workspace. */
 	readonly oxlint: string
-	/** Names the resolved `vitest` version the runtime stage ran. */
+	/** Names the `vitest` version that tool's own installed manifest publishes in the target workspace. */
 	readonly vitest: string
 }
 
@@ -446,7 +450,7 @@ export interface ProbeOptions {
 export interface ProbeInterface {
 	/** Publishes arming, answers, deadline expiry, and faults for observation. */
 	readonly emitter: EmitterInterface<ProbeEventMap>
-	/** Names the tool versions resolved from the workspace at construction. */
+	/** Names the tool versions the target workspace's installed manifests publish, read at construction. */
 	readonly toolchain: Toolchain
 	/**
 	 * Answers one claim with every stage's evidence.

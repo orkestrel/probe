@@ -14,6 +14,7 @@ import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
 import { WORKSPACE_ROOT } from '../../setup.js'
+import { writeWorkspaceFixture } from '../../setupServer.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
@@ -172,6 +173,7 @@ describe('failure adoption', () => {
 	it('classifies every failure path a test can drive without a resident tool', async () => {
 		const workspace = createScratch({ prefix: 'probe-adoption-workspace-' })
 		const outside = createScratch({ prefix: 'probe-adoption-outside-' })
+		const bridgeless = createScratch({ prefix: 'probe-adoption-bridgeless-' })
 		try {
 			workspace.write('package.json', '{"name":"target","version":"0.0.0"}\n')
 			workspace.write('node_modules/unparsable/package.json', '{ this is not JSON\n')
@@ -183,6 +185,9 @@ describe('failure adoption', () => {
 			)
 			outside.write('secret.ts', 'export const SECRET = 1\n')
 			workspace.link('link', outside.path)
+			// A workspace on TypeScript 7 with no bridge beside it: the compiler resolves and the
+			// in-process API it is loaded for is not there.
+			writeWorkspaceFixture(bridgeless, { version: '7.0.2' })
 
 			const drives: readonly Drive[] = [
 				[
@@ -228,6 +233,12 @@ describe('failure adoption', () => {
 					'workspace',
 					'missing',
 					() => loadWorkspaceModule(workspace.path, 'typescript'),
+				],
+				[
+					'a compiler carrying no in-process API beside no bridge',
+					'workspace',
+					'malformed',
+					() => loadWorkspaceModule(bridgeless.path, 'typescript'),
 				],
 				[
 					'a manifest the workspace does not publish',
@@ -280,6 +291,7 @@ describe('failure adoption', () => {
 			expect(isProbeError(translated) && translated.cause instanceof Error).toBe(true)
 		} finally {
 			const teardown = createTeardown()
+			teardown.add(() => bridgeless.destroy())
 			teardown.add(() => outside.destroy())
 			teardown.add(() => workspace.destroy())
 			await teardown.destroy()

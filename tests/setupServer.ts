@@ -3,9 +3,11 @@ import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import { statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
+import { WORKSPACE_ROOT } from './setup.js'
 
 /** Selects what one built Oxlint language server fixture publishes and how long it answers. */
 export interface LintFixtureOptions {
@@ -175,6 +177,81 @@ export function createLintFixture(options?: LintFixtureOptions): LintFixture {
 			...(options?.binary === undefined ? { 'node_modules/oxlint/fixture.js': program } : {}),
 		},
 	}
+}
+
+/** Selects what one scratch workspace publishes as the tool installations probe resolves. */
+export interface WorkspaceFixtureOptions {
+	/** Names the version this workspace's `typescript` manifest and entry both publish. */
+	readonly version: string
+	/**
+	 * Whether the `typescript` entry publishes `createProgram`, which is the member probe reads the
+	 * in-process compiler API's presence from. Default: `false`, the shape TypeScript 7 publishes.
+	 */
+	readonly carried?: boolean
+	/**
+	 * Whether `node_modules/@typescript/typescript6` links this checkout's own installed bridge, so
+	 * a fallback loads a real compiler rather than a described one. Default: `false`. A row passing
+	 * `bridged` is gated with `it.runIf(DIRECTORY_LINKS)`, because the link is a directory link.
+	 */
+	readonly bridged?: boolean
+	/**
+	 * Whether the `oxlint` and `vitest` installations a `Probe` constructor resolves are written
+	 * beside the compiler. Default: `false`.
+	 */
+	readonly tooled?: boolean
+	/**
+	 * Names this workspace's own directory inside the scratch, so one scratch carries several
+	 * workspaces that differ in what they install. Default: the scratch root itself.
+	 */
+	readonly root?: string
+}
+
+/**
+ * Writes one scratch workspace publishing the tool installations probe resolves from a target.
+ *
+ * @param scratch - The scratch directory that owns the workspace.
+ * @param options - The compiler version and shape, and which installations sit beside it.
+ * @returns The workspace root's absolute path, which is what a `Probe` or a stage is constructed on.
+ * @remarks The `typescript` entry is written as CommonJS under a manifest naming it through `main`,
+ * because `loadWorkspaceModule` reaches it through `createRequire` and that shape needs no exports
+ * map to stay resolvable. The version the manifest publishes is the version the entry publishes, so
+ * a row reading `Probe.toolchain` and a row reading the loaded module read one number.
+ *
+ * The `oxlint` binary this writes exits at once. Every row driving it is answered before a stage
+ * asks that binary for the language server protocol, so a server that starts and ends serves them
+ * all; a row that needs the protocol builds its own through `createLintFixture`.
+ */
+export function writeWorkspaceFixture(
+	scratch: ScratchInterface,
+	options: WorkspaceFixtureOptions,
+): string {
+	const prefix = options.root === undefined ? '' : `${options.root}/`
+	const members =
+		options.carried === true
+			? `{ version: '${options.version}', createProgram() {} }`
+			: `{ version: '${options.version}' }`
+	scratch.write(`${prefix}package.json`, '{"type":"module"}\n')
+	scratch.write(
+		`${prefix}node_modules/typescript/package.json`,
+		`{"name":"typescript","version":"${options.version}","main":"index.js"}\n`,
+	)
+	scratch.write(`${prefix}node_modules/typescript/index.js`, `module.exports = ${members}\n`)
+	if (options.bridged === true) {
+		scratch.link(
+			`${prefix}node_modules/@typescript/typescript6`,
+			resolve(fileURLToPath(WORKSPACE_ROOT), 'node_modules/@typescript/typescript6'),
+		)
+	}
+	if (options.tooled === true) {
+		scratch.write(`${prefix}node_modules/oxlint/package.json`, createLintFixture().manifest)
+		scratch.write(`${prefix}node_modules/oxlint/fixture.js`, 'process.exit(1)\n')
+		scratch.write(
+			`${prefix}node_modules/vitest/package.json`,
+			'{"name":"vitest","version":"4.1.11","type":"module","exports":{"./node":"./node.js","./package.json":"./package.json"}}\n',
+		)
+		scratch.write(`${prefix}node_modules/vitest/node.js`, 'export const createVitest = undefined\n')
+	}
+	return resolve(scratch.path, options.root ?? '.')
 }
 
 /**

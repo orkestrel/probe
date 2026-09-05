@@ -106,6 +106,7 @@
 		"@orkestrel/scaffold": "^0.0.63",
 		"@orkestrel/test": "^0.0.13",
 		"@types/node": "^26.4.1",
+		"@typescript/typescript6": "^6.0.2",
 		"oxfmt": "^0.66.0",
 		"oxlint": "^1.81.0",
 		"typescript": "^6.0.3",
@@ -114,11 +115,15 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
+		"@typescript/typescript6": "^6.0.2",
 		"oxlint": "^1.80.0",
-		"typescript": "^6.0.3",
+		"typescript": "^6.0.3 || ^7.0.0",
 		"vitest": "^4.1.11"
 	},
 	"peerDependenciesMeta": {
+		"@typescript/typescript6": {
+			"optional": true
+		},
 		"oxlint": {
 			"optional": true
 		},

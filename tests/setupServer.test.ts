@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import {
+	DIRECTORY_LINKS,
 	REFUSED_RUNTIME_TARGETS,
 	createLintFixture,
 	describeEnding,
@@ -13,6 +15,7 @@ import {
 	readHostEnding,
 	readSignalEnding,
 	waitForFixtureServer,
+	writeWorkspaceFixture,
 } from './setupServer.js'
 
 describe('server test setup', () => {
@@ -42,6 +45,58 @@ describe('server test setup', () => {
 		expect(named).toMatchObject({ bin: { oxlint: '/opt/oxlint/bin/oxlint' } })
 		expect(Object.keys(linked.files)).not.toContain('node_modules/oxlint/fixture.js')
 	})
+
+	it('writes a version-only TypeScript 7 workspace and nothing beside it by default', () => {
+		const scratch = createScratch({ prefix: 'probe-setup-workspace-' })
+		try {
+			// The default: TypeScript 7 as a workspace installs it, and nothing beside it.
+			const bare = writeWorkspaceFixture(scratch, { version: '7.0.2' })
+			expect(bare).toBe(scratch.path)
+			expect(scratch.has('node_modules/@typescript/typescript6/package.json')).toBe(false)
+			expect(scratch.has('node_modules/oxlint/package.json')).toBe(false)
+			// Each entry is loaded rather than read, because every proof driving this fixture reaches
+			// it through a `require` and a text that cannot be loaded still matches a string.
+			const published: unknown = createRequire(resolve(bare, 'package.json'))('typescript')
+			expect(published).toStrictEqual({ version: '7.0.2' })
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it.runIf(DIRECTORY_LINKS)(
+		'links the bridge and writes the tools beside the compiler a caller selects',
+		() => {
+			const scratch = createScratch({ prefix: 'probe-setup-workspace-' })
+			try {
+				// Every selection at once: the workspace a proof that branches on the installation
+				// reaches for its equipped case.
+				const equipped = writeWorkspaceFixture(scratch, {
+					root: 'equipped',
+					version: '6.9.9',
+					carried: true,
+					bridged: true,
+					tooled: true,
+				})
+				expect(equipped).toBe(resolve(scratch.path, 'equipped'))
+				const load = createRequire(resolve(equipped, 'package.json'))
+				const carried: unknown = load('typescript')
+				expect(carried).toMatchObject({ version: '6.9.9', createProgram: expect.any(Function) })
+				// The linked bridge is this checkout's own installation, so it answers with a compiler.
+				const bridge: unknown = load('@typescript/typescript6')
+				expect(bridge).toMatchObject({ createProgram: expect.any(Function) })
+				const oxlint: unknown = JSON.parse(
+					scratch.read('equipped/node_modules/oxlint/package.json') ?? '',
+				)
+				expect(oxlint).toMatchObject({ name: 'oxlint', bin: { oxlint: 'fixture.js' } })
+				const vitest: unknown = JSON.parse(
+					scratch.read('equipped/node_modules/vitest/package.json') ?? '',
+				)
+				expect(vitest).toMatchObject({ name: 'vitest', version: '4.1.11' })
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
 
 	it('builds a fixture server that runs and announces itself', async () => {
 		const scratch = createScratch({ files: createLintFixture().files })

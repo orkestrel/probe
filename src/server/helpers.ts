@@ -1,7 +1,7 @@
 import type { Stage } from '@src/core'
 import type { ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
-import type * as TypeScript from 'typescript'
+import type * as TypeScript from '@typescript/typescript6'
 import type * as VitestNode from 'vitest/node'
 import {
 	closeSync,
@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { attempt, compileGuard, isArray, isRecord } from '@orkestrel/contract'
+import { attempt, compileGuard, isArray, isFunction, isRecord } from '@orkestrel/contract'
 import { CLAIM_SHAPE, ProbeError, isDraft } from '@src/core'
 
 /**
@@ -385,15 +385,26 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
 /**
  * Loads one installed tool module from a target workspace.
  *
+ * @remarks
+ * TypeScript 7 publishes no in-process compiler API under the `typescript` specifier: the module
+ * resolves and carries its version alone. Microsoft republishes the 6.x API as
+ * `@typescript/typescript6`, so a `typescript` whose `createProgram` is not a function is answered
+ * from that bridge, which is the resolution `unplugin-dts` performs for the same reason. The
+ * workspace's own `typescript` is preferred wherever it carries the API, so a workspace on 6.x
+ * loads the compiler it installs and no bridge enters the path.
+ *
  * @param workspace - The target workspace root
  * @param specifier - The module specifier to load
- * @returns The installed module
- * @throws When the workspace cannot load the module
+ * @returns The installed module, or the installed bridge for a `typescript` carrying no in-process
+ * compiler API
+ * @throws When the workspace cannot load the module. Thrown as `workspace`/`malformed` when the
+ * workspace's `typescript` carries no in-process compiler API and its `@typescript/typescript6`
+ * cannot serve one, whether the bridge is absent, unloadable, or loads without the API
  *
  * @example
  * ```ts
  * const typescript = loadWorkspaceModule(process.cwd(), 'typescript')
- * console.log(typescript.version)
+ * console.log(typeof typescript.createProgram) // 'function', whatever major the workspace installs
  * ```
  */
 export function loadWorkspaceModule(workspace: string, specifier: 'typescript'): typeof TypeScript
@@ -402,19 +413,48 @@ export function loadWorkspaceModule(
 	workspace: string,
 	specifier: 'typescript' | 'vitest/node',
 ): typeof TypeScript | typeof VitestNode {
-	const outcome = attempt(() => {
-		const require = createRequire(resolve(workspace, 'package.json'))
-		return specifier === 'typescript' ? require('typescript') : require('vitest/node')
-	})
-	if (outcome.success) return outcome.value
-	const error = outcome.error
-	const missing = readFaultCode(error) === 'MODULE_NOT_FOUND'
-	throw new ProbeError(`The workspace cannot load ${specifier}`, {
-		origin: 'workspace',
-		code: missing ? 'missing' : 'malformed',
-		context: { name: specifier },
-		cause: error,
-	})
+	// One require, so the bridge resolves from the same workspace root the requested specifier did.
+	const require = createRequire(resolve(workspace, 'package.json'))
+	const outcome = attempt(() =>
+		specifier === 'typescript' ? require('typescript') : require('vitest/node'),
+	)
+	if (!outcome.success) {
+		const error = outcome.error
+		const missing = readFaultCode(error) === 'MODULE_NOT_FOUND'
+		throw new ProbeError(`The workspace cannot load ${specifier}`, {
+			origin: 'workspace',
+			code: missing ? 'missing' : 'malformed',
+			context: { name: specifier },
+			cause: error,
+		})
+	}
+	const loaded: unknown = outcome.value
+	// `createProgram` is the member the API's absence is read from, because a compiler that publishes
+	// it publishes the rest of the in-process surface this package drives. Each branch reads its
+	// value through an `unknown` alias and returns the value `require` produced, because the guard
+	// narrows the alias to a record carrying `createProgram` rather than to the compiler's module
+	// type the overloads return.
+	if (specifier !== 'typescript' || (isRecord(loaded) && isFunction(loaded.createProgram))) {
+		return outcome.value
+	}
+	const bridged = attempt(() => require('@typescript/typescript6'))
+	if (bridged.success) {
+		// The bridge answers the same reading its workspace's compiler answered, because a bridge
+		// that resolves and publishes no compiler serves this stage no better than the entry it was
+		// asked to stand in for, and returning it unread defers that refusal to the first call.
+		const served: unknown = bridged.value
+		if (isRecord(served) && isFunction(served.createProgram)) return bridged.value
+	}
+	throw new ProbeError(
+		"The workspace's typescript carries no in-process compiler API, and the workspace's @typescript/typescript6 cannot serve one",
+		{
+			origin: 'workspace',
+			code: 'malformed',
+			context: { name: specifier },
+			// A bridge that loaded and cannot serve raises nothing, so there is no fault to carry.
+			...(bridged.success ? {} : { cause: bridged.error }),
+		},
+	)
 }
 
 /**
@@ -616,6 +656,36 @@ export function buildRevisionPath(workspace: string, path: string, revision: str
 	const extension = extname(file)
 	const stem = extension === '' ? file : file.slice(0, -extension.length)
 	return `${stem}.probe-${revision}${extension}`
+}
+
+/**
+ * Collects every major version a caret range names.
+ *
+ * @remarks
+ * A range names its supported majors as caret terms separated by `||`, and probe compares a
+ * workspace's installed major against that set. Reading only the first term refuses a major the
+ * range admits, so every term is read. Each term is read whole, so a term this package does not
+ * write — a bare version, a comparator pair, a caret version a second comparator narrows, a
+ * wildcard — names no major here and is skipped rather than throwing, so a range naming no caret
+ * term at all yields an empty collection and the caller refuses every version.
+ *
+ * @param range - The range to read, such as a `peerDependencies` entry
+ * @returns Each major the range's caret terms name, once, in the order the range names them
+ *
+ * @example
+ * ```ts
+ * collectRangeMajors('^6.0.3 || ^7.0.0') // ['6', '7']
+ * collectRangeMajors('^6.0.3') // ['6']
+ * collectRangeMajors('*') // []
+ * ```
+ */
+export function collectRangeMajors(range: string): readonly string[] {
+	const majors = new Set<string>()
+	for (const term of range.split('||')) {
+		const major = /^\^(\d+)\.\d+\.\d+$/u.exec(term.trim())?.[1]
+		if (major !== undefined) majors.add(major)
+	}
+	return [...majors]
 }
 
 /**

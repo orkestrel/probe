@@ -9,6 +9,7 @@ import { createScratch } from '@orkestrel/test/server'
 import {
 	buildRevisionPath,
 	captureListeners,
+	collectRangeMajors,
 	computeDigest,
 	describeUnknown,
 	escapesRoot,
@@ -34,6 +35,7 @@ import {
 } from '@src/server'
 import { CLAIM_SHAPE, ProbeError, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { DIRECTORY_LINKS, writeWorkspaceFixture } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -114,6 +116,9 @@ describe('server helper examples', () => {
 				buildRevisionPath(ROOT, 'tmp/probe/greeting.test.ts', '4821-9f0c'),
 			),
 		).toBe('tmp/probe/greeting.test.probe-4821-9f0c.ts')
+		expect(collectRangeMajors('^6.0.3 || ^7.0.0')).toStrictEqual(['6', '7'])
+		expect(collectRangeMajors('^6.0.3')).toStrictEqual(['6'])
+		expect(collectRangeMajors('*')).toStrictEqual([])
 		expect(matchesWorkspaceModule('src/core/greeting.ts')).toBe(true)
 		expect(matchesWorkspaceModule('src/styles/tokens.css')).toBe(false)
 		expect(describeUnknown(new Error('The lint stage has been destroyed'))).toBe(
@@ -631,7 +636,114 @@ describe('server path helpers', () => {
 
 	it('loads installed tool modules from the workspace', () => {
 		expect(loadWorkspaceModule(ROOT, 'typescript').version).toMatch(/^\d+\.\d+\.\d+/)
+		// The member the documented example claims, which is what the resolution branches on and what
+		// every caller of this overload drives.
+		expect(loadWorkspaceModule(ROOT, 'typescript').createProgram).toBeTypeOf('function')
 		expect(loadWorkspaceModule(ROOT, 'vitest/node').createVitest).toBeTypeOf('function')
+	})
+
+	// A workspace on TypeScript 7 installs a `typescript` whose entry publishes the version alone,
+	// because the in-process compiler API moved out from under that specifier. The bridge each
+	// workspace links is this checkout's own installed `@typescript/typescript6`, so the loaded
+	// fallback is a real compiler rather than a described one. The two workspaces differ only in
+	// whether the entry carries the API, which is the reading the resolution branches on.
+	it.runIf(DIRECTORY_LINKS)(
+		'takes the workspace compiler where it carries the API and the bridge where it does not',
+		() => {
+			const scratch = createScratch({ prefix: 'probe-bridge-' })
+			try {
+				const carrier = writeWorkspaceFixture(scratch, {
+					root: 'carrier',
+					version: '6.9.9',
+					carried: true,
+					bridged: true,
+				})
+				const bare = writeWorkspaceFixture(scratch, {
+					root: 'bare',
+					version: '7.0.2',
+					bridged: true,
+				})
+				expect(loadWorkspaceModule(carrier, 'typescript').version).toBe('6.9.9')
+				const bridged = loadWorkspaceModule(bare, 'typescript')
+				expect(bridged.version).toBe('6.0.3')
+				expect(bridged.createProgram).toBeTypeOf('function')
+				expect(bridged.createLanguageService).toBeTypeOf('function')
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+
+	it('refuses a compiler carrying no in-process API where the workspace installs no bridge', () => {
+		const scratch = createScratch({ prefix: 'probe-bridgeless-' })
+		try {
+			const workspace = writeWorkspaceFixture(scratch, { version: '7.0.2' })
+			const refused = captureError(() => loadWorkspaceModule(workspace, 'typescript'))
+			expect(isProbeError(refused)).toBe(true)
+			expect(refused).toMatchObject({
+				origin: 'workspace',
+				code: 'malformed',
+				context: { name: 'typescript' },
+				cause: expect.any(Error),
+			})
+			expect(describeUnknown(refused)).toContain('@typescript/typescript6')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// A bridge that resolves and publishes no compiler is the case a success reading alone admits:
+	// the require answers, so nothing about the fault classifies it, and only the value's own
+	// `createProgram` separates a bridge that serves from one that does not. The refusal carries no
+	// `cause` here, because there is no fault to carry.
+	it('refuses a bridge that resolves and carries no in-process API', () => {
+		const scratch = createScratch({ prefix: 'probe-bridge-bare-' })
+		try {
+			const workspace = writeWorkspaceFixture(scratch, { version: '7.0.2' })
+			// The bridge this row installs is a real module that resolves and publishes its version
+			// alone, which the linked bridge cannot be, so it is written beside the fixture.
+			scratch.write(
+				'node_modules/@typescript/typescript6/package.json',
+				'{"name":"@typescript/typescript6","version":"6.0.2","main":"index.js"}\n',
+			)
+			scratch.write(
+				'node_modules/@typescript/typescript6/index.js',
+				"module.exports = { version: '6.0.2' }\n",
+			)
+			const refused = captureError(() => loadWorkspaceModule(workspace, 'typescript'))
+			expect(isProbeError(refused)).toBe(true)
+			expect(refused).toMatchObject({
+				message:
+					"The workspace's typescript carries no in-process compiler API, and the workspace's @typescript/typescript6 cannot serve one",
+				origin: 'workspace',
+				code: 'malformed',
+				context: { name: 'typescript' },
+			})
+			expect(refused).not.toHaveProperty('cause')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	// The guide states this refusal beside the one before it, and the two differ in condition as
+	// well as in wording: a workspace installing no `typescript` resolves nothing, so the fault is
+	// the host's absent-module code and the refusal names the load rather than the compiler API.
+	it('refuses a workspace that installs no typescript at all', () => {
+		const scratch = createScratch({ prefix: 'probe-typescriptless-' })
+		try {
+			scratch.write('package.json', '{"type":"module"}\n')
+			const refused = captureError(() => loadWorkspaceModule(scratch.path, 'typescript'))
+			expect(isProbeError(refused)).toBe(true)
+			expect(refused).toMatchObject({
+				message: 'The workspace cannot load typescript',
+				origin: 'workspace',
+				code: 'missing',
+				context: { name: 'typescript' },
+				cause: expect.any(Error),
+			})
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('reads installed manifests and refuses absent packages', () => {
@@ -696,6 +808,23 @@ describe('server text helpers', () => {
 			expect(matchesWorkspaceModule(path)).toBe(true)
 		}
 		expect(matchesWorkspaceModule('value.css')).toBe(false)
+	})
+
+	it('reads every caret term a range names and skips a term that names no major', () => {
+		expect(collectRangeMajors('^6.0.3 || ^7.0.0')).toStrictEqual(['6', '7'])
+		expect(collectRangeMajors('^6.0.3||^7.0.0')).toStrictEqual(['6', '7'])
+		expect(collectRangeMajors('   ^7.0.0   ')).toStrictEqual(['7'])
+		// A bare version, a tilde term, and a caret term carrying no minor are each a form this
+		// package does not write, so each names no major and its siblings still answer.
+		expect(collectRangeMajors('^6.0.3 || 7.0.0 || ~8.1.0 || ^9')).toStrictEqual(['6'])
+		// Two terms naming one major answer once, so the collection names each major it admits.
+		expect(collectRangeMajors('^6.0.3 || ^6.4.0')).toStrictEqual(['6'])
+		expect(collectRangeMajors('*')).toStrictEqual([])
+		expect(collectRangeMajors('')).toStrictEqual([])
+		// A comparator pair names no caret major, and neither does a caret version carrying a second
+		// comparator after it: each term is one range this package writes or nothing at all.
+		expect(collectRangeMajors('>=6.0.0 <8.0.0')).toStrictEqual([])
+		expect(collectRangeMajors('^6.0.3 <6.5.0')).toStrictEqual([])
 	})
 
 	it('normalizes errors, strings, message records, and other values', () => {

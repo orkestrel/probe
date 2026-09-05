@@ -7,6 +7,7 @@ import { createScratch } from '@orkestrel/test/server'
 import { TypeStage, normalizePath } from '@src/server'
 import { formatIssue, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { DIRECTORY_LINKS, writeWorkspaceFixture } from '../../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -249,6 +250,53 @@ describe('type stage', () => {
 						),
 					}),
 				])
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => stage.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// The bridge serving a real inspection, which no other row reads: this checkout installs a
+	// `typescript` carrying the in-process API, so every row against it takes the workspace branch
+	// and the bridged rows elsewhere stop at the loaded module. This workspace's own entry publishes
+	// the version alone, so the diagnostic below can have come from nothing but the compiler
+	// `@typescript/typescript6` republishes.
+	it.runIf(DIRECTORY_LINKS)(
+		'inspects through the bridge where the workspace compiler carries no API',
+		{ timeout: 60_000 },
+		async () => {
+			const scratch = createScratch({ prefix: 'probe-type-bridged-' })
+			const workspace = writeWorkspaceFixture(scratch, { version: '7.0.2', bridged: true })
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]},"files":["src/core/value.ts"]}\n',
+			)
+			scratch.write(
+				'configs/src/tsconfig.core.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]},"files":["../../src/core/value.ts"]}\n',
+			)
+			scratch.write('src/core/value.ts', 'export const VALUE = 1\n')
+			const stage = new TypeStage(workspace)
+			const test = { path: 'tmp/probe/bridged.test.ts', text: 'export {}\n' }
+			try {
+				const refused = await stage.inspect({
+					files: [{ path: 'src/core/value.ts', text: "export const VALUE: number = 'text'\n" }],
+					test,
+				})
+				expect(refused.issues).toEqual([
+					expect.objectContaining({
+						path: 'src/core/value.ts',
+						message: expect.stringContaining("Type 'string' is not assignable to type 'number'"),
+					}),
+				])
+				const clean = await stage.inspect({
+					files: [{ path: 'src/core/value.ts', text: 'export const VALUE = 1\n' }],
+					test,
+				})
+				expect(clean.issues).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())

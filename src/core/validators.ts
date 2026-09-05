@@ -195,7 +195,7 @@ export const isCheck: Guard<Check> = recordOf({
 })
 
 /**
- * Checks whether a value names every resolved tool version.
+ * Checks whether a value names every tool version the target workspace's installed manifests publish.
  *
  * @param value - The value to check
  * @returns True if the value is a toolchain; false otherwise

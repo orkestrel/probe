@@ -16,13 +16,19 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
+import {
+	captureError,
+	createRecorder,
+	createTeardown,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
-import { Probe, readWorkspaceManifest } from '@src/server'
+import { Probe, collectRangeMajors, readWorkspaceManifest } from '@src/server'
 import { matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createLintFixture } from '../../setupServer.js'
+import { DIRECTORY_LINKS, createLintFixture, writeWorkspaceFixture } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
@@ -529,24 +535,37 @@ describe.sequential('probe', () => {
 		},
 	)
 
+	it('refuses a workspace whose typescript carries no in-process compiler API', () => {
+		const scratch = createScratch()
+		const workspace = writeWorkspaceFixture(scratch, { version: '7.0.2', tooled: true })
+		try {
+			// The type stage loads the compiler in its own constructor, which the probe's constructor
+			// runs, so a workspace carrying neither a usable `typescript` nor the bridge is answered
+			// before any claim is made. No probe exists to destroy.
+			expect(captureError(() => new Probe({ workspace }))).toMatchObject({
+				name: 'ProbeError',
+				message:
+					"The workspace's typescript carries no in-process compiler API, and the workspace's @typescript/typescript6 cannot serve one",
+				origin: 'workspace',
+				code: 'malformed',
+				context: { name: 'typescript' },
+			})
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()
-		scratch.write('package.json', '{"type":"module"}\n')
-		scratch.write(
-			'node_modules/typescript/package.json',
-			'{"name":"typescript","version":"7.0.2","type":"module","exports":{".":"./index.js","./package.json":"./package.json"}}\n',
-		)
-		scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
-		scratch.write('node_modules/oxlint/package.json', createLintFixture().manifest)
-		// The refusal this row reads lands before any stage runs, so the binary the manifest names
-		// never has to answer the protocol and a server that exits at once serves it.
-		scratch.write('node_modules/oxlint/fixture.js', 'process.exit(1)\n')
-		scratch.write(
-			'node_modules/vitest/package.json',
-			'{"name":"vitest","version":"4.1.11","type":"module","exports":{"./node":"./node.js","./package.json":"./package.json"}}\n',
-		)
-		scratch.write('node_modules/vitest/node.js', 'export const createVitest = undefined\n')
-		const probe = new Probe({ workspace: scratch.path })
+		// A compiler carrying the in-process API at a major the peer range names nowhere. The API is
+		// what separates this refusal from the constructor's: the workspace loads a usable compiler,
+		// and the support check still refuses the version it publishes.
+		const workspace = writeWorkspaceFixture(scratch, {
+			version: '5.9.3',
+			carried: true,
+			tooled: true,
+		})
+		const probe = new Probe({ workspace })
 		try {
 			await expect(
 				probe.prove({
@@ -570,10 +589,10 @@ describe.sequential('probe', () => {
 				}),
 			).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: `The supported TypeScript range is ${peerDependencies.typescript}; found 7.0.2`,
+				message: `The supported TypeScript range is ${peerDependencies.typescript}; found 5.9.3`,
 				origin: 'workspace',
 				code: 'malformed',
-				context: { name: 'typescript', value: '7.0.2' },
+				context: { name: 'typescript', value: '5.9.3' },
 			})
 		} finally {
 			const teardown = createTeardown()
@@ -582,6 +601,63 @@ describe.sequential('probe', () => {
 			await teardown.destroy()
 		}
 	})
+
+	it.runIf(DIRECTORY_LINKS)(
+		'serves a workspace at every major its own peer range names',
+		async () => {
+			const scratch = createScratch()
+			// TypeScript 7 as a workspace installs it: a manifest version the peer range names, an entry
+			// publishing the version alone, and the bridge beside it carrying the in-process API the type
+			// stage drives.
+			const workspace = writeWorkspaceFixture(scratch, {
+				version: '7.0.2',
+				bridged: true,
+				tooled: true,
+			})
+			expect(collectRangeMajors(peerDependencies.typescript)).toContain('7')
+			const probe = new Probe({ workspace })
+			try {
+				// The bridge serves the stage and the manifest still reports the workspace's own version.
+				expect(probe.toolchain.typescript).toBe('7.0.2')
+				// The claim repeats its case as its control, which is the refusal the coordinator answers
+				// immediately after the support check and before it waits for a stage. Reading that
+				// refusal is what proves the support check admitted this workspace: a refused major
+				// rejects with the range message instead, and never reaches the claim at all.
+				await expect(
+					probe.prove({
+						project: 'tsconfig.json',
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probe/bridged.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+						},
+						control: {
+							files: [],
+							test: {
+								path: 'tmp/probe/bridged.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+							stage: 'runtime',
+							reason: 'the test throws',
+						},
+					}),
+				).rejects.toMatchObject({
+					name: 'ProbeError',
+					message:
+						'The control must differ from the case; it carries the same candidate drafts and the same test',
+					origin: 'claimant',
+					code: 'refused',
+				})
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(() => probe.destroy())
+				await teardown.destroy()
+			}
+		},
+	)
 
 	it(
 		'preserves the host exit code through arming and every proof',
