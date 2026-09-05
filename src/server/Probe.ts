@@ -30,7 +30,6 @@ import {
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	buildRevisionPath,
-	collectRangeMajors,
 	computeDigest,
 	describeUnknown,
 	overwriteFile,
@@ -682,15 +681,12 @@ export class Probe implements ProbeInterface {
 		)
 	}
 
-	// Reads every major the peer range names, not the first one. The range names one term per major
-	// the type stage can serve, and a workspace installing any of them is served: TypeScript 7 with
-	// the `@typescript/typescript6` bridge beside it is the case the `^7.0.0` term admits.
 	#support(): void {
 		const version = this.#toolchain.typescript
 		const range = peerDependencies.typescript
-		const supported = collectRangeMajors(range)
+		const supported = /^\^(\d+)\./u.exec(range)?.[1]
 		const found = /^(\d+)\./u.exec(version)?.[1]
-		if (found === undefined || !supported.includes(found)) {
+		if (supported === undefined || found !== supported) {
 			throw new ProbeError(`The supported TypeScript range is ${range}; found ${version}`, {
 				origin: 'workspace',
 				code: 'malformed',

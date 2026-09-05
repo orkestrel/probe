@@ -1,6 +1,6 @@
 import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
 import type { OverlayInterface, TypeStageInterface } from '../types.js'
-import type * as TypeScript from '@typescript/typescript6'
+import type * as TypeScript from 'typescript'
 import type {
 	CompilerOptions,
 	Diagnostic,
@@ -8,7 +8,7 @@ import type {
 	IScriptSnapshot,
 	LanguageService,
 	LanguageServiceHost,
-} from '@typescript/typescript6'
+} from 'typescript'
 import { readdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
