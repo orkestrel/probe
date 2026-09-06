@@ -58,7 +58,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
  * @example
  * ```ts
  * const receipt =
- * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
  * receipt.startsWith(RECEIPT_PREFIX) // true
  * ```
  */
@@ -74,7 +74,7 @@ export const RECEIPT_PREFIX = 'probe'
  * @example
  * ```ts
  * const receipt =
- * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * 	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
  * receipt.split(RECEIPT_SEPARATOR).length // 7
  * ```
  */
@@ -164,3 +164,21 @@ export const PROBE_SPECIFICATIONS = 64
  * ```
  */
 export const RUNTIME_PLUGIN = 'orkestrel-runtime-overlay'
+
+/**
+ * Names the workspace-relative directory the type stage keeps its workspace mirror under.
+ *
+ * @remarks
+ * Each stage owns one directory beneath this one, named for the writing host's process id and a
+ * fresh UUID, and deletes it at teardown. The directory sits under `tmp/` so nothing the stage
+ * writes reaches a version-controlled path, and beside `tmp/probe/` rather than inside it because
+ * the workbench Vitest project collects `tmp/probe/**` and would otherwise collect a mirrored test.
+ * A target that runs its own `check`, `lint:check`, or `format:check` while a probe is resident
+ * reads whatever it does not exclude, so exclude this directory there.
+ *
+ * @example
+ * ```ts
+ * TYPE_MIRROR // 'tmp/type'
+ * ```
+ */
+export const TYPE_MIRROR = 'tmp/type'

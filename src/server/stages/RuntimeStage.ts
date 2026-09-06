@@ -7,18 +7,16 @@ import type {
 	ViteUserConfig,
 } from 'vitest/config'
 import type { TestProject, TestRunResult, Vitest, createVitest } from 'vitest/node'
-import type { Dirent } from 'node:fs'
 import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
-	readdirSync,
 	realpathSync,
 	unlinkSync,
 	writeFileSync,
 } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { attempt } from '@orkestrel/contract'
@@ -34,14 +32,15 @@ import {
 import {
 	buildRevisionPath,
 	captureListeners,
+	collectWorkspaceFiles,
 	describeUnknown,
 	guardStage,
 	inferTestProject,
 	isRefusedName,
-	loadWorkspaceModule,
+	loadWorkspaceVitest,
+	matchesLiveProcess,
 	matchesWorkspaceModule,
 	normalizePath,
-	readFaultCode,
 	releaseListeners,
 	relativeWorkspaceFile,
 	relativeWorkspaceMessage,
@@ -131,7 +130,7 @@ export class RuntimeStage implements StageInterface {
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		const vitest = loadWorkspaceModule(this.#workspace, 'vitest/node')
+		const vitest = loadWorkspaceVitest(this.#workspace)
 		this.#store(this.#warm(vitest.createVitest))
 	}
 
@@ -639,7 +638,7 @@ export class RuntimeStage implements StageInterface {
 		const current = this.#vitest
 		if (current !== undefined && this.#specifications < PROBE_SPECIFICATIONS) return current
 		if (current !== undefined) return this.#store(this.#replace(current))
-		const runner = loadWorkspaceModule(this.#workspace, 'vitest/node')
+		const runner = loadWorkspaceVitest(this.#workspace)
 		return this.#store(
 			this.#specifications < PROBE_SPECIFICATIONS
 				? this.#warm(runner.createVitest)
@@ -656,7 +655,7 @@ export class RuntimeStage implements StageInterface {
 			await vitest.close()
 		}
 		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
-		const runner = create ?? loadWorkspaceModule(this.#workspace, 'vitest/node').createVitest
+		const runner = create ?? loadWorkspaceVitest(this.#workspace).createVitest
 		const replacement = await this.#warm(runner)
 		this.#specifications = 0
 		return replacement
@@ -698,12 +697,12 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	// Vite keys its module graph on the forward-slash spelling of a resolved id, and `invalidateFile`
-	// looks that key up exactly. `#walk` builds each path with `join` and the overlay holds paths
-	// `resolve` produced, so on a host whose separator is a backslash the native spelling matches no
-	// key, the invalidation is dropped without an error, and the resident runner serves the previous
-	// module. Read the host separator rather than the platform name, and rewrite only where it is a
-	// backslash: a backslash is a legal filename character on a host whose separator is a forward
-	// slash, so rewriting there would turn a key Vite holds into one it does not.
+	// looks that key up exactly. `collectWorkspaceFiles` builds each path with `join` and the overlay
+	// holds paths `resolve` produced, so on a host whose separator is a backslash the native spelling
+	// matches no key, the invalidation is dropped without an error, and the resident runner serves
+	// the previous module. Read the host separator rather than the platform name, and rewrite only
+	// where it is a backslash: a backslash is a legal filename character on a host whose separator is
+	// a forward slash, so rewriting there would turn a key Vite holds into one it does not.
 	#invalidate(vitest: Vitest, path: string): void {
 		const id = sep === '\\' ? normalizePath(path) : path
 		vitest.invalidateFile(id)
@@ -712,7 +711,7 @@ export class RuntimeStage implements StageInterface {
 
 	#snapshot(): ReadonlyMap<string, string> {
 		const modules = new Map<string, string>()
-		for (const path of this.#walk()) {
+		for (const path of collectWorkspaceFiles(this.#workspace)) {
 			if (!matchesWorkspaceModule(path)) continue
 			try {
 				const digest = createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -735,7 +734,7 @@ export class RuntimeStage implements StageInterface {
 	// process that is gone, and the file is one `#owned` can attribute. A file failing any of them
 	// stays where it is, whoever wrote it.
 	#sweep(): void {
-		for (const path of this.#walk()) {
+		for (const path of collectWorkspaceFiles(this.#workspace)) {
 			const matches = [
 				...basename(path).matchAll(
 					/\.probe-((\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.|$)/gu,
@@ -745,7 +744,7 @@ export class RuntimeStage implements StageInterface {
 			const revision = match?.[1]
 			const owner = match?.[2]
 			if (revision === undefined || owner === undefined) continue
-			if (this.#alive(Number.parseInt(owner, 10))) continue
+			if (matchesLiveProcess(Number.parseInt(owner, 10))) continue
 			if (!this.#owned(path, revision)) continue
 			try {
 				unlinkSync(resolveWorkspaceFile(this.#workspace, relative(this.#workspace, path), true))
@@ -762,47 +761,6 @@ export class RuntimeStage implements StageInterface {
 	#owned(path: string, revision: string): boolean {
 		const outcome = attempt(() => readFileSync(path, 'utf8'))
 		return outcome.success && matchesSpecification(outcome.value, revision)
-	}
-
-	// Whether the host that wrote one specification is still running. Signal 0 delivers nothing and
-	// reports reachability alone. A host this process may not signal reports `EPERM` and is read as
-	// alive, and a non-positive identity names a process group rather than a process, so both leave
-	// the file where it is: the safe direction is to keep a file this stage cannot account for.
-	#alive(id: number): boolean {
-		if (!Number.isSafeInteger(id) || id <= 0) return true
-		try {
-			process.kill(id, 0)
-			return true
-		} catch (error) {
-			return readFaultCode(error) === 'EPERM'
-		}
-	}
-
-	// Yields every file the target workspace holds, skipping the trees no inspection reads: version
-	// control, build output, and installed packages. A directory this host cannot list is skipped
-	// rather than raised: the walk runs at construction and before every inspection, and one
-	// unreadable directory in a consumer's tree is not a reason to refuse the workspace.
-	*#walk(): Generator<string> {
-		const directories = [resolve(this.#workspace)]
-		while (directories.length > 0) {
-			const directory = directories.pop()
-			if (directory === undefined) break
-			let entries: readonly Dirent[] = []
-			try {
-				entries = readdirSync(directory, { withFileTypes: true })
-			} catch {}
-			for (const entry of entries) {
-				if (entry.name === '.git' || entry.name === 'dist' || entry.name === 'node_modules') {
-					continue
-				}
-				const path = join(directory, entry.name)
-				if (entry.isDirectory()) {
-					directories.push(path)
-					continue
-				}
-				if (entry.isFile()) yield path
-			}
-		}
 	}
 
 	#issues(result: TestRunResult, file: string, original: string): readonly Issue[] {

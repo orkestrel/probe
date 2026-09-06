@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { PROBE_ERROR_CODES, ProbeError, createDestroyedError, isProbeError } from '@src/core'
 import {
 	inferTypeProject,
-	loadWorkspaceModule,
+	loadWorkspaceVitest,
 	readWorkspaceManifest,
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
@@ -227,7 +227,7 @@ describe('failure adoption', () => {
 					'a tool the workspace does not install',
 					'workspace',
 					'missing',
-					() => loadWorkspaceModule(workspace.path, 'typescript'),
+					() => loadWorkspaceVitest(workspace.path),
 				],
 				[
 					'a manifest the workspace does not publish',

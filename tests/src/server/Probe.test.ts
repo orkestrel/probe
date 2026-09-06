@@ -20,7 +20,7 @@ import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
-import { matchesSpecification } from '@src/core'
+import { PROBE_DEADLINE, matchesSpecification } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createLintFixture } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
@@ -87,7 +87,9 @@ function varyDraft(draft: Draft): Draft {
 describe.sequential('probe', () => {
 	it(
 		'mints receipts only when every stage executes cleanly, including for a control that shares no path with its case, and returns admitted path issues',
-		{ timeout: 60_000 },
+		// 120_000 ms clears the flagship's boot plus its proves on a contended host, which a
+		// saturated host on 2026-09-06 showed 60_000 ms did not.
+		{ timeout: 120_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 			const test = {
@@ -532,11 +534,14 @@ describe.sequential('probe', () => {
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
+		// The refusal this row reads lands before any stage spawns the compiler, so the entry this
+		// manifest names never has to answer; it is here because the stage resolves it at construction.
 		scratch.write(
 			'node_modules/typescript/package.json',
-			'{"name":"typescript","version":"7.0.2","type":"module","exports":{".":"./index.js","./package.json":"./package.json"}}\n',
+			'{"name":"typescript","version":"7.0.2","type":"module","bin":{"tsc":"./bin/tsc.js"},"exports":{".":"./index.js","./package.json":"./package.json"}}\n',
 		)
 		scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
+		scratch.write('node_modules/typescript/bin/tsc.js', 'process.exit(1)\n')
 		scratch.write('node_modules/oxlint/package.json', createLintFixture().manifest)
 		// The refusal this row reads lands before any stage runs, so the binary the manifest names
 		// never has to answer the protocol and a server that exits at once serves it.
@@ -622,15 +627,18 @@ describe.sequential('probe', () => {
 		},
 	)
 
+	// The budget is the package default, which clears the type stage's warm with the room a contended
+	// host needs; a budget near the warm's floor records the arming control's expiry ahead of the
+	// hanging claim's, which a saturated host showed twice on 2026-09-06.
 	it(
 		'expires only the active inspection, cleans its revision, and serves a queued claim',
-		{ timeout: 60_000 },
+		{ timeout: 180_000 },
 		async () => {
 			const expirations = createRecorder<[Claim]>()
 			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({
 				workspace: ROOT,
-				deadline: 6_000,
+				deadline: PROBE_DEADLINE,
 				on: { expire: expirations.handler, error: failures.handler },
 			})
 			const hanging: Claim = {
@@ -684,7 +692,7 @@ describe.sequential('probe', () => {
 					reason: expect.objectContaining({
 						origin: 'claimant',
 						code: 'deadline',
-						message: 'The runtime stage exceeded 6000 ms',
+						message: `The runtime stage exceeded ${PROBE_DEADLINE} ms`,
 					}),
 				})
 				expect(expirations.calls).toStrictEqual([[hanging]])
@@ -704,21 +712,21 @@ describe.sequential('probe', () => {
 		},
 	)
 
-	it('replaces a type stage its deadline destroyed', { timeout: 180_000 }, async () => {
+	it('replaces a type stage its deadline destroyed', { timeout: 300_000 }, async () => {
 		const expirations = createRecorder<[Claim]>()
 		const probe = new Probe({
 			workspace: ROOT,
-			deadline: 6_000,
+			deadline: 20_000,
 			on: { expire: expirations.handler },
 		})
 		const test = {
 			path: 'tmp/probe/heavy-type.test.ts',
 			text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 		}
-		// Thirty candidates is about 38 seconds of compiler work behind a 6-second deadline. The
-		// stage hands the host's event loop back between candidates, so the expiry lands at the
-		// first boundary after the deadline rather than after the whole claim: the wait is one
-		// candidate, and the margin is what keeps a faster host from finishing inside the budget.
+		// Thirty candidates are one compiler run of about 33 seconds behind a 20-second deadline,
+		// measured on 2026-09-06 on the host `guides/probe.md` § Cost names. The compiler runs in a
+		// child process, so the expiry fires on this host's own loop and terminates that child; the
+		// margin is what keeps a faster host from finishing inside the budget.
 		const files: readonly Draft[] = Array.from({ length: 30 }, (_unused, index) =>
 			createHeavyDraft(index),
 		)
@@ -737,10 +745,10 @@ describe.sequential('probe', () => {
 		try {
 			await expect(probe.prove(heavy)).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: 'The type stage exceeded 6000 ms',
+				message: 'The type stage exceeded 20000 ms',
 				origin: 'claimant',
 				code: 'deadline',
-				context: { stage: 'type', deadline: 6000 },
+				context: { stage: 'type', deadline: 20000 },
 			})
 			expect(expirations.calls).toStrictEqual([[heavy]])
 			// The claim that follows is the point: a stage the expiry only destroyed refuses it, and
@@ -785,7 +793,7 @@ describe.sequential('probe', () => {
 			const expirations = createRecorder<[Claim]>()
 			const probe = new Probe({
 				workspace: scratch.path,
-				deadline: 2_000,
+				deadline: 15_000,
 				on: { expire: expirations.handler },
 			})
 			const test = {
@@ -809,7 +817,7 @@ describe.sequential('probe', () => {
 			}
 			try {
 				// Boot runs its own control claims through the stages, and every one of those
-				// inspections races this case's 2-second deadline. The probe therefore arms over the
+				// inspections races this case's deadline. The probe therefore arms over the
 				// small tree written so far, and the tree that outruns that deadline lands after it.
 				// A boot that expires rejects without emitting the `arm` event, and only the next
 				// `prove` call retries the arming, so a guard placed after that tree waits for an
@@ -825,7 +833,7 @@ describe.sequential('probe', () => {
 				for (let index = 0; index < 10_000; index += 1) {
 					const directory = `generated/d${index}`
 					scratch.write(`${directory}/index.ts`, 'export {}\n')
-					if (index < 1_200) include.push(`../${directory}/**/*.ts`)
+					if (index < 3_000) include.push(`../${directory}/**/*.ts`)
 				}
 				scratch.write(
 					project,
@@ -833,15 +841,15 @@ describe.sequential('probe', () => {
 				)
 				await expect(probe.prove(claim)).rejects.toMatchObject({
 					name: 'ProbeError',
-					message: 'The type stage project resolution exceeded 2000 ms',
+					message: 'The type stage project resolution exceeded 15000 ms',
 					origin: 'claimant',
 					code: 'deadline',
-					context: { stage: 'type', deadline: 2000 },
+					context: { stage: 'type', deadline: 15000 },
 				})
 				expect(expirations.calls).toStrictEqual([[claim]])
-				// The recovery claim runs every stage, and the runtime stage walks the whole
-				// workspace. Removing the generated tree first leaves that walk small, so the
-				// recovery clears the same 2-second deadline the project resolution just exceeded.
+				// The recovery claim runs every stage, and the runtime and type stages each walk the
+				// whole workspace. Removing the generated tree first leaves both walks small, so the
+				// recovery clears the same deadline the project resolution just exceeded.
 				scratch.remove('generated')
 				scratch.remove(project)
 				const served = await probe.prove({
@@ -939,7 +947,11 @@ describe.sequential('probe', () => {
 					probe.emitter.on('error', (error) => failed(error))
 				})
 				const inspecting = probe.prove(first)
-				await waitForDelay(100)
+				// The first claim's project resolution costs about 100 ms idle and more under
+				// load, and the second claim must queue behind the first claim's inspection
+				// rather than its resolution, so the wait clears the resolution on a contended
+				// host; the inspection of the heavy drafts outlasts it by seconds.
+				await waitForDelay(1_000)
 				const resolving = probe.prove(second)
 				void resolving.catch(() => {})
 				await waitForDelay(20)
@@ -962,7 +974,9 @@ describe.sequential('probe', () => {
 		},
 	)
 
-	it('replaces a lint stage its deadline destroyed', { timeout: 60_000 }, async () => {
+	// 120_000 ms clears the stalled lint stage's warm on a contended host, which a saturated host
+	// on 2026-09-06 showed 60_000 ms did not.
+	it('replaces a lint stage its deadline destroyed', { timeout: 120_000 }, async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
 		scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
@@ -978,7 +992,9 @@ describe.sequential('probe', () => {
 			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
 		)
 		scratch.write('tmp/probe/.keep', '')
-		const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
+		// 15_000 ms clears the stalled lint stage's expiry on a contended host, which a saturated
+		// host on 2026-09-06 showed 6_000 ms did not.
+		const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
 		try {
 			// Boot runs its own lint control, and a boot timeout carries the identical message a
 			// stage timeout carries. Waiting for `arm` is what stops this proof accepting a
@@ -1015,11 +1031,11 @@ describe.sequential('probe', () => {
 							reason: 'the language server publishes no diagnostics for this candidate',
 						},
 					}),
-					waitForDelay(7_000).then(() => {
+					waitForDelay(16_000).then(() => {
 						throw new Error('The stalled lint proof did not settle within its budget')
 					}),
 				]),
-			).rejects.toThrow('The lint stage exceeded 6000 ms')
+			).rejects.toThrow('The lint stage exceeded 15000 ms')
 			// The claim that follows is the point: the fixture answers every candidate that does not
 			// carry the marker, so a stage the expiry replaced serves it and a stage the expiry only
 			// destroyed refuses it. Without the replacement this call reports the destruction of a
@@ -1080,9 +1096,11 @@ describe.sequential('probe', () => {
 			// deadline and arming fails the way a slow workspace makes it fail.
 			scratch.write('stall-lint', '')
 			const armings = createRecorder<[Toolchain]>()
+			// 15_000 ms clears the silenced boot lint inspection's warm on a contended host, which a
+			// saturated host on 2026-09-06 showed 6_000 ms did not.
 			const probe = new Probe({
 				workspace: scratch.path,
-				deadline: 6_000,
+				deadline: 15_000,
 				on: { arm: armings.handler },
 			})
 			const claim: Claim = {
@@ -1106,14 +1124,14 @@ describe.sequential('probe', () => {
 			}
 			try {
 				// A boot expiry and a claim's own stage expiry carry one message unless the boot names
-				// itself, so a caller reading `The lint stage exceeded 6000 ms` cannot tell whether its
+				// itself, so a caller reading `The lint stage exceeded 15000 ms` cannot tell whether its
 				// candidate was slow or the instrument never served. Both calls name arming: the first
 				// reports the boot the constructor started, the second reports the boot it ran itself.
 				await expect(probe.prove(claim)).rejects.toThrow(
-					'The probe could not arm: The lint stage exceeded 6000 ms',
+					'The probe could not arm: The lint stage exceeded 15000 ms',
 				)
 				await expect(probe.prove(claim)).rejects.toThrow(
-					'The probe could not arm: The lint stage exceeded 6000 ms',
+					'The probe could not arm: The lint stage exceeded 15000 ms',
 				)
 				expect(armings.count).toBe(0)
 				rmSync(resolve(scratch.path, 'stall-lint'), { force: true })
@@ -1431,7 +1449,9 @@ describe.sequential('probe', () => {
 
 	it(
 		'bounds teardown while a runtime specification is blocked',
-		{ timeout: 60_000 },
+		// 120_000 ms clears the FIFO teardown's warm on a contended host, which a saturated host on
+		// 2026-09-06 showed 60_000 ms did not.
+		{ timeout: 120_000 },
 		async (context) => {
 			const scratch = createScratch({ prefix: 'probe-destroy-bound-' })
 			scratch.write('package.json', '{"type":"module"}\n')
@@ -1456,7 +1476,9 @@ describe.sequential('probe', () => {
 				'this host cannot create the FIFO that parks a generated Vitest specification during teardown',
 			)
 			const ready = resolve(scratch.path, 'tmp/probe/destroy-ready')
-			const probe = new Probe({ workspace: scratch.path, deadline: 6_000 })
+			// 15_000 ms clears the parked FIFO teardown's warm on a contended host, which a saturated
+			// host on 2026-09-06 showed 6_000 ms did not.
+			const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
 			let closing: Promise<void> | undefined
 			const claim: Claim = {
 				project: 'tsconfig.json',
@@ -1488,10 +1510,10 @@ describe.sequential('probe', () => {
 				closing = probe.destroy()
 				const settled = await Promise.race([
 					closing.then(() => true),
-					waitForDelay(7_000).then(() => false),
+					waitForDelay(16_000).then(() => false),
 				])
 				expect(settled).toBe(true)
-				expect(performance.now() - started).toBeLessThan(7_000)
+				expect(performance.now() - started).toBeLessThan(16_000)
 			} finally {
 				let descriptor: number | undefined
 				try {

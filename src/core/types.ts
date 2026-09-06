@@ -176,10 +176,11 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * reported no location, which happens for a whole-file diagnostic. A runtime failure is not one of
  * those: a failure Vitest reported at a stack frame carries that frame's position.
  *
- * Each stage supplies the extent its own tool gives it. The type stage spans the diagnostic's
- * reported length, and the lint stage carries the span the language server published. A tool that
- * reports a point rather than a span, as a stack frame does, produces a zero-width range at that
- * point, which is the same value a span of no width would carry.
+ * Each stage supplies the extent its own tool gives it. The lint stage carries the span the language
+ * server published. A tool that reports a point rather than a span produces a zero-width range at
+ * that point, which is the same value a span of no width would carry, and the type stage and the
+ * runtime stage both report one: the compiler's plain-text output names a start position and no
+ * extent, and a stack frame names a position.
  *
  * `formatIssue` renders `start.line` one-based, because that is the numbering an editor shows.
  *
@@ -189,7 +190,7 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * 	origin: 'claimant',
  * 	path: 'src/core/greeting.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
- * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 13 } },
+ * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 6 } },
  * }
  * ```
  */
@@ -257,13 +258,15 @@ export interface Toolchain {
  * under one project and fails under another, so a verdict that omits the project states less than
  * it appears to. `path` names which project file, in the resolved workspace-relative spelling
  * rather than the caller's. `digest` names what that project contained, because a receipt travels
- * away from the workspace that minted it and a path alone is a claim about a name.
+ * away from the workspace that minted it and a path alone is a claim about a name. The digest reads
+ * the compiler's own printed configuration for the workspace's copy of that project, so a claim's
+ * drafts cannot move it.
  *
  * @example
  * ```ts
  * const project: Project = {
  * 	path: 'configs/src/tsconfig.core.json',
- * 	digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+ * 	digest: 'd61f11b52460b1c6707cfac2c6078d59',
  * }
  * ```
  */
@@ -318,7 +321,7 @@ export interface Project {
  * 	toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
  * 	project: {
  * 		path: 'configs/src/tsconfig.core.json',
- * 		digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+ * 		digest: 'd61f11b52460b1c6707cfac2c6078d59',
  * 	},
  * 	reason: 'a number annotation must reject the string literal beside it',
  * 	case: [
@@ -333,7 +336,7 @@ export interface Project {
  * 	],
  * 	elapsed: 549,
  * 	receipt:
- * 		'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
+ * 		'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59',
  * }
  * ```
  */
@@ -432,9 +435,9 @@ export interface ProbeOptions {
  * the process and a restart is a new process rather than a second lifecycle.
  *
  * `prove` re-reads the target workspace before it answers, so a file edited since the last call is
- * judged as it stands on disk rather than as a warm service remembers it. The resident readers key
- * that sweep differently: the runtime stage compares each workspace module's contents, and the type
- * stage versions a disk file by its modification time.
+ * judged as it stands on disk rather than as a warm service remembers it. Each stage keys that
+ * sweep by content: the runtime stage compares each workspace module's contents, and the type stage
+ * refreshes its mirror of the workspace by content digest.
  *
  * @example
  * ```ts
@@ -454,7 +457,7 @@ export interface ProbeInterface {
 	 * @remarks
 	 * A control carrying the case's files and the case's test byte for byte is refused at admission,
 	 * with `origin: 'claimant'` and `code: 'refused'`. No stage inspects such a claim: the refusal
-	 * answers before the resident stages are awaited, so it reads the same in every workspace state.
+	 * answers before any stage is awaited, so it reads the same in every workspace state.
 	 * Such a control can only break by nondeterminism, so the receipt it would earn attests a
 	 * falsification that never happened, and a flake-earned receipt is the worst answer this package
 	 * can return. The refusal compares the bytes of each side's files and test rather than the digest
@@ -470,9 +473,9 @@ export interface ProbeInterface {
 	 */
 	prove(claim: Claim): Promise<Verdict>
 	/**
-	 * Tears down the resident engines and releases the processes they hold.
+	 * Tears down every stage and releases the processes and the mirror they hold.
 	 *
-	 * @returns A promise that settles when every engine has released its resources
+	 * @returns A promise that settles after every stage has released its resources
 	 */
 	destroy(): Promise<void>
 }

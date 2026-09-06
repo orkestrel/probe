@@ -17,13 +17,13 @@ import { describe, expect, it } from 'vitest'
 const TOOLCHAIN: Toolchain = { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' }
 const PROJECT: Project = {
 	path: 'configs/src/tsconfig.core.json',
-	digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+	digest: 'd61f11b52460b1c6707cfac2c6078d59',
 }
 // The token the package documents, reproduced here as a literal rather than rebuilt from the
 // constants the source joins: a token assembled the way `computeReceipt` assembles it would match
 // whatever `computeReceipt` returned.
 const TOKEN =
-	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
 
 // The control shape `prove` really produces: one check per stage, in the order a verdict reports
 // them, with the issues under test at the one stage that carries them. A shorter array is a
@@ -157,7 +157,7 @@ describe('core formatting helpers', () => {
 			'probe 88a5addc-7d33-40dc-9a5a-104b71f8787d (81 ms)',
 			'claim 6ca20c3bff623031d3955b9d1a76d71d',
 			'toolchain typescript 6.0.3, oxlint 1.79.0, vitest 4.1.11',
-			'project configs/src/tsconfig.core.json 3b674fdf121c85efb9ed1bab25ceeec8',
+			'project configs/src/tsconfig.core.json d61f11b52460b1c6707cfac2c6078d59',
 			'reason a string literal assigned to a number must not compile',
 			'case type: 0 issues (11 ms)',
 			'case lint: 0 issues (12 ms)',
@@ -191,7 +191,7 @@ describe('core formatting helpers', () => {
 		expect(rendered[1]).toBe('claim 6ca20c3bff623031d3955b9d1a76d71d')
 		expect(rendered[2]).toBe('toolchain typescript 6.0.3, oxlint 1.79.0, vitest 4.1.11')
 		expect(rendered[3]).toBe(
-			'project configs/src/tsconfig.core.json 3b674fdf121c85efb9ed1bab25ceeec8',
+			'project configs/src/tsconfig.core.json d61f11b52460b1c6707cfac2c6078d59',
 		)
 		expect(rendered[4]).toBe('case type: 0 issues (61 ms)')
 	})
@@ -287,7 +287,7 @@ describe('core receipt helper', () => {
 	it('keeps the field rule total for a project path carrying the separator and the digest marker', () => {
 		const project: Project = {
 			path: 'configs/src/tsconfig.core@2:beta.json',
-			digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+			digest: 'd61f11b52460b1c6707cfac2c6078d59',
 		}
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
@@ -380,7 +380,7 @@ describe('core receipt helper', () => {
 			elapsed: 7,
 		}
 		const token =
-			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
 
 		expect(computeReceipt(base, 'runtime')).toBe(token)
 		expect(
@@ -583,7 +583,7 @@ describe('core receipt helper', () => {
 			),
 		).toBeUndefined()
 		expect(computeReceipt({ ...base, case: clean }, 'runtime')).toBe(
-			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8',
+			'probe:6ca20c3bff623031d3955b9d1a76d71d:runtime:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59',
 		)
 	})
 })

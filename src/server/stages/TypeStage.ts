@@ -1,46 +1,71 @@
 import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
-import type { OverlayInterface, TypeStageInterface } from '../types.js'
-import type * as TypeScript from 'typescript'
-import type {
-	CompilerOptions,
-	Diagnostic,
-	DiagnosticMessageChain,
-	IScriptSnapshot,
-	LanguageService,
-	LanguageServiceHost,
-} from 'typescript'
-import { readdirSync, statSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { setTimeout } from 'node:timers/promises'
-import { ProbeError, createDestroyedError } from '@src/core'
+import type { Diagnostic, Execution, ProjectConfig, TypeStageInterface } from '../types.js'
+import type { ChildProcess } from 'node:child_process'
+import type { Dirent } from 'node:fs'
 import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { basename, dirname, extname, join, resolve } from 'node:path'
+import { attempt } from '@orkestrel/contract'
+import {
+	ProbeError,
+	TYPE_MIRROR,
+	createDestroyedError,
+	formatSpecification,
+	matchesSpecification,
+} from '@src/core'
+import {
+	collectWorkspaceFiles,
 	computeDigest,
+	escapesRoot,
+	filterUniqueIssues,
 	guardStage,
 	inferTypeProject,
-	loadWorkspaceModule,
+	matchesLiveProcess,
 	normalizePath,
 	relativeWorkspaceFile,
 	relativeWorkspaceMessage,
+	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
+	scanDiagnostics,
 } from '../helpers.js'
-import { Overlay } from '../Overlay.js'
+import { parseProjectConfig, parseRevisionOwner } from '../parsers.js'
 
 /**
- * Inspects TypeScript source through resident language services from the target workspace.
+ * Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.
  *
  * @remarks
- * Construction starts loading the workspace's compiler and warming one service per project the
- * workspace declares. A candidate draft is checked against the project a call names, or
- * against its own scoped environment project when a call names none, while the test uses the root
- * project. Disk snapshots use their modification time as the service version so dependency edits
- * cannot leave a warm answer stale. Candidate text lives in an overlay the inspection owns, and
- * the language-service host answers existence, reads, and versions from it, so a candidate that
- * exists only as text is importable and a candidate that shadows a disk file is checked as the
- * text the case supplied. A project outside the declared set holds one recycled slot, so a caller
- * varying the project cannot grow the resident set. A language service checks one candidate
- * synchronously, so the stage hands the host's event loop back at each candidate boundary: a
- * caller's deadline is answered within one candidate's check rather than after the whole
- * inspection, and an inspection abandoned at that deadline stops at the next boundary.
+ * The compiler is a process this stage spawns rather than a module it loads, so nothing here holds
+ * a resident program and the host's event loop is free for the whole check. Construction sweeps a
+ * mirror an earlier host left behind, copies the workspace into a fresh one under
+ * {@link TYPE_MIRROR}, and builds each declared project's incremental state there, so the first
+ * inspection is warm.
+ *
+ * Every inspection refreshes the mirror by content digest, writes each candidate draft and the test
+ * at its mirrored declared path, and runs `tsc --noEmit --pretty false` once per distinct selected
+ * project. A draft therefore shadows the file it replaces: a consumer of that path is checked
+ * against the draft's text, and a draft importing a sibling draft resolves to the sibling draft.
+ * Nothing is written outside `tmp/`, and the workspace's own copy of a drafted file never moves.
+ *
+ * Each run reads a scratch project this stage writes beside the mirrored project it extends, so
+ * every relative path the project declares — its own `rootDir`, `include`, `paths`, and the
+ * projects it extends — resolves inside the mirror without being rewritten. The scratch adds the
+ * drafts as `files`, which the project's own `exclude` does not reach, and its incremental state
+ * lives in the mirror so reuse survives the refresh.
+ *
+ * The diagnostics decide the outcome, never the exit code, which the supported compiler majors
+ * disagree on. A diagnostic naming a project file, and one naming no file at all, is the target
+ * tree's own configuration fault and raises rather than reporting, unless the `.json` file is one
+ * the claim itself drafted; every other diagnostic is a claimant issue at the point the compiler
+ * reported, which is the extent the plain-text output carries.
  *
  * @example
  * ```ts
@@ -51,14 +76,14 @@ import { Overlay } from '../Overlay.js'
  */
 export class TypeStage implements TypeStageInterface {
 	readonly #workspace: string
-	readonly #typescript: Promise<typeof TypeScript>
-	readonly #services = new Map<string, LanguageService>()
-	readonly #resident = new Set<string>()
-	readonly #options = new Map<string, CompilerOptions>()
-	readonly #files = new Map<string, readonly string[]>()
-	readonly #diagnostics = new Map<string, readonly Diagnostic[]>()
-	#overlay: OverlayInterface = new Overlay()
-	#recycled: string | undefined
+	readonly #compiler: string
+	readonly #revision = `${process.pid}-${randomUUID()}`
+	readonly #mirror: string
+	readonly #configs = new Map<string, ProjectConfig>()
+	readonly #mirrored = new Map<string, string>()
+	readonly #drafts = new Set<string>()
+	readonly #children = new Set<ChildProcess>()
+	readonly #warming: Promise<void>
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
 	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
 	// question a second flag would have answered, and no second write can drift from this one.
@@ -66,18 +91,19 @@ export class TypeStage implements TypeStageInterface {
 	#progress = 0
 
 	/**
-	 * Starts warming the target workspace's TypeScript service.
+	 * Resolves the target workspace's compiler and starts warming its mirror.
 	 *
 	 * @param workspace - The target workspace root. Default: the current working directory
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		const typescript = loadWorkspaceModule(this.#workspace, 'typescript')
-		this.#typescript = this.#warm(typescript)
+		this.#compiler = resolveWorkspaceBinary(workspace, 'typescript', 'tsc')
+		this.#mirror = resolveWorkspaceFile(workspace, `${TYPE_MIRROR}/${this.#revision}`)
+		this.#warming = this.#warm()
 		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
 		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
 		// rejecting, so an inspection still reports the warming failure.
-		void this.#typescript.catch(() => {})
+		void this.#warming.catch(() => {})
 	}
 
 	get stage(): Stage {
@@ -100,7 +126,8 @@ export class TypeStage implements TypeStageInterface {
 	 * @param project - The workspace-relative TypeScript project the candidate drafts are checked
 	 * against. Default: the scoped project each candidate path infers
 	 * @returns One outcome for this stage
-	 * @throws When the resident compiler cannot start or the stage has already been destroyed
+	 * @throws When the workspace refuses the mirror, when a project the run reads is malformed, or
+	 * when the stage has already been destroyed
 	 */
 	inspect(subject: Case, project?: string): Promise<Check> {
 		return guardStage(this.stage, this.#inspect(subject, project))
@@ -110,15 +137,15 @@ export class TypeStage implements TypeStageInterface {
 	 * Resolves one project to the path and digest this stage applies for it.
 	 *
 	 * @remarks
-	 * Reads the parse this stage itself applies, filling its cache when the project is not already
-	 * resident, so the reported digest is the configuration the inspection is judged under rather
-	 * than a second parse a caller ran. The returned record is a value copy, so a later eviction
-	 * does not move it.
+	 * Reads the configuration the compiler itself prints for the project as the mirror holds it,
+	 * refreshed from the workspace first on a cache miss, so the digest names the configuration the
+	 * check applies. The reading is cached per project for the life of the stage, so a draft written
+	 * afterward cannot move it.
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
-	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
-	 * been destroyed
+	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the
+	 * stage has already been destroyed
 	 */
 	resolve(project: string): Promise<Project> {
 		return guardStage(this.stage, this.#resolve(project))
@@ -131,104 +158,90 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	async #inspect(subject: Case, project?: string): Promise<Check> {
-		if (this.#closing !== undefined) throw createDestroyedError('type stage')
+		this.#refuseDestroyed()
 		const started = performance.now()
-		const typescript = await this.#typescript
-		if (this.#closing !== undefined) throw createDestroyedError('type stage')
+		await this.#warming
+		this.#refuseDestroyed()
+		// Every declared path is resolved before anything is written, so a draft that escapes the
+		// workspace refuses the whole inspection rather than leaving earlier drafts in the mirror.
+		const test = resolveWorkspaceFile(this.#workspace, subject.test.path)
 		const resolved = subject.files.map((draft) => ({
 			draft,
 			path: resolveWorkspaceFile(this.#workspace, draft.path),
 		}))
-		const selections = resolved.map((candidate) => ({
-			draft: candidate.draft,
-			project: project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, candidate.path)),
-		}))
-		const root = this.#service(typescript, 'tsconfig.json')
-		this.#configure(root, 'tsconfig.json')
-		await this.#unblock()
-		for (const selection of selections) {
-			this.#configure(this.#service(typescript, selection.project), selection.project)
-			await this.#unblock()
+		// Keyed by the resolved project rather than by the caller's spelling of it, so `tsconfig.json`
+		// and `./tsconfig.json` name one run instead of two.
+		const groups = new Map<string, Draft[]>([[this.#contain('tsconfig.json'), [subject.test]]])
+		for (const candidate of resolved) {
+			const selected = this.#contain(
+				project ?? inferTypeProject(relativeWorkspaceFile(this.#workspace, candidate.path)),
+			)
+			const drafts = groups.get(selected)
+			if (drafts === undefined) groups.set(selected, [candidate.draft])
+			else drafts.push(candidate.draft)
 		}
-		// Each inspection owns its candidate set and reads it through its own reference, so the
-		// clear that follows releases what this inspection recorded and nothing else. The resident
-		// services read whichever overlay is installed, so a caller admits one inspection at a
-		// time the way `Probe` does. The overlay matches its keys by the same reading this stage
-		// declares to the compiler: where the compiler resolves two spellings of one file name to
-		// one file it keeps the spelling its root file list already holds and asks the host for
-		// that, so a candidate spelled differently from the file on disk answers for it.
-		const overlay = new Overlay({ sensitive: this.#caseSensitive(typescript) })
-		this.#overlay = overlay
+		this.#progress += 1
+		// Every selected project's configuration is read before any draft lands in the mirror, so a
+		// claim drafting its own project file cannot move the digest that project resolves to.
+		for (const selected of groups.keys()) await this.#configure(selected)
+		this.#refuseDestroyed()
 		try {
-			this.#record(subject.test, overlay)
-			for (const draft of subject.files) this.#record(draft, overlay)
-			this.#progress += 1
+			this.#refresh()
+			this.#drafts.add(this.#place(subject.test.text, test))
+			for (const candidate of resolved) {
+				this.#drafts.add(this.#place(candidate.draft.text, candidate.path))
+			}
 			const issues: Issue[] = []
-			const projects = new Set<string>()
-			issues.push(...this.#issues(typescript, root, subject.test, 'tsconfig.json', false, true))
-			projects.add('tsconfig.json')
-			await this.#unblock()
-			for (const selection of selections) {
-				const draft = selection.draft
-				const selected = selection.project
-				const service = this.#service(typescript, selected)
-				issues.push(
-					...this.#issues(
-						typescript,
-						service,
-						draft,
-						selected,
-						project !== undefined,
-						!projects.has(selected),
-					),
-				)
-				projects.add(selected)
-				await this.#unblock()
+			for (const [selected, drafts] of groups) {
+				this.#refuseDestroyed()
+				issues.push(...(await this.#check(selected, drafts)))
 			}
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				issues,
+				// One draft is checked by the project its claim names and again by the root project the
+				// test is checked against, so the same diagnostic arrives twice for one candidate.
+				issues: filterUniqueIssues(issues),
 			}
 		} finally {
-			overlay.clear()
+			this.#release()
 		}
 	}
 
 	async #resolve(project: string): Promise<Project> {
-		if (this.#closing !== undefined) throw createDestroyedError('type stage')
-		const typescript = await this.#typescript
-		if (this.#closing !== undefined) throw createDestroyedError('type stage')
-		const resolved = resolveWorkspaceFile(this.#workspace, project)
+		this.#refuseDestroyed()
+		const contained = this.#contain(project)
 		this.#progress += 1
-		this.#service(typescript, project)
-		await this.#unblock()
-		return {
-			path: relativeWorkspaceFile(this.#workspace, resolved),
-			digest: computeDigest(this.#workspace, this.#options.get(resolved) ?? {}),
-		}
+		const config = await this.#configure(contained)
+		return { path: contained, digest: computeDigest(this.#workspace, config.compilerOptions) }
 	}
 
 	async #destroy(): Promise<void> {
 		// Abandon every inspection in flight rather than waiting for one: the coordinator tears a
-		// stage down exactly when it cannot wait. Warming is awaited because the services it
-		// creates are the resources this releases.
-		await this.#typescript.catch(() => undefined)
-		for (const service of this.#services.values()) service.dispose()
-		this.#services.clear()
-		this.#resident.clear()
-		this.#recycled = undefined
-		this.#options.clear()
-		this.#files.clear()
-		this.#diagnostics.clear()
+		// stage down exactly when it cannot wait. Terminating the compiler is what makes that
+		// immediate, and warming is awaited afterwards because its own run is one of the terminated
+		// children and the mirror it built is the resource this releases.
+		const children = [...this.#children]
+		this.#children.clear()
+		for (const child of children) this.#terminate(child)
+		await this.#warming.catch(() => undefined)
+		try {
+			rmSync(this.#mirror, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+		} catch {}
+		this.#configs.clear()
+		this.#mirrored.clear()
+		this.#drafts.clear()
 	}
 
-	async #warm(typescript: typeof TypeScript): Promise<typeof TypeScript> {
-		for (const project of this.#projects()) {
-			this.#resident.add(resolveWorkspaceFile(this.#workspace, project))
-			this.#service(typescript, project)
-		}
-		return typescript
+	// Builds each declared project's incremental state so the first inspection is warm. The runs are
+	// independent — each reads the mirror and writes its own state file — so they run together and
+	// the warm costs the slowest project rather than the sum of them all.
+	async #warm(): Promise<void> {
+		this.#sweep()
+		this.#createMirror()
+		this.#refresh()
+		this.#refuseDestroyed()
+		await Promise.all(this.#projects().map((project) => this.#check(project, [])))
 	}
 
 	#projects(): readonly string[] {
@@ -248,225 +261,361 @@ export class TypeStage implements TypeStageInterface {
 		return projects
 	}
 
-	// Hands the host's event loop back after one candidate's check, and refuses an inspection this
-	// stage was torn down during. A language service checks a candidate synchronously, so an
-	// inspection that never yielded held the loop for its whole duration: the coordinator's
-	// deadline could not fire against this stage, and the lint child's frames and the runtime
-	// worker's messages queued behind it until the last candidate finished, which reported one
-	// stage's overrun against another. Yielding bounds that hold to one candidate. The refusal is
-	// what stops an abandoned inspection reaching a disposed service and building a replacement
-	// this stage would then own past its own teardown.
-	async #unblock(): Promise<void> {
-		await setTimeout(0)
+	// Refuses an inspection this stage was torn down during. The compiler runs in a child process,
+	// so the host's loop is free while it works and a caller's deadline fires against this stage on
+	// its own: nothing here yields for that. The refusal is what stops an abandoned inspection
+	// running a compiler over a mirror this teardown is deleting.
+	#refuseDestroyed(): void {
 		if (this.#closing !== undefined) throw createDestroyedError('type stage')
 	}
 
-	// Resolution happens here rather than in the overlay, because the workspace a candidate's
-	// declared path is relative to is the stage's knowledge. A path that escapes the workspace
-	// throws before the overlay records it, and the inspection's clear releases the rest.
-	#record(draft: Draft, overlay: OverlayInterface): void {
-		overlay.set(resolveWorkspaceFile(this.#workspace, draft.path), draft.text)
-	}
-
-	// Keyed by the resolved project file rather than by the caller's spelling of it, so
-	// `tsconfig.json` and `./tsconfig.json` reach one resident service instead of two.
-	#service(typescript: typeof TypeScript, project: string): LanguageService {
-		const path = resolveWorkspaceFile(this.#workspace, project)
-		const existing = this.#services.get(path)
-		if (existing !== undefined) return existing
-		// The compiler builds a project diagnostic's own file name in the forward-slash spelling and
-		// then asserts it equals the path the caller handed in. So a native path reaches this seam,
-		// a malformed project makes the compiler construct that diagnostic, and the assertion fails
-		// as a raw `Debug Failure` naming this host's directory layout, outside this package's
-		// failure contract. Hand the compiler the forward-slash spelling, which it accepts on every
-		// host, and it returns the diagnostic instead. Every cache here stays keyed by the native
-		// `path`, so nothing this stage stores or reports moves with it.
-		const spelling = normalizePath(path)
-		const config = typescript.readConfigFile(spelling, typescript.sys.readFile)
-		if (config.error !== undefined) {
-			throw new ProbeError(this.#translate(typescript, config.error.messageText), {
-				origin: 'workspace',
-				code: 'malformed',
-				context: { stage: this.stage, project },
-			})
-		}
-		const parsed = typescript.parseJsonConfigFileContent(
-			config.config,
-			typescript.sys,
-			dirname(spelling),
-			undefined,
-			spelling,
-		)
-		if (parsed.errors.length > 0) {
-			throw new ProbeError(this.#translate(typescript, parsed.errors[0]?.messageText), {
-				origin: 'workspace',
-				code: 'malformed',
-				context: { stage: this.stage, project },
-			})
-		}
-		this.#options.set(path, parsed.options)
-		this.#files.set(path, parsed.fileNames)
-		const host: LanguageServiceHost = {
-			getCompilationSettings: this.#compilationSettings.bind(this, path),
-			getScriptFileNames: this.#scriptFiles.bind(this, path),
-			getScriptVersion: this.#version.bind(this),
-			getScriptSnapshot: this.#snapshot.bind(this, typescript),
-			getCurrentDirectory: this.#directory.bind(this),
-			getDefaultLibFileName: this.#defaultLibrary.bind(this, typescript),
-			fileExists: this.#fileExists.bind(this, typescript),
-			readFile: this.#readFile.bind(this, typescript),
-			// Listings stay on disk. A candidate that entered one would reach the file set this
-			// stage caches per project at service creation, and outlive the inspection that
-			// declared it, so glob and directory-discovery imports fail closed.
-			readDirectory: typescript.sys.readDirectory,
-			directoryExists: this.#directoryExists.bind(this, typescript),
-			getDirectories: typescript.sys.getDirectories,
-			useCaseSensitiveFileNames: this.#caseSensitive.bind(this, typescript),
-			getNewLine: this.#newline.bind(this, typescript),
-		}
-		const service = typescript.createLanguageService(host)
-		this.#services.set(path, service)
-		if (!this.#resident.has(path)) this.#recycle(path)
-		return service
-	}
-
-	#compilationSettings(path: string): CompilerOptions {
-		return this.#options.get(path) ?? {}
-	}
-
-	#scriptFiles(path: string): string[] {
-		return [...(this.#files.get(path) ?? []), ...this.#overlay.paths]
-	}
-
-	#directory(): string {
-		return this.#workspace
-	}
-
-	#defaultLibrary(typescript: typeof TypeScript, options: CompilerOptions): string {
-		return typescript.getDefaultLibFilePath(options)
-	}
-
-	#fileExists(typescript: typeof TypeScript, file: string): boolean {
-		return this.#overlay.text(file) !== undefined || typescript.sys.fileExists(file)
-	}
-
-	#readFile(typescript: typeof TypeScript, file: string): string | undefined {
-		return this.#overlay.text(file) ?? typescript.sys.readFile(file)
-	}
-
-	#directoryExists(typescript: typeof TypeScript, directory: string): boolean {
-		return typescript.sys.directoryExists(directory) || this.#overlay.covers(directory)
-	}
-
-	#caseSensitive(typescript: typeof TypeScript): boolean {
-		return typescript.sys.useCaseSensitiveFileNames
-	}
-
-	#newline(typescript: typeof TypeScript): string {
-		return typescript.sys.newLine
-	}
-
-	// Renders one diagnostic in the terms this package reports a path in. The compiler names a
-	// project by the absolute path this stage handed it, and it spells that path either way: the
-	// native spelling where it echoes what it was given, the forward-slash spelling where it derived
-	// the path itself. So a caller reads whichever spelling the diagnostic happened to take, and on a
-	// host whose separator is a backslash that is this host's own directory layout rather than the
-	// project the caller named. `relativeWorkspaceMessage` removes both spellings of the root, so the
-	// caller reads the workspace-relative project it asked for, and so does every other contained
-	// file the diagnostic happens to name.
-	#translate(
-		typescript: typeof TypeScript,
-		message: string | DiagnosticMessageChain | undefined,
-	): string {
-		return relativeWorkspaceMessage(
+	// Creates this stage's own mirror directory and the marker that attributes it. The marker is the
+	// same one the runtime stage writes on the files it generates, so a sweep never deletes a
+	// directory by its name alone.
+	#createMirror(): void {
+		const marker = resolveWorkspaceFile(
 			this.#workspace,
-			typescript.flattenDiagnosticMessageText(message, '\n'),
+			`${TYPE_MIRROR}/${this.#revision}/.probe/mirror.txt`,
+			true,
 		)
+		mkdirSync(dirname(marker), { recursive: true })
+		writeFileSync(marker, formatSpecification('', this.#revision), {
+			encoding: 'utf8',
+			flag: 'wx',
+		})
 	}
 
-	#configure(service: LanguageService, project: string): void {
-		const path = resolveWorkspaceFile(this.#workspace, project)
-		if (this.#diagnostics.has(path)) return
-		this.#diagnostics.set(path, service.getCompilerOptionsDiagnostics())
-	}
-
-	// Holds one caller-named project beside the resident set warming created. `project` arrives
-	// from the wire validated only as a non-empty string, so keeping a language service per
-	// distinct string would let a caller grow this stage without bound for the life of the process.
-	#recycle(path: string): void {
-		const previous = this.#recycled
-		this.#recycled = path
-		if (previous === undefined || previous === path) return
-		this.#services.get(previous)?.dispose()
-		this.#services.delete(previous)
-		this.#options.delete(previous)
-		this.#files.delete(previous)
-		this.#diagnostics.delete(previous)
-	}
-
-	#version(file: string): string {
-		if (this.#overlay.text(file) !== undefined) return `virtual:${this.#overlay.revision}`
+	// Removes the mirrors a dead host left behind. Every stage deletes its own at teardown, so one
+	// that outlives its host belongs to a process that was killed. Three conditions together make a
+	// directory this package's to delete: the name is a revision identity, the process it names is
+	// gone, and the marker inside it names that same revision. A directory failing any of them stays
+	// where it is, whoever wrote it.
+	#sweep(): void {
+		const root = resolveWorkspaceFile(this.#workspace, TYPE_MIRROR)
+		let entries: readonly Dirent[] = []
 		try {
-			return `disk:${statSync(file).mtimeMs}`
+			entries = readdirSync(root, { withFileTypes: true })
 		} catch {
-			return 'missing'
+			return
+		}
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue
+			const owner = parseRevisionOwner(entry.name)
+			if (owner === undefined || matchesLiveProcess(owner)) continue
+			const marker = attempt(() =>
+				readFileSync(join(root, entry.name, '.probe', 'mirror.txt'), 'utf8'),
+			)
+			if (!marker.success || !matchesSpecification(marker.value, entry.name)) continue
+			try {
+				rmSync(join(root, entry.name), {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 20,
+				})
+			} catch {}
 		}
 	}
 
-	#snapshot(typescript: typeof TypeScript, file: string): IScriptSnapshot | undefined {
-		const text = this.#overlay.text(file) ?? typescript.sys.readFile(file)
-		return text === undefined ? undefined : typescript.ScriptSnapshot.fromString(text)
+	// Brings the mirror level with the workspace by content digest, so a file edited since the last
+	// inspection is checked as it stands on disk and an untouched file is not copied again. A file
+	// the workspace no longer holds is removed from the mirror, because a stale copy there would
+	// shadow the deletion.
+	#refresh(): void {
+		const present = new Set<string>()
+		for (const path of collectWorkspaceFiles(this.#workspace)) {
+			const contained = relativeWorkspaceFile(this.#workspace, path)
+			present.add(contained)
+			const reading = attempt(() => readFileSync(path))
+			if (!reading.success) continue
+			const digest = createHash('sha256').update(reading.value).digest('hex')
+			if (this.#mirrored.get(contained) === digest) continue
+			this.#place(reading.value, path)
+			this.#mirrored.set(contained, digest)
+		}
+		for (const contained of [...this.#mirrored.keys()]) {
+			if (present.has(contained)) continue
+			this.#remove(contained)
+			this.#mirrored.delete(contained)
+		}
 	}
 
-	#issues(
-		typescript: typeof TypeScript,
-		service: LanguageService,
-		draft: Draft,
-		project: string,
-		selected: boolean,
-		configure: boolean,
-	): readonly Issue[] {
-		const path = resolveWorkspaceFile(this.#workspace, draft.path)
-		const configuration = resolveWorkspaceFile(this.#workspace, project)
-		const diagnostics = [
-			...(configure ? (this.#diagnostics.get(configuration) ?? []) : []),
-			...service.getSyntacticDiagnostics(path),
-			...service.getSemanticDiagnostics(path),
+	// Releases the candidate text one inspection wrote. The copy is removed rather than restored, so
+	// the next refresh reads the workspace's own file again and a draft that named no workspace file
+	// leaves nothing behind.
+	#release(): void {
+		for (const contained of this.#drafts) {
+			this.#remove(contained)
+			this.#mirrored.delete(contained)
+		}
+		this.#drafts.clear()
+	}
+
+	// Puts one file's contents at its mirrored path and reports the workspace-relative path it took,
+	// which is the key every record this stage keeps is held under.
+	#place(text: string | Uint8Array, path: string): string {
+		const contained = relativeWorkspaceFile(this.#workspace, path)
+		const target = this.#mirrorPath(contained)
+		const written = attempt(() => {
+			mkdirSync(dirname(target), { recursive: true })
+			writeFileSync(target, text)
+		})
+		if (written.success) return contained
+		this.#displace(target)
+		mkdirSync(dirname(target), { recursive: true })
+		writeFileSync(target, text)
+		return contained
+	}
+
+	// Removes whatever in the mirror stands where one path must go. A workspace holding a file where
+	// a draft declares a directory, and a claim declaring a file where an earlier draft made a
+	// directory, both reach here: the mirror is this stage's own tree, so the path the write names
+	// wins and the next refresh restores whatever the workspace still holds.
+	#displace(target: string): void {
+		const ancestors: string[] = []
+		let directory = dirname(target)
+		while (directory !== this.#mirror && directory !== dirname(directory)) {
+			ancestors.unshift(directory)
+			directory = dirname(directory)
+		}
+		for (const ancestor of [...ancestors, target]) {
+			const reading = attempt(() => lstatSync(ancestor))
+			if (!reading.success) continue
+			if (ancestor !== target && reading.value.isDirectory()) continue
+			if (ancestor === target && !reading.value.isDirectory()) continue
+			rmSync(ancestor, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+			this.#mirrored.delete(relativeWorkspaceFile(this.#mirror, ancestor))
+		}
+	}
+
+	// Spells one workspace-relative path inside this stage's own mirror.
+	#mirrorPath(contained: string): string {
+		return join(this.#mirror, contained)
+	}
+
+	// Spells one project the way this stage keys it: resolved against the workspace, then reported
+	// relative to it, so every spelling of one project reaches one run and one cached configuration.
+	#contain(project: string): string {
+		return relativeWorkspaceFile(this.#workspace, resolveWorkspaceFile(this.#workspace, project))
+	}
+
+	#remove(contained: string): void {
+		try {
+			rmSync(this.#mirrorPath(contained), { force: true, maxRetries: 5, retryDelay: 20 })
+		} catch {}
+	}
+
+	// Reads the configuration the compiler prints for one project against the mirror, refreshing the
+	// mirror first on a cache miss so the digest names the configuration the mirror holds at that
+	// moment. The reading is cached per project for the life of the stage, so a draft a later
+	// inspection writes cannot move it.
+	async #configure(project: string): Promise<ProjectConfig> {
+		const contained = this.#contain(project)
+		const existing = this.#configs.get(contained)
+		if (existing !== undefined) return existing
+		this.#refresh()
+		const execution = await this.#spawn(['--showConfig', '-p', contained], this.#mirror)
+		this.#refuseDestroyed()
+		const config = parseProjectConfig(execution.stdout)
+		if (config === undefined) throw this.#fault(execution, contained)
+		this.#configs.set(contained, config)
+		return config
+	}
+
+	// Runs one project's compiler over the mirror and reports what it said about the drafts assigned
+	// to that project. A run carrying no drafts is the warming run, which builds the incremental
+	// state the inspections reuse. The diagnostics decide the outcome: a run that printed one is read
+	// from it whatever stderr carries, and a run that printed none and exited zero is clean whatever
+	// stderr carries. Only a run that printed no diagnostic and did not exit zero raises, because
+	// that run reported nothing this stage can act on.
+	async #check(project: string, drafts: readonly Draft[]): Promise<readonly Issue[]> {
+		const config = await this.#configure(project)
+		const scratch = this.#scratch(this.#contain(project), config, drafts)
+		const execution = await this.#spawn(
+			['--noEmit', '--pretty', 'false', '-p', `./${scratch}`],
+			this.#mirror,
+		)
+		this.#refuseDestroyed()
+		const diagnostics = scanDiagnostics(execution.stdout)
+		if (diagnostics.length === 0 && execution.status !== 0) {
+			const stderr = execution.stderr.trim()
+			const message =
+				stderr !== ''
+					? stderr
+					: execution.status === undefined
+						? 'The compiler reported no diagnostic and was ended by a signal'
+						: `The compiler reported no diagnostic and exited ${execution.status}`
+			throw new ProbeError(this.#translate(message), {
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: this.stage, project },
+			})
+		}
+		return this.#issues(diagnostics, project)
+	}
+
+	// Writes the scratch project one run reads, beside the mirrored project it extends. Sitting in
+	// that directory is what lets every relative path the extended chain declares resolve inside the
+	// mirror unchanged, the project's own printed selection included.
+	#scratch(project: string, config: ProjectConfig, drafts: readonly Draft[]): string {
+		const directory = dirname(project)
+		const stem = `${basename(project, extname(project))}.probe.json`
+		const contained = directory === '.' ? stem : `${directory}/${stem}`
+		const target = this.#mirrorPath(contained)
+		const buildinfo = join(this.#mirror, '.probe', `${project.replaceAll('/', '-')}.tsbuildinfo`)
+		// The project's own selection is carried across rather than left to the compiler's default,
+		// because naming `files` at all suppresses that default. A selection entry the mirror does not
+		// hold is dropped, so a file the workspace deleted after this reading refuses nothing.
+		const selected = (config.files ?? []).filter((entry) =>
+			existsSync(resolve(dirname(target), entry)),
+		)
+		// Each entry stays relative to the scratch project's own directory, so the mirror carries no
+		// host layout and its incremental state keeps working from wherever the mirror sits.
+		const files = [
+			...selected,
+			...drafts.map((draft) =>
+				relativeWorkspaceFile(dirname(target), this.#mirrorPath(this.#contain(draft.path))),
+			),
 		]
-		return diagnostics.map((diagnostic) => this.#issue(typescript, diagnostic, project, selected))
+		const body = {
+			extends: `./${basename(project)}`,
+			compilerOptions: {
+				noEmit: true,
+				declaration: false,
+				emitDeclarationOnly: false,
+				composite: false,
+				incremental: true,
+				tsBuildInfoFile: relativeWorkspaceFile(dirname(target), buildinfo),
+			},
+			...(files.length === 0 ? {} : { files }),
+		}
+		mkdirSync(dirname(target), { recursive: true })
+		writeFileSync(target, `${JSON.stringify(body, undefined, '\t')}\n`, 'utf8')
+		return contained
 	}
 
-	#issue(
-		typescript: typeof TypeScript,
-		diagnostic: Diagnostic,
-		project: string,
-		selected: boolean,
-	): Issue {
-		const message = this.#translate(typescript, diagnostic.messageText)
-		if (diagnostic.file === undefined) {
-			if (selected) {
+	#issues(diagnostics: readonly Diagnostic[], project: string): readonly Issue[] {
+		const issues: Issue[] = []
+		for (const diagnostic of diagnostics) {
+			const message = this.#translate(diagnostic.message)
+			const resolved =
+				diagnostic.path === undefined ? undefined : resolve(this.#mirror, diagnostic.path)
+			const drafted =
+				resolved !== undefined &&
+				this.#drafts.has(
+					escapesRoot(this.#mirror, resolved)
+						? relativeWorkspaceFile(this.#workspace, resolved)
+						: relativeWorkspaceFile(this.#mirror, resolved),
+				)
+			// A diagnostic against no file, and one against a `.json` file the claim itself did not
+			// draft, names a configuration the target tree declares for itself. So the target holds
+			// the only file that can close it, and reporting it as a candidate issue would charge a
+			// claimant for a configuration nobody else owns. A `.json` file the claim drafted is the
+			// claimant's like any other draft.
+			if (resolved === undefined || (!drafted && extname(resolved) === '.json')) {
 				throw new ProbeError(message, {
-					origin: 'claimant',
-					code: 'refused',
+					origin: 'workspace',
+					code: 'malformed',
 					context: { stage: this.stage, project },
 				})
 			}
-			// A diagnostic naming no file is about the project rather than about any candidate, and an
-			// inferred project is one the workspace declares for itself. So the target tree holds the
-			// only file that can close it, and naming this package instead would refuse every receipt
-			// the target could earn until someone else fixed a configuration nobody else owns.
-			return { origin: 'workspace', path: project, message }
+			const path = escapesRoot(this.#mirror, resolved)
+				? escapesRoot(this.#workspace, resolved)
+					? normalizePath(resolved)
+					: relativeWorkspaceFile(this.#workspace, resolved)
+				: relativeWorkspaceFile(this.#mirror, resolved)
+			issues.push({
+				origin: 'claimant',
+				path,
+				message,
+				...(diagnostic.range === undefined ? {} : { range: diagnostic.range }),
+			})
 		}
-		const path = relativeWorkspaceFile(this.#workspace, diagnostic.file.fileName)
-		if (diagnostic.start === undefined) return { origin: 'claimant', path, message }
-		// The compiler already answers in the zero-based UTF-16 coordinates the issue stores, so the
-		// position is carried across rather than converted. `length` is the extent the compiler
-		// reported for this diagnostic, and a diagnostic that reported none is a point: the end
-		// resolves to the start, which is the zero-width range the issue's own contract names.
-		const start = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start)
-		const end = diagnostic.file.getLineAndCharacterOfPosition(
-			diagnostic.start + (diagnostic.length ?? 0),
+		return issues
+	}
+
+	// Renders one message in the terms this package reports a path in. The mirror root is removed
+	// first and the workspace root second, because the mirror sits inside the workspace and the
+	// longer prefix is the one a compiler running there names a file by. What is left of a contained
+	// path is the workspace-relative spelling a reader can open.
+	#translate(message: string): string {
+		return relativeWorkspaceMessage(
+			this.#workspace,
+			relativeWorkspaceMessage(this.#mirror, message),
 		)
-		return { origin: 'claimant', path, message, range: { start, end } }
+	}
+
+	#fault(execution: Execution, project: string): ProbeError {
+		const reported = scanDiagnostics(execution.stdout).map((diagnostic) => diagnostic.message)
+		const text = reported.length > 0 ? reported.join('\n') : execution.stdout.trim()
+		return new ProbeError(
+			this.#translate(text === '' ? 'The compiler printed no configuration' : text),
+			{
+				origin: 'workspace',
+				code: 'malformed',
+				context: { stage: this.stage, project },
+			},
+		)
+	}
+
+	#spawn(args: readonly string[], cwd: string): Promise<Execution> {
+		this.#refuseDestroyed()
+		return new Promise<Execution>((settle, refuse) => {
+			const child = spawn(process.execPath, [this.#compiler, ...args], {
+				cwd,
+				stdio: ['ignore', 'pipe', 'pipe'],
+			})
+			const output = child.stdout
+			const errors = child.stderr
+			if (output === null || errors === null) {
+				this.#terminate(child)
+				refuse(
+					new ProbeError('The compiler was spawned without its own output streams', {
+						origin: 'instrument',
+						code: 'malformed',
+						context: { stage: this.stage },
+					}),
+				)
+				return
+			}
+			this.#children.add(child)
+			let stdout = ''
+			let stderr = ''
+			output.setEncoding('utf8')
+			errors.setEncoding('utf8')
+			output.on('data', (chunk: string) => {
+				stdout += chunk
+			})
+			errors.on('data', (chunk: string) => {
+				stderr += chunk
+			})
+			child.on('error', (error: unknown) => {
+				this.#children.delete(child)
+				refuse(
+					new ProbeError('The workspace compiler could not be started', {
+						origin: 'workspace',
+						code: 'malformed',
+						context: { stage: this.stage, path: this.#compiler },
+						cause: error,
+					}),
+				)
+			})
+			child.on('close', (code: number | null) => {
+				this.#children.delete(child)
+				settle({ ...(code === null ? {} : { status: code }), stdout, stderr })
+			})
+		})
+	}
+
+	// Ends one compiler run. A Windows host never delivers a cooperative signal to a child, and the
+	// compiler is spawned through the Node executable, so the whole tree is ended there by process
+	// id; every other host receives the signal it handles.
+	#terminate(child: ChildProcess): void {
+		const id = child.pid
+		if (process.platform === 'win32' && id !== undefined) {
+			spawnSync('taskkill', ['/pid', String(id), '/t', '/f'], { stdio: 'ignore' })
+			return
+		}
+		child.kill('SIGTERM')
 	}
 }

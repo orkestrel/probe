@@ -1,4 +1,5 @@
 import type { Case, Check, Claim, Project, Stage } from '@src/core'
+import type { LSPRange } from '@orkestrel/lsp'
 
 /**
  * Carries one queued inspection: the case a stage reads and the claim it belongs to.
@@ -44,19 +45,83 @@ export interface InspectionOptions {
 }
 
 /**
- * Carries the construction options `Overlay` accepts.
+ * Carries one diagnostic line a compiler run reported, in this package's own coordinates.
+ *
+ * @remarks
+ * `path` and `range` are absent together, because a diagnostic the compiler reports about a
+ * project rather than about a file carries no location. `path` is spelled as the compiler printed
+ * it, relative to the directory the run started in. `range` holds the zero-based UTF-16 point the
+ * compiler reported: the plain-text output carries a start position and no extent, so `end` equals
+ * `start`. `message` is the diagnostic text, elaboration lines joined by newlines.
  *
  * @example
  * ```ts
- * const options: OverlayOptions = { sensitive: false }
+ * const diagnostic: Diagnostic = {
+ * 	path: 'src/core/greeting.ts',
+ * 	range: { start: { line: 0, character: 13 }, end: { line: 0, character: 13 } },
+ * 	message: "Type 'string' is not assignable to type 'number'.",
+ * }
  * ```
  */
-export interface OverlayOptions {
-	/**
-	 * If `true`, a lookup key matches a recorded path exactly; if `false`, it matches with file-name
-	 * case folded. Default: `true`
-	 */
-	readonly sensitive?: boolean
+export interface Diagnostic {
+	/** Names the file the compiler reported against, or is absent for a project diagnostic. */
+	readonly path?: string
+	/** Holds the zero-based UTF-16 point the compiler reported, or is absent with `path`. */
+	readonly range?: LSPRange
+	/** Holds the diagnostic text, with every elaboration line joined by a newline. */
+	readonly message: string
+}
+
+/**
+ * Carries what one TypeScript project resolved to, as the compiler itself printed it.
+ *
+ * @remarks
+ * The type stage reads this from `tsc --showConfig`, which prints the resolved options beside the
+ * project's own file selection. `compilerOptions` is the compiler's record and is carried
+ * unvalidated, because this package digests it rather than reading a member out of it. `files` is
+ * the selection the project resolved to, spelled relative to the project file, and `include` is
+ * present only where the project or a project it extends declares one. Every path is the
+ * compiler's own spelling, so a copy of the project file placed beside the original reads them
+ * unchanged.
+ *
+ * @example
+ * ```ts
+ * const config: ProjectConfig = {
+ * 	compilerOptions: { strict: true, rootDir: '../../src/core' },
+ * 	files: ['../../src/core/index.ts'],
+ * }
+ * ```
+ */
+export interface ProjectConfig {
+	/** Holds the compiler options the project resolved to, unvalidated. */
+	readonly compilerOptions: unknown
+	/** Holds the files the project resolved to, or is absent when the compiler printed none. */
+	readonly files?: readonly string[]
+	/** Holds the file patterns the project declares, or is absent when it declares none. */
+	readonly include?: readonly string[]
+}
+
+/**
+ * Carries what one spawned workspace command reported when it closed.
+ *
+ * @remarks
+ * `stdout` and `stderr` mirror the POSIX stream names the child wrote to. `status` is the exit
+ * code, and it is absent when a signal ended the child, which is what teardown does to a run it
+ * abandons. A compiler's exit code is not its verdict — the majors this package supports disagree
+ * on it — so read the diagnostics the streams carry rather than this number.
+ *
+ * @example
+ * ```ts
+ * const execution: Execution = { status: 0, stdout: '{}\n', stderr: '' }
+ * ```
+ */
+export interface Execution {
+	/** Holds the exit code, or is absent when a signal ended the child. */
+	readonly status?: number
+	/** Holds everything the child wrote to its standard output. */
+	readonly stdout: string
+	/** Holds everything the child wrote to its standard error. */
+	readonly stderr: string
 }
 
 /**
@@ -64,10 +129,10 @@ export interface OverlayOptions {
  *
  * @remarks
  * A stage records every candidate the inspection carries before it reads any of them, and clears
- * the set when the inspection ends, whatever ended it. The entity names no tool: each stage adapts
- * one overlay to the host its own tool expects, so a language service, a document protocol, and a
- * module resolver read one candidate set through their own adapters rather than through one shared
- * filesystem. Paths are absolute and the stage resolves them, because only the stage knows the
+ * the set when the inspection ends, whatever ended it. The runtime stage's module resolver reads
+ * one candidate set through its adapter and is the stage that holds an overlay; the type stage
+ * writes each draft into its mirror and the lint stage opens each draft as a document, so neither
+ * holds one. Paths are absolute and the stage resolves them, because only the stage knows the
  * workspace a candidate's declared path is relative to. `revision` identifies the set, so a
  * resident tool that caches by version reads fresh text for a path this overlay holds and reads
  * disk again after `clear`.
@@ -125,17 +190,17 @@ export interface OverlayInterface {
 }
 
 /**
- * Inspects one case with a resident workspace tool.
+ * Inspects one case with the workspace's own tool.
  *
  * @remarks
- * Warming begins at construction. The `inspect` method awaits that one warm operation and reuses
- * the resulting tool across calls. A stage serves one inspection at a time and admits none itself.
- * Await an inspection before starting the next one, or admit through one queue per stage the way
- * `Probe` does: a second concurrent call reaches the same resident tool and the same overlay,
- * document, and specification state the first is still using. A stage never holds a later
- * inspection behind an earlier one, so a caller that abandons an inspection at its own deadline
- * can still use the stage. The `destroy` method permanently tears the stage down and releases
- * every resource it owns.
+ * Warming begins at construction. The `inspect` method awaits that one warm operation, which
+ * builds the resident tool or the mirror it reuses across calls. A stage serves one inspection at
+ * a time and admits none itself. Await an inspection before starting the next one, or admit
+ * through one queue per stage the way `Probe` does: a second concurrent call reaches the same
+ * resident tool or mirror and the same overlay, document, and specification state the first is
+ * still using. A stage never holds a later inspection behind an earlier one, so a caller that
+ * abandons an inspection at its own deadline can still use the stage. The `destroy` method
+ * permanently tears the stage down and releases every resource it owns.
  *
  * @example
  * ```ts
@@ -145,7 +210,7 @@ export interface OverlayInterface {
  * ```
  */
 export interface StageInterface {
-	/** Names the inspection this resident stage performs. */
+	/** Names the inspection this stage performs. */
 	readonly stage: Stage
 	/**
 	 * Reports claimant-owned progress the coordinator compares with its inspection snapshot.
@@ -163,21 +228,21 @@ export interface StageInterface {
 	 *
 	 * @param subject - The candidate drafts and test to inspect
 	 * @returns One outcome for this stage
-	 * @throws When the resident tool cannot start or has already been destroyed
+	 * @throws When the workspace's own tool cannot start or has already been destroyed
 	 */
 	inspect(subject: Case): Promise<Check>
 	/**
-	 * Tears down the resident tool and releases its resources.
+	 * Tears down the resident tool or the mirror and releases its resources.
 	 *
 	 * @remarks
 	 * A stage abandons every inspection it holds rather than waiting behind one, so teardown never
 	 * waits for an inspection to return. An abandoned inspection rejects, either at the stage's own
-	 * guard or as the owned tool closes. Teardown is bounded whatever the resident tool does: a tool
-	 * that answers neither its warming exchange nor its ending is signalled and released at the
+	 * guard or as the owned tool closes. Teardown is bounded whatever the stage's own tool does: a
+	 * tool that answers neither its warming exchange nor its ending is signalled and released at the
 	 * stage's own deadline. A coordinator replaces a stage whose worker no longer returns because
 	 * teardown neither waits for an inspection nor waits past that deadline.
 	 *
-	 * @returns A promise that settles after the resident tool releases its resources
+	 * @returns A promise that settles after the resident tool or the mirror releases its resources
 	 */
 	destroy(): Promise<void>
 }
@@ -188,7 +253,8 @@ export interface StageInterface {
  * @remarks
  * The type stage carries members the shared stage contract cannot: the lint and runtime stages
  * read no project, so a project parameter and a project lookup belong here rather than on
- * `StageInterface`.
+ * `StageInterface`. `resolve` reads the compiler's own printed configuration for the workspace's
+ * copy of the project, so a claim's drafts never move the digest it reports.
  *
  * @example
  * ```ts
@@ -204,7 +270,8 @@ export interface TypeStageInterface extends StageInterface {
 	 * @param project - The workspace-relative TypeScript project the candidate drafts are checked
 	 * against. Default: the scoped project each candidate path infers
 	 * @returns One outcome for this stage
-	 * @throws When the resident compiler cannot start or the stage has already been destroyed
+	 * @throws When the workspace refuses the mirror, when a project the run reads is malformed, or
+	 * when the stage has already been destroyed
 	 */
 	inspect(subject: Case, project?: string): Promise<Check>
 	/**
@@ -212,8 +279,8 @@ export interface TypeStageInterface extends StageInterface {
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
-	 * @throws When the project escapes the workspace, cannot be parsed, or the stage has already
-	 * been destroyed
+	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the
+	 * stage has already been destroyed
 	 */
 	resolve(project: string): Promise<Project>
 }
@@ -275,8 +342,8 @@ export interface WorkspaceManifest {
  * The server owns the process it runs in. `start` seizes standard input and standard output for
  * the transport and registers the termination handlers a harness signals, so a host that starts one
  * has already given the process to it. `destroy` reverses all of that and tears the probe down with
- * it, which is why there is no verb that stops serving and leaves the resident engines running: a
- * probe nothing is reading from holds its resident tools for nobody.
+ * it, which is why there is no verb that stops serving and leaves the stages standing: a probe
+ * nothing is reading from holds its tools and its mirror for nobody.
  *
  * @example
  * ```ts
@@ -312,7 +379,7 @@ export interface ProbeServerInterface {
 	 * `start` and when something else is reading it at release, and a stream nothing had read yet
 	 * and nothing else reads is paused.
 	 *
-	 * @returns A promise that settles after the probe releases its resident engines
+	 * @returns A promise that settles after the probe releases every stage's tool and mirror
 	 */
 	destroy(): Promise<void>
 }

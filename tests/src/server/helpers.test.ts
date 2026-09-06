@@ -1,4 +1,4 @@
-import type { Draft } from '@src/core'
+import type { Draft, Issue } from '@src/core'
 import { EventEmitter } from 'node:events'
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -9,16 +9,19 @@ import { createScratch } from '@orkestrel/test/server'
 import {
 	buildRevisionPath,
 	captureListeners,
+	collectWorkspaceFiles,
 	computeDigest,
 	describeUnknown,
 	escapesRoot,
+	filterUniqueIssues,
 	findRefusedPaths,
 	guardStage,
 	inferDocumentLanguage,
 	inferTestProject,
 	inferTypeProject,
 	isRefusedName,
-	loadWorkspaceModule,
+	loadWorkspaceVitest,
+	matchesLiveProcess,
 	matchesWorkspaceModule,
 	normalizePath,
 	normalizeValue,
@@ -31,12 +34,18 @@ import {
 	resolveWorkspaceBinary,
 	resolveWorkspaceFile,
 	resolveWorkspaceModule,
+	scanDiagnostics,
 } from '@src/server'
 import { CLAIM_SHAPE, ProbeError, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
+const DOCUMENTED_ISSUE: Issue = {
+	origin: 'claimant',
+	path: 'src/core/greeting.ts',
+	message: 'not assignable',
+}
 
 // Two distinct listeners reporting one name, so a release keyed on the name cannot tell them apart
 // and a release keyed on identity can. The name is assigned rather than declared, because two
@@ -96,9 +105,27 @@ describe('server helper examples', () => {
 		expect(relativeWorkspaceFile(ROOT, resolveWorkspaceBinary(ROOT, 'oxlint'))).toBe(
 			'node_modules/oxlint/bin/oxlint',
 		)
-		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
-			'typescript does not publish the typescript binary',
+		expect(relativeWorkspaceFile(ROOT, resolveWorkspaceBinary(ROOT, 'typescript', 'tsc'))).toBe(
+			'node_modules/typescript/bin/tsc',
 		)
+		expect(loadWorkspaceVitest(ROOT).createVitest).toBeTypeOf('function')
+		expect(
+			scanDiagnostics(
+				"src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.",
+			),
+		).toStrictEqual([
+			{
+				path: 'src/a.ts',
+				range: { start: { line: 0, character: 13 }, end: { line: 0, character: 13 } },
+				message: "Type 'string' is not assignable to type 'number'.",
+			},
+		])
+		expect(scanDiagnostics('error TS5058: The specified path does not exist.')).toStrictEqual([
+			{ message: 'The specified path does not exist.' },
+		])
+		expect(matchesLiveProcess(process.pid)).toBe(true)
+		expect(matchesLiveProcess(0)).toBe(true)
+		expect(filterUniqueIssues([DOCUMENTED_ISSUE, { ...DOCUMENTED_ISSUE }]).length).toBe(1)
 		expect(inferTypeProject('src/core/greeting.ts')).toBe('configs/src/tsconfig.core.json')
 		expect(() => inferTypeProject('tests/src/core/greeting.test.ts')).toThrow(
 			'Cannot infer a scoped TypeScript project for tests/src/core/greeting.test.ts',
@@ -630,8 +657,7 @@ describe('server path helpers', () => {
 	})
 
 	it('loads installed tool modules from the workspace', () => {
-		expect(loadWorkspaceModule(ROOT, 'typescript').version).toMatch(/^\d+\.\d+\.\d+/)
-		expect(loadWorkspaceModule(ROOT, 'vitest/node').createVitest).toBeTypeOf('function')
+		expect(loadWorkspaceVitest(ROOT).createVitest).toBeTypeOf('function')
 	})
 
 	it('reads installed manifests and refuses absent packages', () => {
@@ -648,9 +674,15 @@ describe('server path helpers', () => {
 		})
 	})
 
+	// A package publishes its binaries under keys of its own choosing, so the default reading and the
+	// named one are both proven here: `oxlint` publishes its own name, `typescript` publishes `tsc`
+	// and nothing under `typescript`.
 	it('resolves package binaries and refuses a package without the requested key', () => {
 		expect(resolveWorkspaceBinary(ROOT, 'oxlint')).toContain(
 			join('node_modules', 'oxlint', 'bin', 'oxlint'),
+		)
+		expect(resolveWorkspaceBinary(ROOT, 'typescript', 'tsc')).toContain(
+			join('node_modules', 'typescript', 'bin', 'tsc'),
 		)
 		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
 			'typescript does not publish the typescript binary',
@@ -730,33 +762,27 @@ describe('server digest leaves', () => {
 		).toStrictEqual(['first', 'second', 'third'])
 	})
 
+	// One commit checked out at two absolute roots resolves to two option records that differ in
+	// every path they carry, which is the difference the rewrite exists to remove. The records are
+	// written here rather than read back from a compiler, so the fixture states the difference the
+	// assertion reads instead of re-deriving it the way the subject does.
 	it('digests one project identically at two absolute workspace roots', () => {
 		const scratch = createScratch({ prefix: 'probe-digest-' })
 		try {
-			const typescript = loadWorkspaceModule(ROOT, 'typescript')
-			const project =
-				'{"compilerOptions":{"strict":true,"rootDir":"./src","outDir":"./dist"},"files":["./src/value.ts"]}\n'
-			const roots = ['first', 'second'].map((name) => {
-				scratch.write(`${name}/tsconfig.json`, project)
-				scratch.write(`${name}/src/value.ts`, 'export const VALUE = 1\n')
-				return resolve(scratch.path, name)
-			})
-			const parsed = roots.map((root) => {
-				const file = resolve(root, 'tsconfig.json')
-				const config = typescript.readConfigFile(file, typescript.sys.readFile)
-				return typescript.parseJsonConfigFileContent(
-					config.config,
-					typescript.sys,
-					root,
-					undefined,
-					file,
-				).options
-			})
-			const [first, second] = parsed
+			const roots = ['first', 'second'].map((name) => resolve(scratch.path, name))
 			const [firstRoot, secondRoot] = roots
-			if (first === undefined || second === undefined) throw new Error('The projects did not parse')
 			if (firstRoot === undefined || secondRoot === undefined) {
 				throw new Error('The scratch roots were not created')
+			}
+			const first = {
+				strict: true,
+				rootDir: resolve(firstRoot, 'src'),
+				outDir: resolve(firstRoot, 'dist'),
+			}
+			const second = {
+				strict: true,
+				rootDir: resolve(secondRoot, 'src'),
+				outDir: resolve(secondRoot, 'dist'),
 			}
 			// A root containing neither checkout leaves every absolute member absolute, so this is
 			// what the digest reads when the normalization is not applied.
@@ -778,6 +804,87 @@ describe('server digest leaves', () => {
 		expect(computeDigest(ROOT, { first: 1, second: 2 })).toBe(
 			computeDigest(ROOT, { second: 2, first: 1 }),
 		)
+	})
+})
+
+describe('server workspace walk', () => {
+	it('collects only a regular file outside the excluded trees and no symbolic link', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-walk-' })
+		try {
+			scratch.write('src/a.ts', 'export const A = 1\n')
+			scratch.write('.git/HEAD', 'ref: refs/heads/main\n')
+			scratch.write('dist/a.js', 'export const A = 1\n')
+			scratch.write('node_modules/pkg/index.js', 'module.exports = {}\n')
+			scratch.write('tmp/type/1-x/b.ts', 'export const B = 1\n')
+			try {
+				scratch.link('src/link.ts', resolve(scratch.path, 'src/a.ts'))
+			} catch {}
+			// Whether or not this host could create the link, the exact result below excludes it: a
+			// created link that survived the walk would break the strict equality.
+			const files = collectWorkspaceFiles(scratch.path)
+				.map((file) => relativeWorkspaceFile(scratch.path, file))
+				.sort()
+			expect(files).toStrictEqual(['src/a.ts'])
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
+
+describe('scanDiagnostics', () => {
+	it('reads a carriage-return-separated text the same as its newline twin', () => {
+		const lf = 'src/a.ts(1,1): error TS2322: first.\nsrc/b.ts(2,2): error TS2323: second.'
+		const crlf = lf.replaceAll('\n', '\r\n')
+		expect(scanDiagnostics(crlf)).toStrictEqual(scanDiagnostics(lf))
+	})
+
+	it('lowers the one-based line and column to zero-based over three located lines', () => {
+		const text = [
+			'src/a.ts(1,7): error TS1127: Invalid character.',
+			'src/a.ts(1,10): error TS1127: Invalid character.',
+			'src/a.ts(1,12): error TS1127: Invalid character.',
+		].join('\n')
+		expect(
+			scanDiagnostics(text).map((diagnostic) => diagnostic.range?.start.character),
+		).toStrictEqual([6, 9, 11])
+	})
+
+	it('joins two indented elaboration lines into a located diagnostic message', () => {
+		const text = [
+			"src/a.ts(1,1): error TS2322: Type 'string' is not assignable to type 'number'.",
+			"  Type 'string' is not assignable to type 'number'.",
+			'    at position 1',
+		].join('\n')
+		const [diagnostic] = scanDiagnostics(text)
+		expect(diagnostic?.message).toBe(
+			"Type 'string' is not assignable to type 'number'.\n  Type 'string' is not assignable to type 'number'.\n    at position 1",
+		)
+	})
+
+	it('joins an indented elaboration line into an unlocated diagnostic message', () => {
+		const text = [
+			'error TS18002: The files list in config file is empty.',
+			'  no inputs matched',
+		].join('\n')
+		const [diagnostic] = scanDiagnostics(text)
+		expect(diagnostic?.message).toBe('The files list in config file is empty.\n  no inputs matched')
+	})
+
+	it('reads a warning line as a diagnostic', () => {
+		expect(
+			scanDiagnostics('src/a.ts(1,1): warning TS6133: value is declared but never used.'),
+		).toStrictEqual([
+			{
+				path: 'src/a.ts',
+				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+				message: 'value is declared but never used.',
+			},
+		])
+	})
+
+	it('yields no record for a line naming neither a diagnostic nor an elaboration', () => {
+		const text = ['Version 6.0.3', ' at Object.<anonymous> (/x.js:1:1)'].join('\n')
+		expect(scanDiagnostics(text)).toStrictEqual([])
 	})
 })
 

@@ -1,7 +1,7 @@
-import type { Stage } from '@src/core'
-import type { ListenerCapture, WorkspaceManifest } from './types.js'
+import type { Issue, Stage } from '@src/core'
+import type { Diagnostic, ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
-import type * as TypeScript from 'typescript'
+import type { Dirent } from 'node:fs'
 import type * as VitestNode from 'vitest/node'
 import {
 	closeSync,
@@ -10,16 +10,17 @@ import {
 	lstatSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	statSync,
 	writeFileSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { attempt, compileGuard, isArray, isRecord } from '@orkestrel/contract'
-import { CLAIM_SHAPE, ProbeError, isDraft } from '@src/core'
+import { CLAIM_SHAPE, ProbeError, TYPE_MIRROR, isDraft } from '@src/core'
 
 /**
  * Rewrites one path into the forward-slash spelling this package compares and reports paths in.
@@ -354,6 +355,62 @@ export function relativeWorkspaceMessage(workspace: string, message: string): st
 }
 
 /**
+ * Scans the plain-text output of one compiler run into the diagnostics it reported.
+ *
+ * @remarks
+ * Reads the shape `tsc --pretty false` prints: `path(line,column): error TSnnnn: message` for a
+ * diagnostic about a file, and `error TSnnnn: message` for one about a project. A line that carries
+ * neither prefix and begins with whitespace is an elaboration of the diagnostic above it and joins
+ * that message with a newline; any other line is skipped, so a runtime's own failure text yields no
+ * diagnostic and a caller reads that as the fault it is. The compiler counts lines and columns from
+ * one and columns in UTF-16 code units, so each location is lowered to the zero-based UTF-16 point
+ * `Diagnostic.range` fixes and `end` resolves to `start`, which is the extent this output carries.
+ * A warning reads as a diagnostic, because the workspace's own gate reports it the same way. The
+ * `TS\d+` token that follows `error` or `warning` is what recognizes the line; nothing is captured
+ * from it, because `Diagnostic` carries no field for it.
+ *
+ * @param text - The compiler's output
+ * @returns One record per reported diagnostic, in the compiler's own order
+ *
+ * @example
+ * ```ts
+ * scanDiagnostics("src/a.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.")
+ * // [{ path: 'src/a.ts', range: { start: { line: 0, character: 13 }, end: { line: 0, character: 13 } }, message: "Type 'string' is not assignable to type 'number'." }]
+ * scanDiagnostics('error TS5058: The specified path does not exist.')
+ * // [{ message: 'The specified path does not exist.' }]
+ * ```
+ */
+export function scanDiagnostics(text: string): readonly Diagnostic[] {
+	const diagnostics: Diagnostic[] = []
+	for (const line of text.split(/\r\n|\n/)) {
+		const located = /^(.+)\((\d+),(\d+)\): (?:error|warning) TS\d+: (.*)$/u.exec(line)
+		if (located !== null) {
+			const row = Number.parseInt(located[2] ?? '1', 10) - 1
+			const column = Number.parseInt(located[3] ?? '1', 10) - 1
+			const point = { line: row, character: column }
+			diagnostics.push({
+				path: normalizePath(located[1] ?? ''),
+				range: { start: point, end: point },
+				message: located[4] ?? '',
+			})
+			continue
+		}
+		const bare = /^(?:error|warning) TS\d+: (.*)$/u.exec(line)
+		if (bare !== null) {
+			diagnostics.push({ message: bare[1] ?? '' })
+			continue
+		}
+		const previous = diagnostics.at(-1)
+		if (previous === undefined || !/^\s+\S/u.test(line)) continue
+		diagnostics[diagnostics.length - 1] = {
+			...previous,
+			message: `${previous.message}\n${line}`,
+		}
+	}
+	return diagnostics
+}
+
+/**
  * Resolves one installed module from the target workspace.
  *
  * @param workspace - The target workspace root
@@ -383,36 +440,35 @@ export function resolveWorkspaceModule(workspace: string, specifier: string): st
 }
 
 /**
- * Loads one installed tool module from a target workspace.
+ * Loads the installed `vitest/node` module from a target workspace.
+ *
+ * @remarks
+ * The only tool this package drives in process. The compiler is a process this package spawns
+ * rather than a module it loads, so `typescript` is resolved through {@link resolveWorkspaceBinary}
+ * instead.
  *
  * @param workspace - The target workspace root
- * @param specifier - The module specifier to load
- * @returns The installed module
- * @throws When the workspace cannot load the module
+ * @returns The installed `vitest/node` module
+ * @throws When the workspace cannot load `vitest/node`
  *
  * @example
  * ```ts
- * const typescript = loadWorkspaceModule(process.cwd(), 'typescript')
- * console.log(typescript.version)
+ * const vitest = loadWorkspaceVitest(process.cwd())
+ * typeof vitest.createVitest === 'function' // true
  * ```
  */
-export function loadWorkspaceModule(workspace: string, specifier: 'typescript'): typeof TypeScript
-export function loadWorkspaceModule(workspace: string, specifier: 'vitest/node'): typeof VitestNode
-export function loadWorkspaceModule(
-	workspace: string,
-	specifier: 'typescript' | 'vitest/node',
-): typeof TypeScript | typeof VitestNode {
+export function loadWorkspaceVitest(workspace: string): typeof VitestNode {
 	const outcome = attempt(() => {
 		const require = createRequire(resolve(workspace, 'package.json'))
-		return specifier === 'typescript' ? require('typescript') : require('vitest/node')
+		return require('vitest/node')
 	})
 	if (outcome.success) return outcome.value
 	const error = outcome.error
 	const missing = readFaultCode(error) === 'MODULE_NOT_FOUND'
-	throw new ProbeError(`The workspace cannot load ${specifier}`, {
+	throw new ProbeError('The workspace cannot load vitest/node', {
 		origin: 'workspace',
 		code: missing ? 'missing' : 'malformed',
-		context: { name: specifier },
+		context: { name: 'vitest/node' },
 		cause: error,
 	})
 }
@@ -479,20 +535,26 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 /**
  * Resolves a package's portable JavaScript binary from the target workspace.
  *
+ * @remarks
+ * A package publishes its binaries under keys of its own choosing, and that key is often not the
+ * package name: `typescript` publishes `tsc`. Name the key as `command` wherever the two differ.
+ * Default: the package name.
+ *
  * @param workspace - The target workspace root
- * @param name - The installed package name and binary key
+ * @param name - The installed package name
+ * @param command - The `bin` key to read. Default: `name`
  * @returns The absolute JavaScript entry named by the package's `bin` field
- * @throws When the package does not publish a binary under the requested name
+ * @throws When the package does not publish a binary under the requested key
  *
  * @example
  * ```ts
  * relativeWorkspaceFile(process.cwd(), resolveWorkspaceBinary(process.cwd(), 'oxlint'))
  * // 'node_modules/oxlint/bin/oxlint'
- * resolveWorkspaceBinary(process.cwd(), 'typescript')
- * // throws: typescript does not publish the typescript binary
+ * relativeWorkspaceFile(process.cwd(), resolveWorkspaceBinary(process.cwd(), 'typescript', 'tsc'))
+ * // 'node_modules/typescript/bin/tsc'
  * ```
  */
-export function resolveWorkspaceBinary(workspace: string, name: string): string {
+export function resolveWorkspaceBinary(workspace: string, name: string, command = name): string {
 	const manifest = readWorkspaceManifest(workspace, name)
 	const bin = manifest.contents.bin
 	if (bin === undefined) {
@@ -503,16 +565,16 @@ export function resolveWorkspaceBinary(workspace: string, name: string): string 
 		})
 	}
 	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
-	if (!isRecord(bin) || !(name in bin)) {
-		throw new ProbeError(`${name} does not publish the ${name} binary`, {
+	if (!isRecord(bin) || !(command in bin)) {
+		throw new ProbeError(`${name} does not publish the ${command} binary`, {
 			origin: 'workspace',
 			code: 'missing',
 			context: { name },
 		})
 	}
-	const entry = bin[name]
+	const entry = bin[command]
 	if (typeof entry !== 'string') {
-		throw new ProbeError(`${name} publishes an invalid ${name} binary`, {
+		throw new ProbeError(`${name} publishes an invalid ${command} binary`, {
 			origin: 'workspace',
 			code: 'malformed',
 			context: { name, value: entry },
@@ -619,6 +681,35 @@ export function buildRevisionPath(workspace: string, path: string, revision: str
 }
 
 /**
+ * Filters one issue list to the distinct issues it carries, in the order they arrived.
+ *
+ * @remarks
+ * A stage that reads one candidate through more than one tool run reports that candidate's
+ * diagnostic once per run. Two issues are the same issue when their party, path, message, and range
+ * all agree, because those are every value an issue carries.
+ *
+ * @param issues - The issues to filter
+ * @returns The distinct issues, in the order the list carried them
+ *
+ * @example
+ * ```ts
+ * const issue: Issue = { origin: 'claimant', path: 'src/core/greeting.ts', message: 'not assignable' }
+ * filterUniqueIssues([issue, { ...issue }]).length // 1
+ * ```
+ */
+export function filterUniqueIssues(issues: readonly Issue[]): readonly Issue[] {
+	const seen = new Set<string>()
+	const distinct: Issue[] = []
+	for (const issue of issues) {
+		const key = JSON.stringify([issue.origin, issue.path, issue.message, issue.range])
+		if (seen.has(key)) continue
+		seen.add(key)
+		distinct.push(issue)
+	}
+	return distinct
+}
+
+/**
  * Reports whether a path is a workspace module Vitest can cache.
  *
  * @param path - The candidate file path
@@ -632,6 +723,77 @@ export function buildRevisionPath(workspace: string, path: string, revision: str
  */
 export function matchesWorkspaceModule(path: string): boolean {
 	return /\.(?:[cm]?[jt]sx?|vue|json)$/.test(path)
+}
+
+/**
+ * Reports whether the host that wrote one file is still running.
+ *
+ * @remarks
+ * Signal 0 delivers nothing and reports reachability alone. A process this one may not signal
+ * reports `EPERM` and reads as running, and a non-positive identity names a process group rather
+ * than a process, so both answer true: the safe direction is to keep a file this package cannot
+ * account for.
+ *
+ * @param id - The process id a file's own revision names
+ * @returns True if that process is running or cannot be judged; false otherwise
+ *
+ * @example
+ * ```ts
+ * matchesLiveProcess(process.pid) // true
+ * matchesLiveProcess(0) // true
+ * ```
+ */
+export function matchesLiveProcess(id: number): boolean {
+	if (!Number.isSafeInteger(id) || id <= 0) return true
+	try {
+		process.kill(id, 0)
+		return true
+	} catch (error) {
+		return readFaultCode(error) === 'EPERM'
+	}
+}
+
+/**
+ * Collects every regular file a target workspace holds, skipping the trees no inspection reads.
+ *
+ * @remarks
+ * Skips a directory named `.git`, `dist`, or `node_modules` at any depth, and the directory
+ * {@link TYPE_MIRROR} names, which would otherwise carry this package's own mirror into the walk. A
+ * directory this host cannot list is skipped rather than raised, so one unreadable directory in a
+ * consumer's tree is not a reason to refuse the whole walk. A symbolic link is not carried, whether
+ * it names a file or a directory, so a file reached only through one is absent from the result; a
+ * `Dirent` that is neither a directory nor a regular file is skipped the same way.
+ *
+ * @param workspace - The target workspace root
+ * @returns The absolute path of every regular file the walk found
+ *
+ * @example
+ * ```ts
+ * collectWorkspaceFiles(process.cwd()).some((path) => path.endsWith('package.json')) // true
+ * ```
+ */
+export function collectWorkspaceFiles(workspace: string): readonly string[] {
+	const excluded = normalizePath(resolveWorkspaceFile(workspace, TYPE_MIRROR))
+	const files: string[] = []
+	const directories = [resolve(workspace)]
+	while (directories.length > 0) {
+		const directory = directories.pop()
+		if (directory === undefined) break
+		let entries: readonly Dirent[] = []
+		try {
+			entries = readdirSync(directory, { withFileTypes: true })
+		} catch {}
+		for (const entry of entries) {
+			if (entry.name === '.git' || entry.name === 'dist' || entry.name === 'node_modules') continue
+			const path = join(directory, entry.name)
+			if (entry.isDirectory()) {
+				if (normalizePath(path) !== excluded) directories.push(path)
+				continue
+			}
+			if (entry.isFile()) files.push(path)
+		}
+	}
+	return files
 }
 
 /**
@@ -661,9 +823,9 @@ export function describeUnknown(value: unknown): string {
 }
 
 /**
- * Guards one resident-stage operation with the stage failure contract.
+ * Guards one stage operation with the stage failure contract.
  *
- * @param stage - The resident stage serving the operation
+ * @param stage - The stage serving the operation
  * @param operation - The operation to settle
  * @returns The operation's fulfilled value
  * @throws The original `ProbeError`, or an instrument-owned malformed failure retaining the cause
@@ -739,12 +901,12 @@ export function findRefusedPaths(value: unknown): readonly string[] {
  * sorts every record's keys.
  *
  * @remarks
- * A parsed TypeScript project carries the absolute root it was parsed at, so the same commit
- * checked out at two paths produces two values that describe one configuration. Rewriting those
- * members makes the value portable and stops a host path leaking into anything derived from it. A
- * path that escapes the workspace is left as it stands, because rewriting it would name a file
- * outside the tree by a relative spelling. Key order is the parser's, not the configuration's, so
- * sorting removes a difference that means nothing.
+ * `tsc --showConfig` spells a path relative to the project file, so a printed record carries an
+ * absolute path only where a project itself declares one. Rewriting a contained absolute path to
+ * its relative form keeps one commit checked out at two roots reading to one digest. A path that
+ * escapes the workspace is left as it stands, because rewriting it would name a file outside the
+ * tree by a relative spelling. Key order is the compiler's own and it differs between the supported
+ * majors, so sorting removes a difference that means nothing.
  *
  * @param workspace - The target workspace root
  * @param value - The value to rewrite

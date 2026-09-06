@@ -1,4 +1,4 @@
-import type { OverlayInterface, OverlayOptions } from './types.js'
+import type { OverlayInterface } from './types.js'
 import { randomUUID } from 'node:crypto'
 import { normalizePath } from './helpers.js'
 
@@ -12,14 +12,12 @@ import { normalizePath } from './helpers.js'
  * is what makes a resident tool re-read a path this overlay holds, so two inspections that supply
  * different text for one path never share a cached answer.
  *
- * This overlay matches a lookup key the way the host its stage declares to its tool matches file
- * names. A host that resolves two spellings of one file name to one file leaves the tool holding
- * whichever spelling it met first — the disk one, where the file is on disk — and the tool asks
- * under that, so an overlay matching keys exactly answers nothing and the tool reads the committed
- * file instead. Mint the overlay with the sensitivity the stage declares, and one reading decides
- * both. The recorded spelling is what `paths` reports and what `covers` matches a directory
- * against, so a folded key never reaches the paths a tool is handed and containment stays an exact
- * comparison.
+ * A lookup key matches a recorded path exactly, after both pass through `normalizePath`, so a tool
+ * that reports its own paths with backslashes still reaches a candidate recorded with forward
+ * slashes. Case is never folded: the recorded spelling is what `paths` reports, what `covers`
+ * compares a directory against, and what `text` answers under. A stage whose tool resolves two
+ * spellings of one file name to one file therefore reports the path its tool served rather than
+ * matching the two spellings here.
  *
  * @example
  * ```ts
@@ -31,40 +29,29 @@ import { normalizePath } from './helpers.js'
  */
 export class Overlay implements OverlayInterface {
 	readonly #revision = randomUUID()
-	readonly #sensitive: boolean
-	readonly #candidates = new Map<string, readonly [path: string, text: string]>()
-
-	/**
-	 * Creates an empty candidate set under a fresh identity.
-	 *
-	 * @param options - Construction options
-	 */
-	constructor(options: OverlayOptions = {}) {
-		this.#sensitive = options.sensitive ?? true
-	}
+	readonly #candidates = new Map<string, string>()
 
 	get revision(): string {
 		return this.#revision
 	}
 
 	get paths(): readonly string[] {
-		return [...this.#candidates.values()].map(([path]) => path)
+		return [...this.#candidates.keys()]
 	}
 
 	/**
 	 * Records one candidate's text against the absolute path it stands in for.
 	 *
 	 * @remarks
-	 * Recording a candidate under a path this overlay's own matching reads as one already recorded
-	 * replaces that candidate, the way one file holds one text.
+	 * Recording a candidate under a path this overlay already holds replaces that candidate, the way
+	 * one file holds one text.
 	 *
 	 * @param path - The absolute path the candidate replaces
 	 * @param text - The candidate's full contents
 	 * @returns Nothing
 	 */
 	set(path: string, text: string): void {
-		const recorded = normalizePath(path)
-		this.#candidates.set(this.#key(recorded), [recorded, text])
+		this.#candidates.set(normalizePath(path), text)
 	}
 
 	/**
@@ -74,7 +61,7 @@ export class Overlay implements OverlayInterface {
 	 * @returns The recorded text, or `undefined` when this overlay holds no candidate there
 	 */
 	text(path: string): string | undefined {
-		return this.#candidates.get(this.#key(normalizePath(path)))?.[1]
+		return this.#candidates.get(normalizePath(path))
 	}
 
 	/**
@@ -84,16 +71,14 @@ export class Overlay implements OverlayInterface {
 	 * The answer is derived from the paths the overlay holds rather than stored, so it stops being
 	 * true exactly when the inspection that declared those candidates clears them. Both sides pass
 	 * through `normalizePath` first, because a tool that normalizes its own paths asks about a
-	 * directory in a spelling the recorded path may not share. Case is never folded here: this is a
-	 * containment comparison, and it reads the recorded spelling whatever an overlay minted for a
-	 * case-folding host matches its lookup keys by.
+	 * directory in a spelling the recorded path may not share.
 	 *
 	 * @param directory - The absolute directory path to check
 	 * @returns True if a candidate path sits beneath the directory; false otherwise
 	 */
 	covers(directory: string): boolean {
 		const base = `${normalizePath(directory).replace(/\/+$/, '')}/`
-		for (const [path] of this.#candidates.values()) {
+		for (const path of this.#candidates.keys()) {
 			if (path.startsWith(base)) return true
 		}
 		return false
@@ -106,12 +91,5 @@ export class Overlay implements OverlayInterface {
 	 */
 	clear(): void {
 		this.#candidates.clear()
-	}
-
-	// The host this overlay was minted for decides this and nothing else does. Lowercasing is the
-	// locale-independent `toLowerCase`, not the locale-sensitive form, so one candidate is not
-	// reachable on one machine's locale and lost on another's.
-	#key(path: string): string {
-		return this.#sensitive ? path : path.toLowerCase()
 	}
 }

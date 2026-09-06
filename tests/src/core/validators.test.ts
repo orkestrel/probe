@@ -48,7 +48,7 @@ describe('core guards', () => {
 		}
 		const project: Project = {
 			path: 'configs/src/tsconfig.core.json',
-			digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+			digest: 'd61f11b52460b1c6707cfac2c6078d59',
 		}
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
@@ -123,7 +123,7 @@ describe('core guards', () => {
 			toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
 			project: {
 				path: 'configs/src/tsconfig.core.json',
-				digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+				digest: 'd61f11b52460b1c6707cfac2c6078d59',
 			},
 			case: [check],
 			control: [check],
@@ -237,7 +237,7 @@ describe('core guards', () => {
 		const check: Check = { stage: 'lint', elapsed: 17, issues: [] }
 		const project: Project = {
 			path: 'configs/src/tsconfig.core.json',
-			digest: '3b674fdf121c85efb9ed1bab25ceeec8',
+			digest: 'd61f11b52460b1c6707cfac2c6078d59',
 		}
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',

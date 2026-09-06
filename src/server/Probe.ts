@@ -41,7 +41,7 @@ import { RuntimeStage } from './stages/RuntimeStage.js'
 import { TypeStage } from './stages/TypeStage.js'
 
 /**
- * Answers claims through resident TypeScript, Oxlint, and Vitest stages.
+ * Answers claims through its type, lint, and runtime stages.
  *
  * @remarks
  * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
@@ -81,7 +81,7 @@ export class Probe implements ProbeInterface {
 	#closing: Promise<void> | undefined
 
 	/**
-	 * Resolves the target toolchain and starts warming the resident stages.
+	 * Resolves the target toolchain and starts warming every stage.
 	 *
 	 * @param options - Workspace, deadline, and initial observation hooks
 	 */
@@ -297,7 +297,7 @@ export class Probe implements ProbeInterface {
 				files: [],
 				test: typeTest,
 				stage: 'type',
-				reason: 'the imported type changed after the resident type host cached it',
+				reason: 'the imported type changed on disk between the two inspections',
 			},
 		}
 		const runtimeClaim: Claim = {

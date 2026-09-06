@@ -73,7 +73,7 @@ export function formatCheck(check: Check): string {
  * @example
  * ```ts
  * formatProof(proven)
- * // 'receipt probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * // 'receipt probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
  * formatProof(disproven) // 'no receipt'
  * ```
  */
@@ -188,7 +188,7 @@ export function formatVerdict(verdict: Verdict): string {
  * @example
  * ```ts
  * computeReceipt(proven, 'type')
- * // 'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@3b674fdf121c85efb9ed1bab25ceeec8'
+ * // 'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
  * computeReceipt(proven, 'lint') // undefined
  * ```
  */
