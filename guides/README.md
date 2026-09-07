@@ -2,16 +2,9 @@
 
 ## By concept
 
-- Package
-  - Spec: [`probe.md`](probe.md)
-  - Source:
-    - [`src/core`](../src/core)
-    - [`src/server`](../src/server)
-    - [`src/bin`](../src/bin)
-  - Tests:
-    - [`tests/src/core`](../tests/src/core)
-    - [`tests/src/server`](../tests/src/server)
-    - [`tests/src/bin`](../tests/src/bin)
+| Concept | Spec                   | Source                                                                            | Tests                                                                                                                 |
+| ------- | ---------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Package | [`probe.md`](probe.md) | [`src/core`](../src/core), [`src/server`](../src/server), [`src/bin`](../src/bin) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server), [`tests/src/bin`](../tests/src/bin) |
 
 ## By directory
 

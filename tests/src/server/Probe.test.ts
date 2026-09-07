@@ -849,7 +849,7 @@ describe.sequential('probe', () => {
 				expect(expirations.calls).toStrictEqual([[claim]])
 				// The recovery claim runs every stage, and the runtime and type stages each walk the
 				// whole workspace. Removing the generated tree first leaves both walks small, so the
-				// recovery clears the same deadline the project resolution just exceeded.
+				// recovery clears the same deadline the project resolution exceeded.
 				scratch.remove('generated')
 				scratch.remove(project)
 				const served = await probe.prove({

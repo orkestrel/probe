@@ -216,7 +216,7 @@ export function killFixtureServer(scratch: ScratchInterface): void {
 	process.kill(readFixtureServer(scratch), 'SIGKILL')
 }
 
-/** The exit code and the ending signal a host reported for one child. */
+/** Holds the exit code and the ending signal a host reported for one child. */
 export interface Ending {
 	readonly code: number | null
 	readonly signal: string | null
@@ -329,12 +329,13 @@ export function probeRefusedTargets(): boolean {
 }
 
 /**
- * Whether this host refuses to create a file under a caller-supplied name it will not accept.
+ * Reports whether this host refuses to create a file under a caller-supplied name it will not
+ * accept.
  */
 export const REFUSED_RUNTIME_TARGETS: boolean = probeRefusedTargets()
 
 /**
- * Whether this host creates a directory link the workspace walker reads as a symbolic link.
+ * Reports whether this host creates a directory link the workspace walker reads as a symbolic link.
  *
  * @remarks `supportsDirectoryLinks` creates one junction, which is the call that lands on a host
  * withholding the privilege a plain symbolic link needs, and answers true only when the link reports
