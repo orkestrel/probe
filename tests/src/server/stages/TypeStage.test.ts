@@ -1083,6 +1083,22 @@ describe('type stage workspace faults', () => {
 		'reports a signal-ended check run with no diagnostic as an instrument fault',
 		{ timeout: 60_000 },
 		async () => {
+			// Windows reports this self-termination as an exit code; POSIX reports a signal.
+			// Ask the native child boundary which outcome this host exposes before asserting
+			// that TypeStage preserves it in the instrument diagnostic.
+			const termination = spawnSync(
+				process.execPath,
+				['-e', "process.kill(process.pid, 'SIGTERM')"],
+				{
+					encoding: 'utf8',
+					timeout: 5_000,
+					windowsHide: true,
+				},
+			)
+			expect(termination.error).toBeUndefined()
+			expect(termination.status).not.toBe(0)
+			expect(termination.stdout).toBe('')
+			expect(termination.stderr).toBe('')
 			const scratch = createScratch({ prefix: 'probe-type-instrument-signal-' })
 			scratch.write('package.json', '{"type":"module"}\n')
 			scratch.write(
@@ -1115,7 +1131,10 @@ describe('type stage workspace faults', () => {
 				expect(failure).toMatchObject({
 					origin: 'instrument',
 					code: 'malformed',
-					message: 'The compiler reported no diagnostic and was ended by a signal',
+					message:
+						termination.status === null
+							? 'The compiler reported no diagnostic and was ended by a signal'
+							: `The compiler reported no diagnostic and exited ${termination.status}`,
 				})
 			} finally {
 				const teardown = createTeardown()
