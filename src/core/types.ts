@@ -48,10 +48,15 @@ export interface Draft {
  * @example
  * ```ts
  * const subject: Case = {
- * 	files: [{ path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }],
+ * 	files: [
+ * 		{
+ * 			path: 'src/core/factories.ts',
+ * 			text: "export function createGreeting(): string {\n\treturn 'hi'\n}\n",
+ * 		},
+ * 	],
  * 	test: {
  * 		path: 'tmp/probe/greeting.test.ts',
- * 		text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 		text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 	},
  * }
  * ```
@@ -74,13 +79,18 @@ export interface Case {
  * @example
  * ```ts
  * const control: Control = {
- * 	files: [{ path: 'src/core/greeting.ts', text: "export const GREETING: number = 'hi'\n" }],
+ * 	files: [
+ * 		{
+ * 			path: 'src/core/factories.ts',
+ * 			text: "export function createGreeting(): number {\n\treturn 'hi'\n}\n",
+ * 		},
+ * 	],
  * 	test: {
  * 		path: 'tmp/probe/greeting.test.ts',
- * 		text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 		text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 	},
  * 	stage: 'type',
- * 	reason: 'a string literal assigned to a number must not compile',
+ * 	reason: 'a string returned as a number must not compile',
  * }
  * ```
  */
@@ -110,20 +120,30 @@ export interface Control extends Case {
  * const claim: Claim = {
  * 	project: 'configs/src/tsconfig.core.json',
  * 	case: {
- * 		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }],
+ * 		files: [
+ * 			{
+ * 				path: 'src/core/factories.ts',
+ * 				text: "export function createGreeting(): string {\n\treturn 'hi'\n}\n",
+ * 			},
+ * 		],
  * 		test: {
  * 			path: 'tmp/probe/greeting.test.ts',
- * 			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 	},
  * 	control: {
- * 		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING: number = 'hi'\n" }],
+ * 		files: [
+ * 			{
+ * 				path: 'src/core/factories.ts',
+ * 				text: "export function createGreeting(): number {\n\treturn 'hi'\n}\n",
+ * 			},
+ * 		],
  * 		test: {
  * 			path: 'tmp/probe/greeting.test.ts',
- * 			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+ * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 		stage: 'type',
- * 		reason: 'a string literal assigned to a number must not compile',
+ * 		reason: 'a string returned as a number must not compile',
  * 	},
  * }
  * ```

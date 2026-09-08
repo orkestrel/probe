@@ -53,10 +53,45 @@ import { TypeStage } from './stages/TypeStage.js'
  * claim costs that claim rather than the process. A failed boot is replaced the same way: the next
  * claim runs the controls again rather than inheriting a refusal.
  *
- * @example
+ * @example The claim that earns a receipt
  * ```ts
- * const probe = new Probe({ workspace: '/srv/checkout' })
+ * import type { Claim } from '@orkestrel/probe'
+ * import { Probe } from '@orkestrel/probe/server'
+ *
+ * const claim: Claim = {
+ * 	project: 'configs/src/tsconfig.core.json',
+ * 	case: {
+ * 		files: [
+ * 			{
+ * 				path: 'src/core/factories.ts',
+ * 				text: "export function createGreeting(): string {\n\treturn 'hi'\n}\n",
+ * 			},
+ * 		],
+ * 		test: {
+ * 			path: 'tmp/probe/greeting.test.ts',
+ * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
+ * 		},
+ * 	},
+ * 	control: {
+ * 		files: [
+ * 			{
+ * 				path: 'src/core/factories.ts',
+ * 				text: "export function createGreeting(): number {\n\treturn 'hi'\n}\n",
+ * 			},
+ * 		],
+ * 		test: {
+ * 			path: 'tmp/probe/greeting.test.ts',
+ * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
+ * 		},
+ * 		stage: 'type',
+ * 		reason: 'a string returned as a number must not compile',
+ * 	},
+ * }
+ *
+ * const probe = new Probe({ workspace: process.cwd() })
  * const verdict = await probe.prove(claim)
+ * verdict.digest // 'fcb88a2dee987b8673c1fc7107979470'
+ * verdict.receipt // 'probe:fcb88a2dee987b8673c1fc7107979470:type:typescript@6.0.3:oxlint@1.81.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
  * await probe.destroy()
  * ```
  */

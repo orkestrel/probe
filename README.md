@@ -1,13 +1,14 @@
 # @orkestrel/probe
 
-Prove a claim about a code change with type, lint, and runtime evidence, from the workspace's own
-TypeScript, Oxlint, and Vitest.
+> The claim prover for the `@orkestrel` line: an instrument that runs a claim's case and its
+> negative control through the workspace's own TypeScript, Oxlint, and Vitest, and returns a
+> `Verdict` carrying every issue — and a `receipt` when the case ran clean and the control broke
+> where it said it would.
 
 A claim carries a `case` — the edit you believe is correct — and a `control`, the same edit
-deliberately broken, naming the stage it must fail at. `prove` runs every stage over the case and
-the control and returns a `Verdict`. When the case ran clean and the control broke where it said it
-would, the verdict carries a `receipt`: a one-line token naming the claim, the stage, the tool
-versions, and the TypeScript project that judged the candidates.
+deliberately broken, naming the stage it must fail at. The `receipt` a proven claim earns is a
+one-line token naming the claim, the stage, the tool versions, and the TypeScript project that
+judged the candidates.
 
 Read [`guides/probe.md`](guides/probe.md) before you make a claim. It states the prerequisites, the
 receipt's verification method and its limits, and what a receipt does not vouch for.
@@ -47,20 +48,30 @@ import { Probe } from '@orkestrel/probe/server'
 const claim: Claim = {
 	project: 'configs/src/tsconfig.core.json',
 	case: {
-		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }],
+		files: [
+			{
+				path: 'src/core/factories.ts',
+				text: "export function createGreeting(): string {\n\treturn 'hi'\n}\n",
+			},
+		],
 		test: {
 			path: 'tmp/probe/greeting.test.ts',
-			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 	},
 	control: {
-		files: [{ path: 'src/core/greeting.ts', text: "export const GREETING: number = 'hi'\n" }],
+		files: [
+			{
+				path: 'src/core/factories.ts',
+				text: "export function createGreeting(): number {\n\treturn 'hi'\n}\n",
+			},
+		],
 		test: {
 			path: 'tmp/probe/greeting.test.ts',
-			text: "import { expect, test } from 'vitest'\nimport { GREETING } from '../../src/core/greeting.js'\ntest('greets', () => expect(GREETING).toBe('hi'))\n",
+			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 		stage: 'type',
-		reason: 'a string literal assigned to a number must not compile',
+		reason: 'a string returned as a number must not compile',
 	},
 }
 

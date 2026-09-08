@@ -1,5 +1,6 @@
 /**
- * Lists the stages a claim passes through, in the order a verdict reports them.
+ * Lists the stages a claim passes through, in the order a verdict reports them:
+ * `['type', 'lint', 'runtime']`.
  *
  * @remarks
  * One list feeds the `Stage` type, the wire shape, the stage guard, and the receipt computation, so
@@ -14,7 +15,8 @@
 export const PROBE_STAGES = Object.freeze(['type', 'lint', 'runtime'] as const)
 
 /**
- * Lists the parties that can own action on an issue or probe failure.
+ * Lists the parties that can own action on an issue or probe failure:
+ * `['claimant', 'workspace', 'instrument']`.
  *
  * @remarks
  * One list feeds the `Party` type and its guard, so a party cannot be admitted by one and refused
@@ -28,7 +30,8 @@ export const PROBE_STAGES = Object.freeze(['type', 'lint', 'runtime'] as const)
 export const PROBE_PARTIES = Object.freeze(['claimant', 'workspace', 'instrument'] as const)
 
 /**
- * Lists the conditions that can end a probe operation.
+ * Lists the conditions that can end a probe operation:
+ * `['refused', 'missing', 'malformed', 'destroyed', 'deadline']`.
  *
  * @remarks
  * One list feeds the code union and the error guard, so a condition cannot be constructed by one
@@ -49,7 +52,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
 ] as const)
 
 /**
- * Names the leading token every receipt carries.
+ * Names the leading token every receipt carries, `'probe'`.
  *
  * @remarks
  * A receipt travels away from the verdict that minted it — an agent pastes it into the promotion
@@ -65,7 +68,7 @@ export const PROBE_ERROR_CODES = Object.freeze([
 export const RECEIPT_PREFIX = 'probe'
 
 /**
- * Names the character joining a receipt's tokens.
+ * Names the character joining a receipt's tokens, `':'`.
  *
  * @remarks
  * A project path can contain this character, so the project field goes last and a reader rejoins
@@ -81,7 +84,8 @@ export const RECEIPT_PREFIX = 'probe'
 export const RECEIPT_SEPARATOR = ':'
 
 /**
- * Names the default inspection deadline a `Probe` applies when its construction omits one.
+ * Names the default inspection deadline a `Probe` applies when its construction omits one,
+ * 30,000 ms.
  *
  * @remarks
  * `ProbeOptions.deadline` overrides this value per instance.
@@ -94,8 +98,8 @@ export const RECEIPT_SEPARATOR = ':'
 export const PROBE_DEADLINE = 30_000
 
 /**
- * Names the bound the lint stage holds over the lifecycle exchanges the protocol leaves to the
- * server: the `initialize` reply warming waits for and the `shutdown` reply ending waits for.
+ * Names the 2,000 ms bound the lint stage holds over the lifecycle exchanges the protocol leaves
+ * to the server: the `initialize` reply warming waits for and the `shutdown` reply ending waits for.
  *
  * @remarks
  * It does not reach the diagnostics an inspection waits for, which the caller's own signal bounds.
@@ -113,7 +117,7 @@ export const LINT_DEADLINE = 2_000
 
 /**
  * Names the total enumerable key bound `ProbeServer` applies to inbound metadata and to produced
- * tool content alike.
+ * tool content alike, 4096.
  *
  * @remarks
  * `@orkestrel/mcp`'s default leaf is sized for metadata: a verdict costs 38 keys empty and 11 more
@@ -131,7 +135,8 @@ export const LINT_DEADLINE = 2_000
 export const PROBE_KEYS = 4096
 
 /**
- * Names the specification lifetime the runtime stage replaces its resident Vitest service at.
+ * Names the specification lifetime the runtime stage replaces its resident Vitest service at,
+ * 64 specifications.
  *
  * @remarks
  * Vite retains one unresolved URL for every fresh specification path, so an inspection that writes
@@ -151,7 +156,8 @@ export const PROBE_KEYS = 4096
 export const PROBE_SPECIFICATIONS = 64
 
 /**
- * Names the Vite plugin the runtime stage installs into a target workspace's Vitest configuration.
+ * Names the Vite plugin the runtime stage installs into a target workspace's Vitest
+ * configuration, `'orkestrel-runtime-overlay'`.
  *
  * @remarks
  * The stage declares the plugin under this name and reads a configured project's plugin list for
@@ -166,7 +172,8 @@ export const PROBE_SPECIFICATIONS = 64
 export const RUNTIME_PLUGIN = 'orkestrel-runtime-overlay'
 
 /**
- * Names the workspace-relative directory the type stage keeps its workspace mirror under.
+ * Names the workspace-relative directory the type stage keeps its workspace mirror under,
+ * `'tmp/type'`.
  *
  * @remarks
  * Each stage owns one directory beneath this one, named for the writing host's process id and a

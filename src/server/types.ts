@@ -160,6 +160,11 @@ export interface OverlayInterface {
 	 * @param path - The absolute path the candidate replaces
 	 * @param text - The candidate's full contents
 	 * @returns Nothing
+	 *
+	 * @example
+	 * ```ts
+	 * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+	 * ```
 	 */
 	set(path: string, text: string): void
 	/**
@@ -179,12 +184,24 @@ export interface OverlayInterface {
 	 *
 	 * @param directory - The absolute directory path to check
 	 * @returns True if a candidate path sits beneath the directory; false otherwise
+	 *
+	 * @example
+	 * ```ts
+	 * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+	 * const inside = overlay.covers('/srv/checkout/src/core')
+	 * ```
 	 */
 	covers(directory: string): boolean
 	/**
 	 * Releases every candidate.
 	 *
 	 * @returns Nothing
+	 *
+	 * @example
+	 * ```ts
+	 * overlay.clear()
+	 * const remaining = overlay.paths
+	 * ```
 	 */
 	clear(): void
 }
@@ -229,6 +246,12 @@ export interface StageInterface {
 	 * @param subject - The candidate drafts and test to inspect
 	 * @returns One outcome for this stage
 	 * @throws When the workspace's own tool cannot start or has already been destroyed
+	 *
+	 * @example
+	 * ```ts
+	 * const check = await stage.inspect(subject)
+	 * console.log(check.stage, check.elapsed, check.issues.length)
+	 * ```
 	 */
 	inspect(subject: Case): Promise<Check>
 	/**
@@ -272,6 +295,11 @@ export interface TypeStageInterface extends StageInterface {
 	 * @returns One outcome for this stage
 	 * @throws When the workspace refuses the mirror, when a project the run reads is malformed, or
 	 * when the stage has already been destroyed
+	 *
+	 * @example
+	 * ```ts
+	 * const check = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
+	 * ```
 	 */
 	inspect(subject: Case, project?: string): Promise<Check>
 	/**
@@ -281,6 +309,12 @@ export interface TypeStageInterface extends StageInterface {
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
 	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the
 	 * stage has already been destroyed
+	 *
+	 * @example
+	 * ```ts
+	 * const project = await stage.resolve('configs/src/tsconfig.core.json')
+	 * console.log(project.path, project.digest)
+	 * ```
 	 */
 	resolve(project: string): Promise<Project>
 }
@@ -313,6 +347,11 @@ export interface LintStageInterface extends StageInterface {
 	 * @returns One outcome for this stage
 	 * @throws When the caller supplies no bound, when the resident language server cannot start, or
 	 * when the stage has already been destroyed
+	 *
+	 * @example
+	 * ```ts
+	 * const check = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
+	 * ```
 	 */
 	inspect(subject: Case, options?: InspectionOptions): Promise<Check>
 }
@@ -363,6 +402,12 @@ export interface ProbeServerInterface {
 	 *
 	 * @returns Nothing
 	 * @throws When this call comes after teardown begins
+	 *
+	 * @example
+	 * ```ts
+	 * const server = new ProbeServer({ workspace: process.cwd() })
+	 * server.start()
+	 * ```
 	 */
 	start(): void
 	/**
