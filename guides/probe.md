@@ -358,6 +358,11 @@ The diagnostic's own path is what separates the two, not the compiler's exit cod
 majors disagree on that code, and a run reporting a candidate's type error and a run reporting a
 malformed project exit alike.
 
+A compiler that ends without diagnostics and without a successful exit raises an instrument
+fault. Its message preserves the host's reported termination: a numeric exit code when present,
+or a signal ending when no code was reported. A child sending itself `SIGTERM` can be reported as
+a numeric exit on Windows, so the diagnostic does not infer a POSIX signal from the requested action.
+
 **Every other diagnostic the run reported is a claimant issue**, whichever file it names. A draft
 replaces the file it names, so a consumer of that path is judged against the draft's text and its
 diagnostic is the draft's doing. The consequence is worth stating plainly: a workspace whose own
@@ -527,6 +532,10 @@ The server answers the handshake era and the current revision together, so a cli
 every `ProbeOptions` member for it, because `start()` seizes this process's standard input and
 output: a host that starts one has given the process to it. `destroy()` gives the process back and
 tears the probe down with it.
+
+A handshake-era `tools/call` may carry `_meta.progressToken`, including `0` or an empty string.
+The token does not change the verdict or its receipt. Probe emits no progress reports of its own;
+the call still completes with its result when the claim finishes.
 
 **A successful `tools/call` answers with the `Verdict` record and its rendered text together.** The
 result carries the record in `structuredContent` and a single `content` entry of `type: 'text'`
