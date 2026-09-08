@@ -96,10 +96,13 @@ describe.sequential('probe', () => {
 				path: 'tmp/probe/probe-receipt.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 			}
-			const clean = { path: 'src/core/probe-receipt.ts', text: "export const VALUE = 'ok'\n" }
+			const clean = {
+				path: 'src/core/probe-receipt/helpers.ts',
+				text: "export function value(): string {\n\treturn 'ok'\n}\n",
+			}
 			const broken = {
-				path: 'src/core/probe-receipt.ts',
-				text: "export const VALUE: number = 'bad'\n",
+				path: 'src/core/probe-receipt/helpers.ts',
+				text: "export function value(): number {\n\treturn 'bad'\n}\n",
 			}
 			const skipped = {
 				path: 'tmp/probe/probe-skipped.test.ts',
@@ -113,8 +116,8 @@ describe.sequential('probe', () => {
 			// Nothing about this control is a mutation of its case, which is the pairing the guide says
 			// probe admits and the reader judges.
 			const foreign = {
-				path: 'src/core/probe-receipt-foreign.ts',
-				text: "export const FOREIGN: number = 'bad'\n",
+				path: 'src/core/probe-receipt-foreign/helpers.ts',
+				text: "export function value(): number {\n\treturn 'bad'\n}\n",
 			}
 			const foreignTest = {
 				path: 'tmp/probe/probe-foreign.test.ts',
@@ -220,7 +223,12 @@ describe.sequential('probe', () => {
 				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('tmp/probe/.keep', '')
-			const files = [{ path: 'src/core/identical.ts', text: "export const VALUE = 'ok'\n" }]
+			const files = [
+				{
+					path: 'src/core/identical.ts',
+					text: "export function value(): string {\n\treturn 'ok'\n}\n",
+				},
+			]
 			const test = {
 				path: 'tmp/probe/identical.test.ts',
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -264,7 +272,12 @@ describe.sequential('probe', () => {
 						project: 'tsconfig.json',
 						case: { files, test },
 						control: {
-							files: [{ path: 'src/core/identical.ts', text: "export const VALUE = 'Ok'\n" }],
+							files: [
+								{
+									path: 'src/core/identical.ts',
+									text: "export function value(): string {\n\treturn 'Ok'\n}\n",
+								},
+							],
 							test,
 							stage: 'type',
 							reason: 'the draft names another value',
@@ -328,12 +341,20 @@ describe.sequential('probe', () => {
 				const verdict = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
 					case: {
-						files: [{ path: 'src/core/probe-elapsed.ts', text: "export const VALUE = 'ok'\n" }],
+						files: [
+							{
+								path: 'src/core/probe-elapsed/helpers.ts',
+								text: "export function value(): string {\n\treturn 'ok'\n}\n",
+							},
+						],
 						test,
 					},
 					control: {
 						files: [
-							{ path: 'src/core/probe-elapsed.ts', text: "export const VALUE: number = 'bad'\n" },
+							{
+								path: 'src/core/probe-elapsed/helpers.ts',
+								text: "export function value(): number {\n\treturn 'bad'\n}\n",
+							},
 						],
 						test,
 						stage: 'type',
@@ -363,14 +384,24 @@ describe.sequential('probe', () => {
 			const verdict = await probe.prove({
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [{ path: 'src/core/toolchain.ts', text: "export const VALUE = 'ok'\n" }],
+					files: [
+						{
+							path: 'src/core/toolchain/helpers.ts',
+							text: "export function value(): string {\n\treturn 'ok'\n}\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/toolchain.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				},
 				control: {
-					files: [{ path: 'src/core/toolchain.ts', text: "export const VALUE: number = 'bad'\n" }],
+					files: [
+						{
+							path: 'src/core/toolchain/helpers.ts',
+							text: "export function value(): number {\n\treturn 'bad'\n}\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/toolchain.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -406,14 +437,19 @@ describe.sequential('probe', () => {
 				const verdict = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
 					case: {
-						files: [{ path: 'src/core/missing-runtime.ts', text: "export const VALUE = 'ok'\n" }],
+						files: [
+							{
+								path: 'src/core/missing-runtime/helpers.ts',
+								text: "export function value(): string {\n\treturn 'ok'\n}\n",
+							},
+						],
 						test: { path, text: "import { test } from 'vitest'\ntest('passes', () => {})\n" },
 					},
 					control: {
 						files: [
 							{
-								path: 'src/core/missing-runtime.ts',
-								text: "export const VALUE: number = 'bad'\n",
+								path: 'src/core/missing-runtime/helpers.ts',
+								text: "export function value(): number {\n\treturn 'bad'\n}\n",
 							},
 						],
 						test: {
@@ -598,14 +634,24 @@ describe.sequential('probe', () => {
 			const claim: Claim = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [{ path: 'src/core/exit-code.ts', text: "export const VALUE = 'ok'\n" }],
+					files: [
+						{
+							path: 'src/core/exit-code/helpers.ts',
+							text: "export function value(): string {\n\treturn 'ok'\n}\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/exit-code.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				},
 				control: {
-					files: [{ path: 'src/core/exit-code.ts', text: "export const VALUE: number = 'bad'\n" }],
+					files: [
+						{
+							path: 'src/core/exit-code/helpers.ts',
+							text: "export function value(): number {\n\treturn 'bad'\n}\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/exit-code.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -663,7 +709,12 @@ describe.sequential('probe', () => {
 			const ordinary: Claim = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [{ path: 'src/core/after-expiry.ts', text: "export const VALUE = 'ok'\n" }],
+					files: [
+						{
+							path: 'src/core/after-expiry/helpers.ts',
+							text: "export function value(): string {\n\treturn 'ok'\n}\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/after-expiry.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
@@ -671,7 +722,10 @@ describe.sequential('probe', () => {
 				},
 				control: {
 					files: [
-						{ path: 'src/core/after-expiry.ts', text: "export const VALUE: number = 'bad'\n" },
+						{
+							path: 'src/core/after-expiry/helpers.ts',
+							text: "export function value(): number {\n\treturn 'bad'\n}\n",
+						},
 					],
 					test: {
 						path: 'tmp/probe/after-expiry.test.ts',
@@ -740,7 +794,10 @@ describe.sequential('probe', () => {
 				reason: 'the candidate outruns the deadline the coordinator allows one stage',
 			},
 		}
-		const clean = { path: 'src/core/after-type-expiry.ts', text: "export const VALUE = 'ok'\n" }
+		const clean = {
+			path: 'src/core/after-type-expiry/helpers.ts',
+			text: "export function value(): string {\n\treturn 'ok'\n}\n",
+		}
 		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
 		try {
 			await expect(probe.prove(heavy)).rejects.toMatchObject({
@@ -758,7 +815,10 @@ describe.sequential('probe', () => {
 				case: { files: [clean], test },
 				control: {
 					files: [
-						{ path: 'src/core/after-type-expiry.ts', text: "export const VALUE: number = 'bad'\n" },
+						{
+							path: 'src/core/after-type-expiry/helpers.ts',
+							text: "export function value(): number {\n\treturn 'bad'\n}\n",
+						},
 					],
 					test,
 					stage: 'type',
@@ -803,12 +863,20 @@ describe.sequential('probe', () => {
 			const claim: Claim = {
 				project,
 				case: {
-					files: [{ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: 'src/core/project-deadline.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test,
 				},
 				control: {
 					files: [
-						varyDraft({ path: 'src/core/project-deadline.ts', text: 'export const VALUE = 1\n' }),
+						varyDraft({
+							path: 'src/core/project-deadline.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						}),
 					],
 					test,
 					stage: 'type',
@@ -856,7 +924,10 @@ describe.sequential('probe', () => {
 					project: 'tsconfig.json',
 					case: {
 						files: [
-							{ path: 'src/core/after-project-deadline.ts', text: 'export const VALUE = 1\n' },
+							{
+								path: 'src/core/after-project-deadline.ts',
+								text: 'export function value(): number {\n\treturn 1\n}\n',
+							},
 						],
 						test,
 					},
@@ -864,7 +935,7 @@ describe.sequential('probe', () => {
 						files: [
 							{
 								path: 'src/core/after-project-deadline.ts',
-								text: "export const VALUE: number = 'bad'\n",
+								text: "export function value(): number {\n\treturn 'bad'\n}\n",
 							},
 						],
 						test,
@@ -926,14 +997,19 @@ describe.sequential('probe', () => {
 			const second: Claim = {
 				project: projectB,
 				case: {
-					files: [{ path: 'src/core/project-serialization.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: 'src/core/project-serialization.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test,
 				},
 				control: {
 					files: [
 						varyDraft({
 							path: 'src/core/project-serialization.ts',
-							text: 'export const VALUE = 1\n',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
 						}),
 					],
 					test,
@@ -1009,7 +1085,10 @@ describe.sequential('probe', () => {
 						project: 'tsconfig.json',
 						case: {
 							files: [
-								{ path: 'src/core/stalled.ts', text: 'export const VALUE = 1 // PROBE_SILENT\n' },
+								{
+									path: 'src/core/stalled.ts',
+									text: 'export function value(): number {\n\treturn 1\n}\n// PROBE_SILENT\n',
+								},
 							],
 							test: {
 								path: 'tmp/probe/stalled-lint.test.ts',
@@ -1020,7 +1099,7 @@ describe.sequential('probe', () => {
 							files: [
 								varyDraft({
 									path: 'src/core/stalled.ts',
-									text: 'export const VALUE = 1 // PROBE_SILENT\n',
+									text: 'export function value(): number {\n\treturn 1\n}\n// PROBE_SILENT\n',
 								}),
 							],
 							test: {
@@ -1043,14 +1122,24 @@ describe.sequential('probe', () => {
 			const served = await probe.prove({
 				project: 'tsconfig.json',
 				case: {
-					files: [{ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: 'src/server/served.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test: {
 						path: 'tmp/probe/served-lint.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				},
 				control: {
-					files: [varyDraft({ path: 'src/server/served.ts', text: 'export const VALUE = 1\n' })],
+					files: [
+						varyDraft({
+							path: 'src/server/served.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						}),
+					],
 					test: {
 						path: 'tmp/probe/served-lint.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1106,14 +1195,24 @@ describe.sequential('probe', () => {
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
-					files: [{ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: 'src/core/rearmed.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test: {
 						path: 'tmp/probe/rearmed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				},
 				control: {
-					files: [varyDraft({ path: 'src/core/rearmed.ts', text: 'export const VALUE = 1\n' })],
+					files: [
+						varyDraft({
+							path: 'src/core/rearmed.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						}),
+					],
 					test: {
 						path: 'tmp/probe/rearmed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1238,7 +1337,12 @@ describe.sequential('probe', () => {
 			const claim: Claim = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [{ path: `src/core/string-${id}.ts`, text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: `src/core/string-${id}.ts`,
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test: {
 						path: `tests/src/core/string-${id}.test.ts`,
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1246,7 +1350,10 @@ describe.sequential('probe', () => {
 				},
 				control: {
 					files: [
-						{ path: `src/core/string-${id}.ts`, text: "export const VALUE: number = 'bad'\n" },
+						{
+							path: `src/core/string-${id}.ts`,
+							text: "export function value(): number {\n\treturn 'bad'\n}\n",
+						},
 					],
 					test: {
 						path: `tests/src/core/string-${id}.test.ts`,
@@ -1373,7 +1480,12 @@ describe.sequential('probe', () => {
 				probe.prove({
 					project: 'configs/src/missing.json',
 					case: {
-						files: [{ path: 'src/core/stage-failure.ts', text: 'export const VALUE = 1\n' }],
+						files: [
+							{
+								path: 'src/core/stage-failure.ts',
+								text: 'export function value(): number {\n\treturn 1\n}\n',
+							},
+						],
 						test: {
 							path: 'tmp/probe/stage-failure.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -1582,11 +1694,21 @@ describe.sequential('probe', () => {
 			const first: Claim = {
 				project: 'tsconfig.json',
 				case: {
-					files: [{ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' }],
+					files: [
+						{
+							path: 'src/core/order-first.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						},
+					],
 					test: passing,
 				},
 				control: {
-					files: [varyDraft({ path: 'src/core/order-first.ts', text: 'export const VALUE = 1\n' })],
+					files: [
+						varyDraft({
+							path: 'src/core/order-first.ts',
+							text: 'export function value(): number {\n\treturn 1\n}\n',
+						}),
+					],
 					test: passing,
 					stage: 'type',
 					reason: 'this control is deliberately clean',
@@ -1595,12 +1717,20 @@ describe.sequential('probe', () => {
 			const second: Claim = {
 				project: 'tsconfig.json',
 				case: {
-					files: [{ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }],
+					files: [
+						{
+							path: 'src/server/order-second.ts',
+							text: 'export function value(): number {\n\treturn 2\n}\n',
+						},
+					],
 					test: passing,
 				},
 				control: {
 					files: [
-						varyDraft({ path: 'src/server/order-second.ts', text: 'export const VALUE = 2\n' }),
+						varyDraft({
+							path: 'src/server/order-second.ts',
+							text: 'export function value(): number {\n\treturn 2\n}\n',
+						}),
 					],
 					test: passing,
 					stage: 'type',
@@ -1659,10 +1789,13 @@ describe.sequential('probe', () => {
 				path: `tmp/probe/probe-project-${id}.test.ts`,
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
-			const clean = { path: `src/core/probe-project-${id}.ts`, text: "export const VALUE = 'ok'\n" }
+			const clean = {
+				path: `src/core/probe-project-${id}/helpers.ts`,
+				text: "export function value(): string {\n\treturn 'ok'\n}\n",
+			}
 			const broken = {
-				path: `src/core/probe-project-${id}.ts`,
-				text: "export const VALUE: number = 'bad'\n",
+				path: `src/core/probe-project-${id}/helpers.ts`,
+				text: "export function value(): number {\n\treturn 'bad'\n}\n",
 			}
 			const claim: Claim = {
 				project: 'configs/src/tsconfig.core.json',
@@ -1730,12 +1863,12 @@ describe.sequential('probe', () => {
 			// Clean under a project without `strictNullChecks` and reported under the workspace's
 			// own, which is the whole of the attack: the caller picks what judges its case.
 			const candidate = {
-				path: `src/core/probe-forgery-${id}.ts`,
+				path: `src/core/probe-forgery-${id}/helpers.ts`,
 				text: 'export function measure(value?: string): number {\n\treturn value.length\n}\n',
 			}
 			const broken = {
-				path: `src/core/probe-forgery-${id}.ts`,
-				text: "export function measure(value?: string): number {\n\treturn value.length\n}\nexport const BAD: number = 'bad'\n",
+				path: `src/core/probe-forgery-${id}/helpers.ts`,
+				text: "export function measure(value?: string): number {\n\treturn value.length\n}\nexport function bad(): number {\n\treturn 'bad'\n}\n",
 			}
 			const claim: Claim = {
 				project: lax,
@@ -1765,7 +1898,7 @@ describe.sequential('probe', () => {
 				expect(workspace.case.flatMap((check) => check.issues)).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
-						path: `src/core/probe-forgery-${id}.ts`,
+						path: `src/core/probe-forgery-${id}/helpers.ts`,
 						message: "'value' is possibly 'undefined'.",
 					}),
 				])
@@ -1786,12 +1919,12 @@ describe.sequential('probe', () => {
 			text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 		}
 		const broken = {
-			path: `src/core/probe-claims-${id}.ts`,
-			text: "export const VALUE: number = 'bad'\n",
+			path: `src/core/probe-claims-${id}/helpers.ts`,
+			text: "export function value(): number {\n\treturn 'bad'\n}\n",
 		}
 		const claim = (text: string): Claim => ({
 			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ path: `src/core/probe-claims-${id}.ts`, text }], test },
+			case: { files: [{ path: `src/core/probe-claims-${id}/helpers.ts`, text }], test },
 			control: {
 				files: [broken],
 				test,
@@ -1801,8 +1934,12 @@ describe.sequential('probe', () => {
 		})
 		const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 		try {
-			const first = await probe.prove(claim("export const VALUE = 'first'\n"))
-			const second = await probe.prove(claim("export const VALUE = 'second'\n"))
+			const first = await probe.prove(
+				claim("export function value(): string {\n\treturn 'first'\n}\n"),
+			)
+			const second = await probe.prove(
+				claim("export function value(): string {\n\treturn 'second'\n}\n"),
+			)
 			const firstToken = first.receipt?.split(':') ?? []
 			const secondToken = second.receipt?.split(':') ?? []
 
@@ -1829,7 +1966,12 @@ describe.sequential('probe', () => {
 		const claim: Claim = {
 			project: 'configs/src/tsconfig.core.json',
 			case: {
-				files: [{ path: `src/core/probe-portable-${id}.ts`, text: "export const VALUE = 'ok'\n" }],
+				files: [
+					{
+						path: `src/core/probe-portable-${id}/helpers.ts`,
+						text: "export function value(): string {\n\treturn 'ok'\n}\n",
+					},
+				],
 				test: {
 					path: `tmp/probe/probe-portable-subject-${id}.test.ts`,
 					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -1838,8 +1980,8 @@ describe.sequential('probe', () => {
 			control: {
 				files: [
 					{
-						path: `src/core/probe-portable-${id}.ts`,
-						text: "export const VALUE: number = 'bad'\n",
+						path: `src/core/probe-portable-${id}/helpers.ts`,
+						text: "export function value(): number {\n\treturn 'bad'\n}\n",
 					},
 				],
 				test: {
