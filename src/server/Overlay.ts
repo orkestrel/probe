@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { normalizePath } from './helpers.js'
 
 /**
- * Holds the candidate drafts one inspection substitutes for the files a tool would read from disk.
+ * Implements `OverlayInterface` over a private map from normalized absolute path to candidate text,
+ * minting at construction the `revision` a resident tool caches its answers against.
  *
  * @remarks
  * One overlay belongs to one inspection: the inspection creates it, records every candidate it
@@ -22,8 +23,9 @@ import { normalizePath } from './helpers.js'
  * @example
  * ```ts
  * const overlay = new Overlay()
- * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
- * console.log(overlay.text('/srv/checkout/src/core/greeting.ts'))
+ * const path = '/srv/checkout/src/core/factories.ts'
+ * overlay.set(path, "export function createGreeting(): string {\n\treturn 'hi'\n}\n")
+ * console.log(overlay.text(path))
  * overlay.clear()
  * ```
  */

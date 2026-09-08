@@ -144,7 +144,8 @@ export interface Execution {
  * @example
  * ```ts
  * const overlay: OverlayInterface = new Overlay()
- * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+ * const path = '/srv/checkout/src/core/factories.ts'
+ * overlay.set(path, "export function createGreeting(): string {\n\treturn 'hi'\n}\n")
  * overlay.covers('/srv/checkout/src/core') // true
  * overlay.clear()
  * ```
@@ -163,7 +164,8 @@ export interface OverlayInterface {
 	 *
 	 * @example
 	 * ```ts
-	 * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
+	 * const path = '/srv/checkout/src/core/factories.ts'
+	 * overlay.set(path, "export function createGreeting(): string {\n\treturn 'hi'\n}\n")
 	 * ```
 	 */
 	set(path: string, text: string): void
@@ -187,8 +189,9 @@ export interface OverlayInterface {
 	 *
 	 * @example
 	 * ```ts
-	 * overlay.set('/srv/checkout/src/core/greeting.ts', "export const GREETING = 'hi'\n")
-	 * const inside = overlay.covers('/srv/checkout/src/core')
+	 * const path = '/srv/checkout/src/core/factories.ts'
+	 * overlay.set(path, "export function createGreeting(): string {\n\treturn 'hi'\n}\n")
+	 * overlay.covers('/srv/checkout/src/core') // true
 	 * ```
 	 */
 	covers(directory: string): boolean
@@ -200,7 +203,7 @@ export interface OverlayInterface {
 	 * @example
 	 * ```ts
 	 * overlay.clear()
-	 * const remaining = overlay.paths
+	 * overlay.paths // []
 	 * ```
 	 */
 	clear(): void

@@ -89,22 +89,25 @@ The failure type every served claim reports through, and its guard, from
 
 ### Shapes
 
-The blueprints behind both the published tool schema and the guard applied to an arriving call, from
-[`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON Schema. The
-schema is the wire contract's shape and `isClaim` is the admission rule, and the rule is narrower on
-`Draft.path`: see [The advertised schema is wider than the admission rule](#registering-the-server).
+The blueprints behind both the published tool schema and the guard applied to an arriving call,
+from [`shapers.ts`](../src/core/shapers.ts). `CLAIM_SHAPE` compiles to the `prove` tool's JSON
+Schema. The schema is the wire contract's shape and `isClaim` is the admission rule, and the rule is
+narrower on `Draft.path`: see
+[The advertised schema is wider than the admission rule](#registering-the-server).
 
-| Name            | Kind  | Summary                                                                                                                  |
-| --------------- | ----- | ------------------------------------------------------------------------------------------------------------------------ |
-| `DRAFT_SHAPE`   | const | Describes one proposed file a claim carries.                                                                             |
-| `CASE_SHAPE`    | const | Describes the drafts a claim asserts about and the test that exercises them.                                             |
-| `CONTROL_SHAPE` | const | Describes the negative control, which is a case plus where and why it must break.                                        |
-| `CLAIM_SHAPE`   | const | Describes one claim and is the sole source of both the published tool schema and the guard applied to an arriving claim. |
+A `Shape` cell holds the constant's declared type.
+
+| Name            | Kind  | Shape                                         | Summary                                                                                                                  |
+| --------------- | ----- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `DRAFT_SHAPE`   | const | `ObjectShape<{ path, text }>`                 | Describes one proposed file a claim carries.                                                                             |
+| `CASE_SHAPE`    | const | `ObjectShape<{ files, test }>`                | Describes the drafts a claim asserts about and the test that exercises them.                                             |
+| `CONTROL_SHAPE` | const | `ObjectShape<{ files, test, stage, reason }>` | Describes the negative control, which is a case plus where and why it must break.                                        |
+| `CLAIM_SHAPE`   | const | `ObjectShape<{ project, case, control }>`     | Describes one claim and is the sole source of both the published tool schema and the guard applied to an arriving claim. |
 
 ### Validators
 
-Total guards, from [`validators.ts`](../src/core/validators.ts). Each returns a boolean for any input
-and never throws.
+Total guards, from [`validators.ts`](../src/core/validators.ts). Each returns a boolean for any
+input and never throws.
 
 In a guard table a `Shape` cell holds the type the guard narrows to.
 
@@ -182,14 +185,14 @@ The classes, each exported from its own file, and the contract each one implemen
 [`RuntimeStage`](../src/server/stages/RuntimeStage.ts) implements `StageInterface`, and
 [`Overlay`](../src/server/Overlay.ts) implements `OverlayInterface`.
 
-| Name           | Kind  | Summary                                                                                          |
-| -------------- | ----- | ------------------------------------------------------------------------------------------------ |
-| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                       |
-| `ProbeServer`  | class | Serves one probe over this process's Model Context Protocol stdio transport.                     |
-| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.   |
-| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                          |
-| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                    |
-| `Overlay`      | class | Holds the candidate drafts one inspection substitutes for the files a tool would read from disk. |
+| Name           | Kind  | Summary                                                                                                                                                                                                  |
+| -------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                                                                                                                               |
+| `ProbeServer`  | class | Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol stdio transport. |
+| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.                                                                                                           |
+| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                                                                                                                                  |
+| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                                                                                                                            |
+| `Overlay`      | class | Implements `OverlayInterface` over a private map from normalized absolute path to candidate text, minting at construction the `revision` a resident tool caches its answers against.                     |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -848,10 +851,10 @@ already supply test code the runtime stage runs.
 for.** Oxlint's language server honours `.gitignore`, and it does so for text supplied from memory
 exactly as it does for a file on disk. The stage reports a clean check, not a skipped one.
 
-This reaches the flagship claim stated earlier: its test lives at `tmp/probe/greeting.test.ts`, and `tmp` is
-ignored in this workspace, so the lint stage inspects the candidate `src/core/factories.ts` and
-reports nothing about the test. Measured on 2026-08-20: the same three-line text carrying an unused
-binding and a `debugger` statement returns 0 issues at `tmp/probe/lint-ignored.test.ts` and 2
+This reaches the flagship claim stated earlier: its test lives at `tmp/probe/greeting.test.ts`, and
+`tmp` is ignored in this workspace, so the lint stage inspects the candidate `src/core/factories.ts`
+and reports nothing about the test. Measured on 2026-08-20: the same three-line text carrying an
+unused binding and a `debugger` statement returns 0 issues at `tmp/probe/lint-ignored.test.ts` and 2
 issues at `tests/src/core/lint-tracked.test.ts`.
 
 `.gitignore` alone causes this: `tmp` appears there and in no other ignore file this workspace
@@ -870,9 +873,9 @@ an `Issue`. `@orkestrel/lsp` owns everything between them, and the hookup is fix
 - **The client is `createLSPClient` from `@orkestrel/lsp`,** over that transport, with the
   workspace's `file://` URL as its `workspace` option and a 2 s `timeout` option. That option bounds
   the `initialize` and `shutdown` exchanges and the destroy-time settlement, and it does not reach
-  the diagnostics an inspection waits for. The transport's `grace` option is 1 s, half that deadline,
-  so a child that ignores its ending is signalled and released inside the client's own wait for the
-  close.
+  the diagnostics an inspection waits for. The transport's `grace` option is 1 s, half that
+  deadline, so a child that ignores its ending is signalled and released inside the client's own
+  wait for the close.
 - **Each candidate reaches the server through the `open` method.** The stage supplies the URL the
   declared path names, the language identifier `inferDocumentLanguage` selects for that path, the
   candidate's text, and the signal its caller supplied, then closes the document. Nothing is written
@@ -948,28 +951,28 @@ than the probe's — it decides which process reads the stdio, not when the stag
 
 - **Arming.** Construction runs boot controls that mutate an imported dependency and refuse
   service unless the type and runtime stages report the change. The `arm` event fires after those
-  controls have reported red and the boot's own files are gone. An attempt that rejects fires `error`
-  instead, carrying the arming refusal as the attempt raises it, so a host waiting on `arm` reads the
-  refusal rather than an event that never arrives. The attempt is still retained for retry, so each
-  attempt surfaces its own `error` and no `prove` reports one refusal twice. The controls run under
-  `tmp/probe/` against the root `tsconfig.json`, which is why the Vitest project, its composition in
-  the root configuration, and a `tmp/probe/` the host lets it create gate the boot rather than a
-  claim.
+  controls have reported red and the boot's own files are gone. An attempt that rejects fires
+  `error` instead, carrying the arming refusal as the attempt raises it, so a host waiting on `arm`
+  reads the refusal rather than an event that never arrives. The attempt is still retained for
+  retry, so each attempt surfaces its own `error` and no `prove` reports one refusal twice. The
+  controls run under `tmp/probe/` against the root `tsconfig.json`, which is why the Vitest project,
+  its composition in the root configuration, and a `tmp/probe/` the host lets it create gate the
+  boot rather than a claim.
 - **Freshness.** Every `prove` revalidates before it answers. The runtime stage re-reads each
   workspace module and invalidates the ones whose contents moved; the type stage refreshes its
   mirror of the workspace by content digest, copying a file whose contents moved and removing the
   copy of a file the workspace deleted. A warm service that skipped this would return a confident
   wrong answer about freshly edited source.
 - **Configuration is read once per stage, not per claim.** Freshness covers source, and it does not
-  cover the configuration a stage's own tool was built around. The type stage reads `tsc --showConfig`
-  once per project and keys that reading by resolved project path, so a `tsconfig.json` edited after
-  that reading does not change the compiler options the stage applies or the project digest it
-  reports. A project that declares its own `include` still re-expands on every run, because the
-  scratch project each run reads extends the target's own project file; a project that declares
-  neither `include` nor `files` keeps the selection that reading printed. Oxlint's language server
-  and the resident Vitest hold their own configuration the same way. So a receipt is read against
-  the configuration the stage was built around. Destroy the probe and build another after you edit
-  `tsconfig.json`, `.oxlintrc.json`, or `vite.config.ts`.
+  cover the configuration a stage's own tool was built around. The type stage reads
+  `tsc --showConfig` once per project and keys that reading by resolved project path, so a
+  `tsconfig.json` edited after that reading does not change the compiler options the stage applies
+  or the project digest it reports. A project that declares its own `include` still re-expands on
+  every run, because the scratch project each run reads extends the target's own project file; a
+  project that declares neither `include` nor `files` keeps the selection that reading printed.
+  Oxlint's language server and the resident Vitest hold their own configuration the same way. So a
+  receipt is read against the configuration the stage was built around. Destroy the probe and build
+  another after you edit `tsconfig.json`, `.oxlintrc.json`, or `vite.config.ts`.
 - **A failed warm is not permanent.** The runtime stage holds its resident Vitest in a slot it
   clears when that warm rejects, so the fault reaches the caller as the target tree's own —
   `origin: 'workspace'`, `code: 'malformed'`, naming `vite.config.ts` in `context` — rather than
@@ -992,8 +995,8 @@ than the probe's — it decides which process reads the stdio, not when the stag
   stage's warm builds each declared project's incremental state before the first inspection answers.
   So a `deadline` under that warm expires arming rather than any claim, and the probe never arms.
   Size `deadline` above the § Cost reading for the target tree, and leave room for a contended host.
-  No stage holds the host's loop: the compiler, the language server, and the test runner each work in
-  a child process or a worker, so the deadline fires on time and terminates the work it bounds.
+  No stage holds the host's loop: the compiler, the language server, and the test runner each work
+  in a child process or a worker, so the deadline fires on time and terminates the work it bounds.
 - **Revisions.** Each runtime inspection writes its specification at a fresh path and never reuses
   one, because a resident runner asked to re-run a path it has already seen reports a false pass.
   One inspection in every 64 also replaces the resident runner, and that inspection costs more than
@@ -1030,8 +1033,8 @@ than the probe's — it decides which process reads the stdio, not when the stag
   server — the `initialize` reply that warming waits for and the `shutdown` reply that ending waits
   for. It does not reach the diagnostics an inspection waits for, which the caller's own signal
   bounds instead, so a tight teardown bound no longer preempts a claim's budget. The transport's
-  cooperative window is half that 2 s, so a server that answers `shutdown` and then ignores `exit` is
-  signalled and released inside the client's own wait for the close, rather than deadlocking
+  cooperative window is half that 2 s, so a server that answers `shutdown` and then ignores `exit`
+  is signalled and released inside the client's own wait for the close, rather than deadlocking
   `destroy()`. A server that accepts the connection and answers nothing is released the same way.
   The type stage holds no bound and needs none for its own tools: it terminates the compiler it
   spawned — by process tree on Windows, where no cooperative signal reaches a child — waits for the
@@ -1143,7 +1146,8 @@ inspection rather than the common one.
   the revision identity a sweep reads, against the shapes each refuses.
 - [`main.test.ts`](../tests/src/bin/main.test.ts) — the shipped entry driven by this repository's
   own line client and by the `@orkestrel/mcp` stdio client, the record and the rendered text its
-  reply carries on both eras, and the signals delivered to it during boot and in service.
+  reply carries on the legacy and the modern era, and the signals delivered to it during boot and
+  in service.
 - [`distribution.test.ts`](../tests/distribution.test.ts) — the packed package installed outside the
   repository and driven through its public exports.
 

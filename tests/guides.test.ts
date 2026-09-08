@@ -321,8 +321,8 @@ const DEFAULT_DESCRIPTION = 'The @orkestrel/probe package.'
 const IMPLEMENTATIONS: ReadonlyArray<readonly [string, readonly string[]]> = [
 	['Probe', ['ProbeInterface']],
 	['ProbeServer', ['ProbeServerInterface']],
-	['TypeStage', ['StageInterface', 'TypeStageInterface']],
-	['LintStage', ['StageInterface']],
+	['TypeStage', ['TypeStageInterface', 'StageInterface']],
+	['LintStage', ['LintStageInterface', 'StageInterface']],
 	['RuntimeStage', ['StageInterface']],
 	['Overlay', ['OverlayInterface']],
 ]
@@ -486,7 +486,7 @@ describe('guides parity', () => {
 })
 
 describe('guides fences', () => {
-	it('states the same claim in the guide, the contract, and this proof', () => {
+	it('states the same claim in the guide, the contract, the README, and this proof', () => {
 		const transcribed = extractLiteral(
 			readWorkspaceText('tests/guides.test.ts'),
 			`${OPENING.replace('claim', 'CLAIM')}`,
@@ -494,7 +494,9 @@ describe('guides fences', () => {
 		expect(transcribed).not.toBe('')
 		const documented = extractLiteral(GUIDE, OPENING)
 		const contract = extractLiteral(extractComment(CORE_TYPES, 'Claim'), OPENING)
+		const pitched = extractLiteral(readWorkspaceText('README.md'), OPENING)
 		expect(documented).toBe(contract)
+		expect(documented).toBe(pitched)
 		expect(documented).toBe(transcribed.replace('const CLAIM: Claim = {', OPENING))
 	})
 

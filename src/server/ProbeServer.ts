@@ -22,7 +22,9 @@ import { findRefusedPaths } from './helpers.js'
 import { Probe } from './Probe.js'
 
 /**
- * Serves one probe over this process's Model Context Protocol stdio transport.
+ * Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the
+ * published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol
+ * stdio transport.
  *
  * @remarks
  * Construction creates the probe, publishes the `prove` tool, and binds the dual-era dispatcher to

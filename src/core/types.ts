@@ -26,7 +26,10 @@ export type Stage = (typeof PROBE_STAGES)[number]
  *
  * @example
  * ```ts
- * const draft: Draft = { path: 'src/core/greeting.ts', text: "export const GREETING = 'hi'\n" }
+ * const draft: Draft = {
+ * 	path: 'src/core/factories.ts',
+ * 	text: "export function createGreeting(): string {\n\treturn 'hi'\n}\n",
+ * }
  * ```
  */
 export interface Draft {
@@ -208,7 +211,7 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * ```ts
  * const issue: Issue = {
  * 	origin: 'claimant',
- * 	path: 'src/core/greeting.ts',
+ * 	path: 'src/core/factories.ts',
  * 	message: "Type 'string' is not assignable to type 'number'.",
  * 	range: { start: { line: 0, character: 6 }, end: { line: 0, character: 6 } },
  * }

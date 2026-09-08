@@ -53,9 +53,10 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
  *
  * @example
  * ```ts
- * isDraft({ path: 'src/core/greeting.ts', text: 'export const GREETING = "hi"\n' }) // true
+ * const text = "export function createGreeting(): string {\n\treturn 'hi'\n}\n"
+ * isDraft({ path: 'src/core/factories.ts', text }) // true
  * isDraft({ path: '../../etc/hosts', text: '' }) // false
- * isDraft({ path: 'src/core/greeting.ts' }) // false
+ * isDraft({ path: 'src/core/factories.ts' }) // false
  * ```
  */
 export const isDraft: Guard<Draft> = recordOf({
