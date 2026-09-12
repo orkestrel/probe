@@ -89,8 +89,7 @@
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
 		"build:src:bin": "vite build --config configs/src/vite.bin.config.ts",
 		"prepack": "npm run build",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
-		"docs": "node --experimental-strip-types scripts/docs.ts"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.17",
@@ -102,15 +101,15 @@
 		"@orkestrel/tool": "^0.0.14"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.0",
+		"@microsoft/api-extractor": "^7.59.1",
 		"@orkestrel/guide": "^0.0.18",
 		"@orkestrel/scaffold": "^0.0.64",
 		"@orkestrel/test": "^0.0.14",
-		"@types/node": "^26.4.1",
-		"oxfmt": "^0.66.0",
-		"oxlint": "^1.81.0",
+		"@types/node": "^26.5.1",
+		"oxfmt": "^0.67.0",
+		"oxlint": "^1.82.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.2.2",
+		"vite": "^8.3.0",
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
