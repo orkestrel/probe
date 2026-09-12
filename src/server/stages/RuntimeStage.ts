@@ -142,10 +142,30 @@ export class RuntimeStage implements StageInterface {
 		return this.#progress
 	}
 
+	/**
+	 * Inspects one case.
+	 *
+	 * @param subject - The candidate drafts and test to inspect
+	 * @returns One outcome for this stage
+	 * @throws When the workspace's own tool cannot start or has already been destroyed
+	 */
 	inspect(subject: Case): Promise<Check> {
 		return guardStage(this.stage, this.#inspect(subject))
 	}
 
+	/**
+	 * Tears down the resident tool or the mirror and releases its resources.
+	 *
+	 * @remarks
+	 * A stage abandons every inspection it holds rather than waiting behind one, so teardown never
+	 * waits for an inspection to return. An abandoned inspection rejects, either at the stage's own
+	 * guard or as the owned tool closes. Teardown is bounded whatever the stage's own tool does: a
+	 * tool that answers neither its warming exchange nor its ending is signalled and released at the
+	 * stage's own deadline. A coordinator replaces a stage whose worker no longer returns because
+	 * teardown neither waits for an inspection nor waits past that deadline.
+	 *
+	 * @returns A promise that settles after the resident tool or the mirror releases its resources
+	 */
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#closing = guardStage(this.stage, this.#destroy())

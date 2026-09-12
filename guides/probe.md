@@ -274,6 +274,13 @@ The public call-signature members of each behavioral interface, one table per in
 | `inspect` | `Promise<Check>` | Inspects one case.                                                     |
 | `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
 
+#### `RuntimeStage`
+
+| Method    | Returns          | Summary                                                                |
+| --------- | ---------------- | ---------------------------------------------------------------------- |
+| `inspect` | `Promise<Check>` | Inspects one case.                                                     |
+| `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
+
 #### `TypeStageInterface`
 
 | Method    | Returns            | Summary                                                                       |
@@ -660,11 +667,27 @@ const claim: Claim = {
 const probe = new Probe({ workspace: process.cwd() })
 const verdict = await probe.prove(claim)
 verdict.digest // 'fcb88a2dee987b8673c1fc7107979470'
-verdict.receipt // 'probe:fcb88a2dee987b8673c1fc7107979470:type:typescript@6.0.3:oxlint@1.81.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
+verdict.receipt // 'probe:fcb88a2dee987b8673c1fc7107979470:type:typescript@6.0.3:oxlint@1.82.0:vitest@4.1.11:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
 await probe.destroy()
 ```
 
-These things in it are load-bearing:
+To inspect only the runtime stage, pass the case from the preceding claim directly to `RuntimeStage`.
+This runs no type or lint stage and does not issue a `Probe` receipt.
+
+```ts
+import { RuntimeStage } from '@orkestrel/probe/server'
+
+const runtime = new RuntimeStage(process.cwd())
+try {
+	const check = await runtime.inspect(claim.case)
+	check.stage // 'runtime'
+	check.issues // []
+} finally {
+	await runtime.destroy()
+}
+```
+
+The full Probe example depends on these details:
 
 - **The candidate file lives under `src/`.** It is checked against `configs/src/tsconfig.core.json`,
   the same scoped project the workspace's own `check:src:core` script runs.

@@ -6,6 +6,10 @@ import {
 	REFUSED_RUNTIME_TARGETS,
 	createLintFixture,
 	describeEnding,
+	extractClaimLiteral,
+	extractExportComment,
+	extractInterfaceProperties,
+	extractProbeSection,
 	killFixtureServer,
 	probeRefusedTargets,
 	readChildEnding,
@@ -16,6 +20,88 @@ import {
 } from './setupServer.js'
 
 describe('server test setup', () => {
+	it('extracts a claim literal through its matching indentation', () => {
+		const text = [
+			'async function register(): Promise<void> {',
+			'\tconst CLAIM: Claim = {',
+			"\t\tproject: 'configs/src/tsconfig.core.json',",
+			'\t\tcase: {},',
+			'\t}',
+			'}',
+		].join('\n')
+
+		expect(extractClaimLiteral(text, 'const CLAIM: Claim = {')).toBe(
+			[
+				'const CLAIM: Claim = {',
+				"\tproject: 'configs/src/tsconfig.core.json',",
+				'\tcase: {},',
+				'}',
+			].join('\n'),
+		)
+		expect(extractClaimLiteral(text, 'const claim: Claim = {')).toBeUndefined()
+	})
+
+	it('extracts an exported declaration comment through Guide', () => {
+		const source = [
+			'/**',
+			' * Carries a claim.',
+			' *',
+			' * @example',
+			' * ```ts',
+			' * const claim: Claim = {}',
+			' * ```',
+			' */',
+			'export interface Claim {}',
+		].join('\n')
+
+		expect(extractExportComment(source, 'interface Claim')).toContain('Carries a claim.')
+		expect(extractExportComment(source, 'interface Claim')).toContain('const claim: Claim = {}')
+		expect(extractExportComment(source, 'interface Missing')).toBeUndefined()
+	})
+
+	it('extracts readonly interface properties without call signatures', () => {
+		expect(
+			extractInterfaceProperties([
+				'\treadonly required: string',
+				'\treadonly optional?: number',
+				'\texecute(): void',
+			]),
+		).toStrictEqual(['required', 'optional'])
+	})
+
+	it('extracts a guide section through the next peer heading', () => {
+		const guide = [
+			'## Surface',
+			'',
+			'### Constants',
+			'',
+			'constant rows',
+			'',
+			'### Classes',
+			'',
+			'class rows',
+		].join('\n')
+
+		expect(extractProbeSection(guide, '### Constants')).toContain('constant rows')
+		expect(extractProbeSection(guide, '### Constants')).not.toContain('class rows')
+		expect(extractProbeSection(guide, '### Missing')).toBeUndefined()
+	})
+
+	it('extracts equivalent claim and section text across LF and CRLF', () => {
+		const claim = "const claim: Claim = {\n\tproject: 'core',\n}\n"
+		const section = '### Constants\n\nBody.\n## Next\n'
+		const lf = {
+			claim: extractClaimLiteral(claim, 'const claim: Claim = {'),
+			section: extractProbeSection(section, '### Constants'),
+		}
+		const crlf = {
+			claim: extractClaimLiteral(claim.replaceAll('\n', '\r\n'), 'const claim: Claim = {'),
+			section: extractProbeSection(section.replaceAll('\n', '\r\n'), '### Constants'),
+		}
+
+		expect(crlf).toStrictEqual(lf)
+	})
+
 	it('classifies whether this host refuses a name it will not accept', () => {
 		const refused = probeRefusedTargets()
 		expect(typeof refused).toBe('boolean')

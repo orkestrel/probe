@@ -207,11 +207,11 @@ function buildClaim(name: string, control: string): Readonly<Record<string, unkn
 	return {
 		project: 'configs/src/tsconfig.core.json',
 		case: {
-			files: [{ path: `src/core/${name}.ts`, text: CLEAN }],
+			files: [{ path: `src/core/${name}/constants.ts`, text: CLEAN }],
 			test: specification,
 		},
 		control: {
-			files: [{ path: `src/core/${name}.ts`, text: control }],
+			files: [{ path: `src/core/${name}/constants.ts`, text: control }],
 			test: specification,
 			stage: 'type',
 			reason: 'the source assigns a string to a number',
@@ -293,14 +293,19 @@ describe('bin entry', () => {
 			const passing = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
-					files: [{ path: 'src/core/wire.ts', text: "export const VALUE = 'ok'\n" }],
+					files: [{ path: 'src/core/wire/constants.ts', text: "export const VALUE = 'ok'\n" }],
 					test: {
 						path: 'tmp/probe/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				},
 				control: {
-					files: [{ path: 'src/core/wire.ts', text: "export const VALUE: number = 'bad'\n" }],
+					files: [
+						{
+							path: 'src/core/wire/constants.ts',
+							text: "export const VALUE: number = 'bad'\n",
+						},
+					],
 					test: {
 						path: 'tmp/probe/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
@@ -728,7 +733,7 @@ describe('bin entry', () => {
 		{ timeout: 300_000 },
 		async () => {
 			const specification = { path: 'tmp/probe/bin/throwing-runtime.test.ts', text: PASSING }
-			const module = { path: 'src/core/throwing.ts', text: CLEAN }
+			const module = { path: 'src/core/throwing/constants.ts', text: CLEAN }
 			const reason = 'the test throws a message longer than the reply can carry'
 			const request = {
 				jsonrpc: '2.0',
@@ -926,14 +931,24 @@ describe('bin entry', () => {
 					arguments: {
 						project: 'configs/src/tsconfig.core.json',
 						case: {
-							files: [{ path: 'src/core/stderr.ts', text: "export const VALUE = 'ok'\n" }],
+							files: [
+								{
+									path: 'src/core/stderr/constants.ts',
+									text: "export const VALUE = 'ok'\n",
+								},
+							],
 							test: {
 								path: 'tmp/probe/bin/stderr-runtime.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
 							},
 						},
 						control: {
-							files: [{ path: 'src/core/stderr.ts', text: "export const VALUE: number = 'bad'\n" }],
+							files: [
+								{
+									path: 'src/core/stderr/constants.ts',
+									text: "export const VALUE: number = 'bad'\n",
+								},
+							],
 							test: {
 								path: 'tmp/probe/bin/stderr-runtime.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",

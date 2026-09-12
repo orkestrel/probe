@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
+import { locateComment, unwrapComment } from '@orkestrel/guide'
 import { waitForCondition } from '@orkestrel/test'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
 
@@ -345,3 +346,67 @@ export const REFUSED_RUNTIME_TARGETS: boolean = probeRefusedTargets()
  * those proofs are about, so each is inapplicable there rather than failing.
  */
 export const DIRECTORY_LINKS: boolean = supportsDirectoryLinks()
+
+/**
+ * Extracts the flagship claim literal from a documented or registered source block.
+ *
+ * @param text - The text carrying the claim literal.
+ * @param opening - The literal's opening line without indentation.
+ * @returns The literal with its containing indentation removed, or `undefined` when absent.
+ */
+export function extractClaimLiteral(text: string, opening: string): string | undefined {
+	const lines = text.split(/\r\n|\n/)
+	const start = lines.findIndex((line) => line.trimStart() === opening)
+	if (start === -1) return undefined
+	const first = lines[start]
+	if (first === undefined) return undefined
+	const indent = first.slice(0, first.length - first.trimStart().length)
+	const end = lines.findIndex((line, index) => index > start && line === `${indent}}`)
+	if (end === -1) return undefined
+	return lines
+		.slice(start, end + 1)
+		.map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
+		.join('\n')
+}
+
+/**
+ * Extracts the unwrapped documentation comment attached to an exported declaration.
+ *
+ * @param source - The source text carrying the declaration.
+ * @param key - The declaration key accepted by Guide's comment locator.
+ * @returns The unwrapped comment text, or `undefined` when the key has no attached comment.
+ */
+export function extractExportComment(source: string, key: string): string | undefined {
+	const span = locateComment(source, key)
+	if (span === undefined) return undefined
+	return unwrapComment(source.slice(span.start, span.end)).join('\n')
+}
+
+/**
+ * Extracts the readonly data properties declared in an interface body.
+ *
+ * @param lines - The interface body lines returned by Guide's declaration reader.
+ * @returns The declared property names in source order.
+ */
+export function extractInterfaceProperties(lines: readonly string[]): readonly string[] {
+	return lines
+		.map((line) => /^\treadonly ([A-Za-z_][A-Za-z0-9_]*)[?]?:/.exec(line)?.[1])
+		.filter((name): name is string => name !== undefined)
+}
+
+/**
+ * Extracts a guide heading's body through the next peer or parent heading.
+ *
+ * @param text - The guide text to read.
+ * @param heading - The complete Markdown heading line that opens the section.
+ * @returns The section body, or `undefined` when the heading is absent.
+ */
+export function extractProbeSection(text: string, heading: string): string | undefined {
+	const normalized = text.replaceAll('\r\n', '\n')
+	const level = heading.split(' ')[0]?.length ?? 2
+	const start = normalized.indexOf(`${heading}\n`)
+	if (start === -1) return undefined
+	const rest = normalized.slice(start + heading.length)
+	const next = new RegExp(`\\n#{1,${level}} `).exec(rest)
+	return next === null ? rest : rest.slice(0, next.index)
+}
