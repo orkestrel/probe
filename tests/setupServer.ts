@@ -1,18 +1,405 @@
+import type { JSONValue } from '@orkestrel/contract'
 import type { ScratchInterface } from '@orkestrel/test/server'
-import type { ChildProcess } from 'node:child_process'
-import { spawn } from 'node:child_process'
-import { statSync, writeFileSync } from 'node:fs'
+import type { ChildProcess, ChildProcessByStdio } from 'node:child_process'
+import type { Readable, Writable } from 'node:stream'
+import { spawn, spawnSync } from 'node:child_process'
+import { readdirSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
 import { locateComment, unwrapComment } from '@orkestrel/guide'
+import { isJSONObject } from '@orkestrel/mcp'
 import { waitForCondition } from '@orkestrel/test'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
+
+/** Holds the exit code and ending signal a host reported for a child. */
+export interface Ending {
+	readonly code: number | null
+	readonly signal: string | null
+}
+
+/** Selects how a temporary ProbeServer host reaches public teardown. */
+export type ProbeServerScenario = 'direct' | 'routed' | 'controlled'
+
+/** Holds a child whose standard streams are the pipes its host requires. */
+export type ProbeServerChild = ChildProcessByStdio<Writable, Readable, Readable>
+
+/** Holds a temporary ProbeServer host and the observations collected from its real streams. */
+export interface ProbeServerHost {
+	readonly scenario: ProbeServerScenario
+	readonly scratch: ScratchInterface
+	readonly child: ProbeServerChild
+	readonly ending: Promise<Ending>
+	readonly output: readonly Buffer[]
+	readonly errors: readonly Buffer[]
+	readonly input: readonly Error[]
+	readonly events: ReadonlyArray<Readonly<Record<string, JSONValue>>>
+}
 
 /** Selects the default and relative workspace forms the server must snapshot at construction. */
 export const PROBE_SERVER_WORKSPACES: ReadonlyArray<string | undefined> = Object.freeze([
 	undefined,
 	'.',
 ])
+
+/** Selects the initial callback paths a deferred probe construction can re-enter through. */
+export const PROBE_SERVER_CALLBACKS = Object.freeze(['direct', 'routed'] as const)
+
+/** Selects the real work states a host controls through the public server lifecycle. */
+export const PROBE_SERVER_PHASES = Object.freeze(['arming', 'active'] as const)
+
+/**
+ * Builds a temporary child entry that serves a real built ProbeServer and reports its teardown.
+ *
+ * @returns The child entry source.
+ */
+export function createProbeServerHost(): string {
+	return [
+		"import { readdirSync } from 'node:fs'",
+		"import { join } from 'node:path'",
+		"import { pathToFileURL } from 'node:url'",
+		'const workspace = process.argv[2]',
+		'const serverPath = process.argv[3]',
+		'const scenario = process.argv[4]',
+		"if (workspace === undefined || serverPath === undefined) throw new Error('The ProbeServer host requires a workspace and server entry')",
+		"if (scenario !== 'direct' && scenario !== 'routed' && scenario !== 'controlled') throw new Error('The ProbeServer host requires a supported scenario')",
+		'const { ProbeServer } = await import(pathToFileURL(serverPath).href)',
+		'let server',
+		'let closing',
+		'const baseline = readListeners()',
+		'const starting = readSignalListeners()',
+		'let owned = { SIGINT: [], SIGTERM: [] }',
+		'function readMirror() {',
+		"\ttry { return readdirSync(join(workspace, 'tmp', 'type')) }",
+		'\tcatch (error) {',
+		"\t\tif (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []",
+		'\t\tthrow error',
+		'\t}',
+		'}',
+		'function readListeners() {',
+		'\treturn {',
+		"\t\tdata: process.stdin.listenerCount('data'),",
+		"\t\tclose: process.stdin.listenerCount('close'),",
+		"\t\terror: process.stdin.listenerCount('error'),",
+		"\t\tSIGINT: process.listenerCount('SIGINT'),",
+		"\t\tSIGTERM: process.listenerCount('SIGTERM'),",
+		'\t}',
+		'}',
+		'function readSignalListeners() {',
+		"\treturn { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') }",
+		'}',
+		'function captureSignalListeners() {',
+		'\tconst current = readSignalListeners()',
+		'\treturn {',
+		'\t\tSIGINT: current.SIGINT.filter((listener) => !starting.SIGINT.includes(listener)),',
+		'\t\tSIGTERM: current.SIGTERM.filter((listener) => !starting.SIGTERM.includes(listener)),',
+		'\t}',
+		'}',
+		'function readOwnedListeners() {',
+		'\tconst current = readSignalListeners()',
+		'\treturn {',
+		'\t\tSIGINT: owned.SIGINT.some((listener) => current.SIGINT.includes(listener)),',
+		'\t\tSIGTERM: owned.SIGTERM.some((listener) => current.SIGTERM.includes(listener)),',
+		'\t}',
+		'}',
+		'function record(name, detail = {}) {',
+		"\tif (process.connected && typeof process.send === 'function') process.send({ channel: 'probe-server-host', event: { name, ...detail } })",
+		'}',
+		'function releaseControl() {',
+		"\tprocess.removeListener('message', control)",
+		"\tif (typeof process.disconnect === 'function') process.disconnect()",
+		'}',
+		'function settle() {',
+		"\trecord('destroy-settled', { mirror: readMirror(), listeners: { baseline, current: readListeners() }, owned: readOwnedListeners() })",
+		'\treleaseControl()',
+		'}',
+		'function reject(error) {',
+		"\trecord('destroy-rejected', { message: error instanceof Error ? error.message : String(error), mirror: readMirror(), listeners: { baseline, current: readListeners() }, owned: readOwnedListeners() })",
+		'\treleaseControl()',
+		'}',
+		'function destroy() {',
+		"\trecord('destroy-called')",
+		'\tif (closing === undefined) {',
+		'\t\tclosing = server.destroy()',
+		'\t\tclosing.then(settle, reject)',
+		'\t}',
+		'\treturn closing',
+		'}',
+		'function direct(error) {',
+		"\trecord('initial-error', { message: error instanceof Error ? error.message : String(error) })",
+		'\tvoid destroy()',
+		'}',
+		'function routed(error) {',
+		"\trecord('initial-error', { message: error instanceof Error ? error.message : String(error) })",
+		"\tthrow new Error('The initial ProbeServer listener failed')",
+		'}',
+		'function report(error, event) {',
+		"\trecord('configured-error', { event, message: error instanceof Error ? error.message : String(error) })",
+		'\tvoid destroy()',
+		'}',
+		'function control(message) {',
+		"\tif (message !== null && typeof message === 'object' && message.command === 'destroy') void destroy()",
+		'}',
+		"const options = scenario === 'direct'",
+		'\t? { workspace, deadline: 120_000, on: { error: direct } }',
+		"\t: scenario === 'routed'",
+		'\t\t? { workspace, deadline: 120_000, on: { error: routed }, error: report }',
+		'\t\t: { workspace, deadline: 120_000 }',
+		'server = new ProbeServer(options)',
+		"if (scenario === 'controlled') process.on('message', control)",
+		"record('server-created', { listeners: { baseline, current: readListeners() } })",
+		'server.start()',
+		'owned = captureSignalListeners()',
+		"record('server-started', { owned: { SIGINT: owned.SIGINT.length, SIGTERM: owned.SIGTERM.length } })",
+	].join('\n')
+}
+
+/**
+ * Checks whether a spawned child carries every pipe the ProbeServer host requires.
+ *
+ * @param child - The spawned IPC child to inspect.
+ * @returns True when standard input, output, and error are pipes; false otherwise.
+ */
+export function isProbeServerChild(child: ChildProcess): child is ProbeServerChild {
+	return child.stdin !== null && child.stdout !== null && child.stderr !== null
+}
+
+/**
+ * Starts a temporary host around the real built ProbeServer entry.
+ *
+ * @param scratch - The temporary target workspace.
+ * @param server - The built ProbeServer entry.
+ * @param scenario - The callback or controlled teardown path the host uses.
+ * @returns The child and every observation collected from its real streams.
+ */
+export function spawnProbeServerHost(
+	scratch: ScratchInterface,
+	server: string,
+	scenario: ProbeServerScenario,
+): ProbeServerHost {
+	const entry = scratch.write('probe-server-host.mjs', createProbeServerHost())
+	const child = spawn(process.execPath, [entry, scratch.path, server, scenario], {
+		cwd: scratch.path,
+		detached: process.platform !== 'win32',
+		stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+	})
+	if (!isProbeServerChild(child)) {
+		child.kill()
+		throw new Error('The ProbeServer host requires piped standard streams')
+	}
+	const ending = readChildEnding(child)
+	const output: Buffer[] = []
+	const errors: Buffer[] = []
+	const input: Error[] = []
+	const events: Array<Readonly<Record<string, JSONValue>>> = []
+	child.stdout.on('data', (chunk: Buffer) => output.push(chunk))
+	child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+	child.stdin.on('error', (error: Error) => input.push(error))
+	child.on('message', (message: unknown) => {
+		if (!isJSONObject(message) || message['channel'] !== 'probe-server-host') return
+		const event = message['event']
+		if (isJSONObject(event)) events.push(event)
+	})
+	return { scenario, scratch, child, ending, output, errors, input, events }
+}
+
+/**
+ * Builds the protocol handshake sent to a temporary ProbeServer host.
+ *
+ * @returns The newline-protocol initialization record.
+ */
+export function createProbeServerInitialize(): Readonly<Record<string, unknown>> {
+	return {
+		jsonrpc: '2.0',
+		id: 0,
+		method: 'initialize',
+		params: {
+			protocolVersion: '2025-06-18',
+			capabilities: {},
+			clientInfo: { name: 'probe-lifecycle-test', version: '1.0.0' },
+		},
+	}
+}
+
+/**
+ * Builds a valid claim request whose runtime case can remain active until teardown interrupts it.
+ *
+ * @param active - Whether the runtime case waits for teardown. Default: `true`.
+ * @returns The newline-protocol request record.
+ */
+export function createProbeServerRequest(active = true): Readonly<Record<string, unknown>> {
+	const test = {
+		path: 'tmp/probe/public-destroy-active.test.ts',
+		text: active
+			? "import { test } from 'vitest'\ntest('waits for teardown', async () => await new Promise((resolve) => setTimeout(resolve, 60_000)))\n"
+			: "import { expect, test } from 'vitest'\ntest('accepts the subject', () => expect(true).toBe(true))\n",
+	}
+	return {
+		jsonrpc: '2.0',
+		id: 1,
+		method: 'tools/call',
+		params: {
+			name: 'prove',
+			arguments: {
+				project: 'tsconfig.json',
+				case: {
+					files: [
+						{ path: 'src/server-lifecycle/constants.ts', text: "export const VALUE = 'ok'\n" },
+					],
+					test,
+				},
+				control: {
+					files: [
+						{
+							path: 'src/server-lifecycle/constants.ts',
+							text: "export const VALUE: number = 'bad'\n",
+						},
+					],
+					test,
+					stage: 'type',
+					reason: 'the source assigns a string to a number',
+				},
+			},
+		},
+	}
+}
+
+/**
+ * Writes the workspace configuration and real toolchain junction used by a ProbeServer child.
+ *
+ * @param scratch - The temporary target workspace.
+ * @param root - The Probe checkout carrying the installed toolchain.
+ * @returns Nothing.
+ */
+export function writeProbeServerTarget(scratch: ScratchInterface, root: string): void {
+	scratch.write('package.json', '{}\n')
+	scratch.link('node_modules', resolve(root, 'node_modules'))
+	scratch.write(
+		'tsconfig.json',
+		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+	)
+	scratch.write(
+		'vite.config.ts',
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+	)
+}
+
+/**
+ * Writes a target whose installed manifests admit construction through the unavailable Vitest entry.
+ *
+ * @param scratch - The temporary target workspace.
+ * @param root - The Probe checkout carrying the real TypeScript and Oxlint packages.
+ * @returns Nothing.
+ */
+export function writeProbeServerRefusal(scratch: ScratchInterface, root: string): void {
+	scratch.write('package.json', '{}\n')
+	scratch.ensure('node_modules')
+	scratch.link('node_modules/typescript', resolve(root, 'node_modules/typescript'))
+	scratch.link('node_modules/oxlint', resolve(root, 'node_modules/oxlint'))
+	scratch.write(
+		'node_modules/vitest/package.json',
+		`${JSON.stringify({
+			name: 'vitest',
+			version: '4.1.11',
+			type: 'module',
+			exports: {
+				'./package.json': './package.json',
+				'./node': './unavailable.cjs',
+			},
+		})}\n`,
+	)
+	scratch.write(
+		'tsconfig.json',
+		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+	)
+	scratch.write('vite.config.ts', 'export default {}\n')
+}
+
+/**
+ * Writes a target whose real lint and runtime inputs initially lack a readable compiler.
+ *
+ * @param scratch - The temporary target workspace.
+ * @param root - The Probe checkout carrying the installed toolchain.
+ * @returns Nothing.
+ */
+export function writeProbeServerConstruction(scratch: ScratchInterface, root: string): void {
+	scratch.write('package.json', '{}\n')
+	scratch.ensure('node_modules')
+	scratch.link('node_modules/oxlint', resolve(root, 'node_modules/oxlint'))
+	scratch.link('node_modules/vitest', resolve(root, 'node_modules/vitest'))
+	scratch.write(
+		'tsconfig.json',
+		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
+	)
+	scratch.write(
+		'vite.config.ts',
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+	)
+}
+
+/**
+ * Reads the entries a directory carries, or an empty collection while it is absent.
+ *
+ * @param directory - The directory to read.
+ * @returns Its entry names, or an empty collection while it is absent.
+ */
+export function readDirectoryNames(directory: string): readonly string[] {
+	try {
+		return readdirSync(directory)
+	} catch (error: unknown) {
+		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []
+		throw error
+	}
+}
+
+/**
+ * Waits until a probe boot has written its arming files.
+ *
+ * @param directory - The probe workbench directory.
+ * @returns Nothing.
+ */
+export async function waitForProbeArming(directory: string): Promise<void> {
+	await waitForCondition(
+		`the arming files in ${directory}`,
+		() => readDirectoryNames(directory).filter((name) => name.startsWith('arm-')).length === 2,
+		{ budget: 30_000, interval: 10 },
+	)
+}
+
+/**
+ * Waits until a probe boot has removed its arming files.
+ *
+ * @param directory - The probe workbench directory.
+ * @returns Nothing.
+ */
+export async function waitForProbeArmed(directory: string): Promise<void> {
+	await waitForProbeArming(directory)
+	await waitForCondition(
+		`the arming files to leave ${directory}`,
+		() => readDirectoryNames(directory).every((name) => !name.startsWith('arm-')),
+		{ budget: 30_000, interval: 10 },
+	)
+}
+
+/**
+ * Kills only the recorded child's process tree when a lifecycle proof cannot release it.
+ *
+ * @param child - The child whose tree the test owns.
+ * @returns Nothing.
+ */
+export async function killChildTree(child: ChildProcess): Promise<void> {
+	const id = child.pid
+	if (id === undefined || child.exitCode !== null || child.signalCode !== null) return
+	if (process.platform === 'win32') {
+		spawnSync('taskkill', ['/pid', String(id), '/t', '/f'], { stdio: 'ignore' })
+	} else {
+		process.kill(-id, 'SIGKILL')
+	}
+	await waitForCondition(
+		`the child process tree rooted at ${String(id)} to stop`,
+		() => child.exitCode !== null || child.signalCode !== null,
+		{ budget: 10_000, interval: 25 },
+	)
+}
 
 /** Selects what one built Oxlint language server fixture publishes and how long it answers. */
 export interface LintFixtureOptions {
@@ -221,12 +608,6 @@ export async function waitForFixtureServer(scratch: ScratchInterface): Promise<n
  */
 export function killFixtureServer(scratch: ScratchInterface): void {
 	process.kill(readFixtureServer(scratch), 'SIGKILL')
-}
-
-/** Holds the exit code and the ending signal a host reported for one child. */
-export interface Ending {
-	readonly code: number | null
-	readonly signal: string | null
 }
 
 /**

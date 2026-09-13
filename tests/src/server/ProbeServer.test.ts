@@ -1,20 +1,43 @@
 import type { MCPLimitOptions } from '@orkestrel/mcp'
 import type { JSONValue } from '@orkestrel/contract'
+import type { ProbeServerHost } from '../../setupServer.js'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
-import { captureError, createRecorder, createTeardown, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import {
+	captureError,
+	createRecorder,
+	createTeardown,
+	decodeJSONLines,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
+import { createScratch, destroyScratch } from '@orkestrel/test/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { PROBE_KEYS } from '@src/core'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
+import {
+	PROBE_SERVER_CALLBACKS,
+	PROBE_SERVER_PHASES,
+	createProbeServerInitialize,
+	createProbeServerRequest,
+	killChildTree,
+	readDirectoryNames,
+	spawnProbeServerHost,
+	waitForProbeArmed,
+	waitForProbeArming,
+	writeProbeServerConstruction,
+	writeProbeServerRefusal,
+	writeProbeServerTarget,
+} from '../../setupServer.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
+const BUILT_SERVER = resolve(ROOT, 'dist/src/server/index.js')
 
 // A verdict carrying one issue per refused declaration, which is what a control refusing several
 // declarations at once produces. The shape is the `Verdict` record `isVerdict` admits; the values
@@ -230,6 +253,293 @@ describe('probe server', () => {
 			expect(readSignals()).toStrictEqual(signals)
 		} finally {
 			scratch.destroy()
+		}
+	})
+
+	it('owns teardown during construction callbacks', { timeout: 180_000 }, async () => {
+		const hosts: ProbeServerHost[] = []
+		const teardown = createTeardown()
+		try {
+			for (const scenario of PROBE_SERVER_CALLBACKS) {
+				const scratch = createScratch({ prefix: `probe-server-${scenario}-` })
+				teardown.add(() => destroyScratch(scratch))
+				writeProbeServerTarget(scratch, ROOT)
+				scratch.write('tmp/probe', 'occupied\n')
+				const host = spawnProbeServerHost(scratch, BUILT_SERVER, scenario)
+				hosts.push(host)
+				teardown.add(() => killChildTree(host.child))
+				const records = [createProbeServerInitialize(), createProbeServerRequest()]
+				host.child.stdin.write(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+			}
+
+			for (const host of hosts) {
+				await waitForCondition(
+					`the ${host.scenario} callback teardown to settle`,
+					() => host.events.some((event) => event['name'] === 'destroy-settled'),
+					{ budget: 15_000, interval: 10 },
+				)
+				const names = host.events.map((event) => event['name'])
+				const started = host.events.find((event) => event['name'] === 'server-started')
+				const settled = host.events.find((event) => event['name'] === 'destroy-settled')
+				const callbackNames =
+					host.scenario === 'routed'
+						? ['initial-error', 'configured-error', 'destroy-called']
+						: ['initial-error', 'destroy-called']
+				expect(names).toEqual(expect.arrayContaining(callbackNames))
+				expect(started).toMatchObject({ owned: { SIGINT: 1, SIGTERM: 1 } })
+				expect(settled).toMatchObject({
+					mirror: [],
+					owned: { SIGINT: false, SIGTERM: false },
+					listeners: {
+						baseline: { data: 0, close: 0, error: 0, SIGINT: 0, SIGTERM: 0 },
+						current: { data: 0, close: 0, error: 0 },
+					},
+				})
+				await waitForCondition(
+					`the ${host.scenario} callback host to exit without intervention`,
+					() => host.child.exitCode !== null || host.child.signalCode !== null,
+					{ budget: 15_000, interval: 25 },
+				)
+				expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+				expect(host.input).toStrictEqual([])
+			}
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
+	it('shares construction across concurrent admitted calls', { timeout: 180_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-server-concurrent-' })
+		const teardown = createTeardown()
+		teardown.add(() => destroyScratch(scratch))
+		writeProbeServerTarget(scratch, ROOT)
+		const workbench = resolve(scratch.path, 'tmp/probe')
+		const mirror = resolve(scratch.path, 'tmp/type')
+		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+		teardown.add(() => killChildTree(host.child))
+		try {
+			const request = createProbeServerRequest()
+			const records = [createProbeServerInitialize(), request, { ...request, id: 2 }]
+			host.child.stdin.write(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+			await waitForProbeArming(workbench)
+			expect(readDirectoryNames(workbench).filter((name) => name.startsWith('arm-'))).toHaveLength(
+				2,
+			)
+			expect(readDirectoryNames(mirror)).toHaveLength(1)
+			const output = Buffer.concat(host.output).toString('utf8')
+			expect(output).not.toContain('"id":1')
+			expect(output).not.toContain('"id":2')
+			host.child.send({ command: 'destroy' })
+			await waitForCondition(
+				'the concurrent construction host teardown to settle',
+				() => host.events.some((event) => event['name'] === 'destroy-settled'),
+				{ budget: 60_000, interval: 25 },
+			)
+			const started = host.events.find((event) => event['name'] === 'server-started')
+			const settled = host.events.find((event) => event['name'] === 'destroy-settled')
+			expect(started).toMatchObject({ owned: { SIGINT: 1, SIGTERM: 1 } })
+			expect(settled).toMatchObject({
+				mirror: [],
+				owned: { SIGINT: false, SIGTERM: false },
+				listeners: {
+					baseline: { data: 0, close: 0, error: 0, SIGINT: 0, SIGTERM: 0 },
+					current: { data: 0, close: 0, error: 0 },
+				},
+			})
+			await waitForCondition(
+				'the concurrent construction host to exit without intervention',
+				() => host.child.exitCode !== null || host.child.signalCode !== null,
+				{ budget: 15_000, interval: 25 },
+			)
+			expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+			expect(host.input).toStrictEqual([])
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
+	it('releases stages after an admitted arming refusal', { timeout: 180_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-server-refusal-' })
+		const teardown = createTeardown()
+		teardown.add(() => destroyScratch(scratch))
+		writeProbeServerRefusal(scratch, ROOT)
+		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+		teardown.add(() => killChildTree(host.child))
+		try {
+			const request = createProbeServerRequest()
+			const records = [createProbeServerInitialize(), request]
+			host.child.stdin.write(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+			await waitForCondition(
+				'the admitted call to report the unavailable Vitest loader',
+				() => {
+					const output = Buffer.concat(host.output).toString('utf8')
+					return output.includes('"id":1') && output.endsWith('\n')
+				},
+				{ budget: 30_000, interval: 10 },
+			)
+			expect(Buffer.concat(host.output).toString('utf8')).toContain(
+				'The workspace cannot load vitest/node',
+			)
+			host.child.stdin.write(`${JSON.stringify({ ...request, id: 2 })}\n`)
+			await waitForCondition(
+				'the retried admitted call to report the unavailable Vitest loader',
+				() => {
+					const output = Buffer.concat(host.output).toString('utf8')
+					return output.includes('"id":2') && output.endsWith('\n')
+				},
+				{ budget: 30_000, interval: 10 },
+			)
+			const output = Buffer.concat(host.output).toString('utf8')
+			const frames = decodeJSONLines(output)
+			expect(frames).toMatchObject([
+				{ id: 0, result: { serverInfo: { name: 'probe' } } },
+				{ id: 1, result: { isError: true } },
+				{ id: 2, result: { isError: true } },
+			])
+			expect(output).toContain('The workspace cannot load vitest/node')
+			host.child.send({ command: 'destroy' })
+			await waitForCondition(
+				'the refused arming host teardown to settle',
+				() => host.events.some((event) => event['name'] === 'destroy-settled'),
+				{ budget: 30_000, interval: 10 },
+			)
+			const started = host.events.find((event) => event['name'] === 'server-started')
+			const settled = host.events.find((event) => event['name'] === 'destroy-settled')
+			expect(started).toMatchObject({ owned: { SIGINT: 1, SIGTERM: 1 } })
+			expect(settled).toMatchObject({
+				mirror: [],
+				owned: { SIGINT: false, SIGTERM: false },
+				listeners: {
+					baseline: { data: 0, close: 0, error: 0, SIGINT: 0, SIGTERM: 0 },
+					current: { data: 0, close: 0, error: 0 },
+				},
+			})
+			await waitForCondition(
+				'the refused arming host to exit without intervention',
+				() => host.child.exitCode !== null || host.child.signalCode !== null,
+				{ budget: 15_000, interval: 25 },
+			)
+			expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+			expect(host.input).toStrictEqual([])
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
+	it('retries admission after a refused construction', { timeout: 180_000 }, async () => {
+		const scratch = createScratch({ prefix: 'probe-server-construction-' })
+		const teardown = createTeardown()
+		teardown.add(() => destroyScratch(scratch))
+		writeProbeServerConstruction(scratch, ROOT)
+		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+		teardown.add(() => killChildTree(host.child))
+		try {
+			const request = createProbeServerRequest(false)
+			const records = [createProbeServerInitialize(), request]
+			host.child.stdin.write(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+			await waitForCondition(
+				'the admitted call to report the missing TypeScript manifest',
+				() => {
+					const output = Buffer.concat(host.output).toString('utf8')
+					return output.includes('"id":1') && output.endsWith('\n')
+				},
+				{ budget: 30_000, interval: 10 },
+			)
+			const refused = Buffer.concat(host.output).toString('utf8')
+			expect(refused).toContain('typescript does not publish a readable manifest')
+			scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+			host.child.stdin.write(`${JSON.stringify({ ...request, id: 2 })}\n`)
+			await waitForCondition(
+				'the later admitted call to return a verdict',
+				() => {
+					const output = Buffer.concat(host.output).toString('utf8')
+					return output.includes('"id":2') && output.endsWith('\n')
+				},
+				{ budget: 120_000, interval: 25 },
+			)
+			const frames = decodeJSONLines(Buffer.concat(host.output).toString('utf8'))
+			expect(frames).toMatchObject([
+				{ id: 0, result: { serverInfo: { name: 'probe' } } },
+				{ id: 1, result: { isError: true } },
+				{
+					id: 2,
+					result: {
+						content: [{ type: 'text', text: expect.stringMatching(/^probe .+receipt probe:/s) }],
+						structuredContent: { receipt: expect.stringMatching(/^probe:/) },
+					},
+				},
+			])
+			host.child.send({ command: 'destroy' })
+			await waitForCondition(
+				'the construction retry host teardown to settle',
+				() => host.events.some((event) => event['name'] === 'destroy-settled'),
+				{ budget: 30_000, interval: 10 },
+			)
+			await waitForCondition(
+				'the construction retry host to exit without intervention',
+				() => host.child.exitCode !== null || host.child.signalCode !== null,
+				{ budget: 15_000, interval: 25 },
+			)
+			expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+			expect(host.input).toStrictEqual([])
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
+	it('releases arming and active work through public destroy', { timeout: 180_000 }, async () => {
+		for (const phase of PROBE_SERVER_PHASES) {
+			const scratch = createScratch({ prefix: `probe-server-${phase}-` })
+			const teardown = createTeardown()
+			teardown.add(() => destroyScratch(scratch))
+			writeProbeServerTarget(scratch, ROOT)
+			const directory = resolve(scratch.path, 'tmp/probe')
+			const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+			teardown.add(() => killChildTree(host.child))
+			try {
+				const records = [createProbeServerInitialize(), createProbeServerRequest()]
+				host.child.stdin.write(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+				if (phase === 'arming') {
+					await waitForProbeArming(directory)
+				} else {
+					await waitForProbeArmed(directory)
+					await waitForCondition(
+						'the public-destroy runtime case to become active',
+						() =>
+							readDirectoryNames(directory).some((name) =>
+								name.startsWith('public-destroy-active.test.probe-'),
+							),
+						{ budget: 30_000, interval: 10 },
+					)
+				}
+				host.child.send({ command: 'destroy' })
+				await waitForCondition(
+					`the ${phase} public teardown to settle`,
+					() => host.events.some((event) => event['name'] === 'destroy-settled'),
+					{ budget: 60_000, interval: 25 },
+				)
+				const started = host.events.find((event) => event['name'] === 'server-started')
+				const settled = host.events.find((event) => event['name'] === 'destroy-settled')
+				expect(started).toMatchObject({ owned: { SIGINT: 1, SIGTERM: 1 } })
+				expect(settled).toMatchObject({
+					mirror: [],
+					owned: { SIGINT: false, SIGTERM: false },
+					listeners: {
+						baseline: { data: 0, close: 0, error: 0, SIGINT: 0, SIGTERM: 0 },
+						current: { data: 0, close: 0, error: 0 },
+					},
+				})
+				await waitForCondition(
+					`the ${phase} public teardown host to exit without intervention`,
+					() => host.child.exitCode !== null || host.child.signalCode !== null,
+					{ budget: 15_000, interval: 25 },
+				)
+				expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+				expect(readDirectoryNames(directory)).toStrictEqual([])
+				expect(host.input).toStrictEqual([])
+			} finally {
+				await teardown.destroy()
+			}
 		}
 	})
 

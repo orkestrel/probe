@@ -18,7 +18,7 @@ import { open } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { captureError, createTeardown, waitForCondition } from '@orkestrel/test'
+import { createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
 	PROBE_SPECIFICATIONS,
@@ -76,11 +76,17 @@ describe('runtime stage', () => {
 		for (const include of includes) expect(include.endsWith('.test.ts')).toBe(true)
 	})
 
-	it('reports a missing workspace runner during construction', () => {
+	it('reports a missing workspace runner through inspection', async () => {
 		const scratch = createScratch({ prefix: 'probe-runtime-resolution-' })
+		scratch.write('package.json', '{"name":"probe-runtime-resolution","private":true}\n')
+		const stage = new RuntimeStage(scratch.path)
 		try {
-			scratch.write('package.json', '{"name":"probe-runtime-resolution","private":true}\n')
-			const error = captureError(() => new RuntimeStage(scratch.path))
+			const error: unknown = await stage
+				.inspect({
+					files: [],
+					test: { path: 'tmp/probe/missing-runtime.test.ts', text: '' },
+				})
+				.catch((failure: unknown) => failure)
 			expect(isProbeError(error)).toBe(true)
 			expect(error).toMatchObject({
 				origin: 'workspace',
@@ -89,7 +95,10 @@ describe('runtime stage', () => {
 				cause: expect.any(Error),
 			})
 		} finally {
-			scratch.destroy()
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => stage.destroy())
+			await teardown.destroy()
 		}
 	})
 

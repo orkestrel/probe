@@ -30,7 +30,9 @@ import { Probe } from './Probe.js'
  * @remarks
  * Construction snapshots the probe options, publishes the `prove` tool, and binds the dual-era
  * dispatcher to the stdio transport. An admitted `prove` call creates the probe and begins
- * workspace arming, so discovery does not depend on the workspace toolchain.
+ * workspace arming, so discovery does not depend on the workspace toolchain. Construction is held
+ * before it begins, so teardown entered through a construction callback waits for the resulting
+ * probe and releases it. A constructor refusal clears that held operation for a later retry.
  *
  * `start` seizes standard input and registers the signals a harness ends a child with, and records
  * whether standard input was already flowing. Every listener it attaches is held as a field, and
@@ -61,7 +63,7 @@ export class ProbeServer implements ProbeServerInterface {
 	readonly #signal: () => void
 	readonly #server: ReturnType<typeof createMCPServer>
 	#owns: boolean | undefined
-	#probe: ProbeInterface | undefined
+	#construction: Promise<ProbeInterface> | undefined
 	#closing: Promise<void> | undefined
 
 	/**
@@ -150,7 +152,9 @@ export class ProbeServer implements ProbeServerInterface {
 		// Safe only after the forwarders are off: a chunk arriving on a destroyed stream would raise
 		// a write-after-destroy error nothing is left to answer.
 		this.#stream.destroy()
-		const probe = this.#probe
+		const construction = this.#construction
+		if (construction === undefined) return
+		const probe = await construction.catch(() => undefined)
 		if (probe !== undefined) await probe.destroy()
 	}
 
@@ -219,18 +223,26 @@ export class ProbeServer implements ProbeServerInterface {
 				},
 			)
 		}
-		return this.#resolveProbe().prove(input)
+		const probe = await this.#resolveProbe()
+		return probe.prove(input)
 	}
 
-	// Returns the admitted-call probe, constructing it only after validation. Assignment happens
-	// before use so concurrent admitted calls share the same lifecycle and teardown target.
-	#resolveProbe(): ProbeInterface {
+	// Returns the admitted-call probe, constructing it only after validation. Store the construction
+	// before it starts so a callback that enters `destroy` while `new Probe` is still returning joins
+	// that construction and releases its result. A refused constructor clears the stored promise, so
+	// a later admitted call retries instead of retaining the refusal.
+	async #resolveProbe(): Promise<ProbeInterface> {
 		if (this.#closing !== undefined) throw createDestroyedError('probe server')
-		const current = this.#probe
-		if (current !== undefined) return current
-		const probe = new Probe(this.#options)
-		this.#probe = probe
-		return probe
+		const current = this.#construction
+		if (current !== undefined) return await current
+		const construction = Promise.resolve().then(() => new Probe(this.#options))
+		this.#construction = construction
+		try {
+			return await construction
+		} catch (error) {
+			if (this.#construction === construction) this.#construction = undefined
+			throw error
+		}
 	}
 
 	async #execute(context: MCPExecutionContext): Promise<ToolResult | MCPCallResult> {

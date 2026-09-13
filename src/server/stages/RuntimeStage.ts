@@ -126,12 +126,14 @@ export class RuntimeStage implements StageInterface {
 	/**
 	 * Starts warming the target workspace's Vitest service.
 	 *
+	 * @remarks Loading starts during this call. A loader refusal rejects the owned warm operation
+	 * rather than construction, so `inspect` reports it and `destroy` remains available.
+	 *
 	 * @param workspace - The target workspace root. Default: the current working directory
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		const vitest = loadWorkspaceVitest(this.#workspace)
-		this.#store(this.#warm(vitest.createVitest))
+		this.#store(this.#warm())
 	}
 
 	get stage(): Stage {
@@ -298,7 +300,7 @@ export class RuntimeStage implements StageInterface {
 			}
 			this.#revisions.clear()
 			// A stage whose warming failed holds nothing to release, so teardown settles rather than
-			// re-reporting a failure its constructor already surfaced.
+			// re-reporting a failure already surfaced through `inspect`.
 			const vitest = await this.#vitest?.catch(() => undefined)
 			if (vitest !== undefined) {
 				void vitest.cancelCurrentRun('keyboard-input').catch(() => {})
@@ -312,7 +314,8 @@ export class RuntimeStage implements StageInterface {
 		}
 	}
 
-	async #warm(create: typeof createVitest): Promise<Vitest> {
+	async #warm(create?: typeof createVitest): Promise<Vitest> {
+		const factory = create ?? loadWorkspaceVitest(this.#workspace).createVitest
 		this.#sweep()
 		const output = new PassThrough()
 		output.resume()
@@ -337,7 +340,7 @@ export class RuntimeStage implements StageInterface {
 		try {
 			// Only standard output frames the Model Context Protocol transport. Preserve worker
 			// diagnostics on standard error while draining standard output into a bounded stream.
-			warming = create(
+			warming = factory(
 				'test',
 				{
 					root: this.#workspace,

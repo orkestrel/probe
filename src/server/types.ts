@@ -388,9 +388,10 @@ export interface WorkspaceManifest {
  * The server owns the process it runs in. `start` seizes standard input and standard output for
  * the transport and registers the termination handlers a harness signals, so a host that starts one
  * has already given the process to it. `destroy` reverses all of that and tears the probe down with
- * it when an admitted call created it. Destruction before admission loads no workspace tools, which
- * is why there is no verb that stops serving and leaves the stages standing: a probe nothing is
- * reading from holds its tools and its mirror for nobody.
+ * it when an admitted call created it. When teardown begins during admitted construction, it waits
+ * for that construction and releases the resulting probe before it settles. Destruction before
+ * admission loads no workspace tools, which is why there is no verb that stops serving and leaves
+ * the stages standing: a probe nothing is reading from holds its tools and its mirror for nobody.
  *
  * @example
  * ```ts
@@ -423,14 +424,15 @@ export interface ProbeServerInterface {
 	 *
 	 * @remarks
 	 * Settling is idempotent: a call made while teardown is running joins it and returns the same
-	 * promise, and a call made afterwards returns that settled promise. The server removes exactly the
-	 * listeners it attached, holding each one as a field rather than choosing by absence from a
-	 * capture, so a host that keeps running after this call reads its own standard input again and
-	 * receives its own signals, and a listener the host registered while
-	 * the server was serving is still attached and still fires. That covers the stream's flow as
-	 * well as its listeners: standard input is left flowing when it was already flowing before
-	 * `start` and when something else is reading it at release, and a stream nothing had read yet
-	 * and nothing else reads is paused.
+	 * promise, and a call made afterwards returns that settled promise. An admitted probe construction
+	 * is part of teardown ownership even when a callback begins teardown before that construction
+	 * returns. The server removes exactly the listeners it attached, holding each one as a field
+	 * instead of choosing by absence from a capture. A host that keeps running after this call reads
+	 * its own standard input again and receives its own signals, and a listener the host registered
+	 * while the server was serving is still attached and still fires. That covers the stream's flow
+	 * as well as its listeners: standard input is left flowing when it was already flowing before
+	 * `start` and when something else is reading it at release, and a stream nothing had read yet and
+	 * nothing else reads is paused.
 	 *
 	 * @returns A promise that settles after the probe releases every stage's tool and mirror
 	 */

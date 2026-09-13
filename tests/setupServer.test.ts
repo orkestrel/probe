@@ -1,25 +1,124 @@
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
-import { createScratch } from '@orkestrel/test/server'
+import { fileURLToPath } from 'node:url'
+import { createTeardown, waitForCondition } from '@orkestrel/test'
+import { createScratch, destroyScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
+import { WORKSPACE_ROOT } from './setup.js'
 import {
 	REFUSED_RUNTIME_TARGETS,
 	createLintFixture,
+	createProbeServerHost,
+	createProbeServerRequest,
 	describeEnding,
 	extractClaimLiteral,
 	extractExportComment,
 	extractInterfaceProperties,
 	extractProbeSection,
+	isProbeServerChild,
+	killChildTree,
 	killFixtureServer,
 	probeRefusedTargets,
 	readChildEnding,
+	readDirectoryNames,
 	readFixtureServer,
 	readHostEnding,
 	readSignalEnding,
+	spawnProbeServerHost,
 	waitForFixtureServer,
+	writeProbeServerTarget,
 } from './setupServer.js'
 
+const ROOT = fileURLToPath(WORKSPACE_ROOT)
+const BUILT_SERVER = resolve(ROOT, 'dist/src/server/index.js')
+
 describe('server test setup', () => {
+	it('builds the ProbeServer host guard and event vocabulary', () => {
+		const program = createProbeServerHost()
+		expect(program).toContain(
+			"scenario !== 'direct' && scenario !== 'routed' && scenario !== 'controlled'",
+		)
+		expect(program).toContain("channel: 'probe-server-host'")
+		for (const event of [
+			'destroy-settled',
+			'destroy-rejected',
+			'destroy-called',
+			'initial-error',
+			'configured-error',
+			'server-created',
+			'server-started',
+		]) {
+			expect(program).toContain(`record('${event}'`)
+		}
+	})
+
+	it('selects whether the ProbeServer request keeps runtime work active', () => {
+		expect(JSON.stringify(createProbeServerRequest())).toContain('setTimeout')
+		expect(JSON.stringify(createProbeServerRequest(false))).toContain('accepts the subject')
+	})
+
+	it('recognizes a child carrying every required pipe', async () => {
+		const piped = spawn(process.execPath, ['-e', 'process.exit(0)'], {
+			stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+		})
+		const ignored = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' })
+		const pipedEnding = readChildEnding(piped)
+		const ignoredEnding = readChildEnding(ignored)
+		expect(isProbeServerChild(piped)).toBe(true)
+		expect(isProbeServerChild(ignored)).toBe(false)
+		expect(await pipedEnding).toStrictEqual({ code: 0, signal: null })
+		expect(await ignoredEnding).toStrictEqual({ code: 0, signal: null })
+	})
+
+	it('reads directory entries and accepts an absent directory', () => {
+		const scratch = createScratch({ prefix: 'probe-server-directory-' })
+		try {
+			expect(readDirectoryNames(resolve(scratch.path, 'absent'))).toStrictEqual([])
+			scratch.write('entries/subject.ts', '')
+			expect(readDirectoryNames(resolve(scratch.path, 'entries'))).toStrictEqual(['subject.ts'])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('runs the generated ProbeServer host through public destroy', async () => {
+		const scratch = createScratch({ prefix: 'probe-server-host-' })
+		const teardown = createTeardown()
+		teardown.add(() => destroyScratch(scratch))
+		writeProbeServerTarget(scratch, ROOT)
+		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+		teardown.add(() => killChildTree(host.child))
+		try {
+			await waitForCondition(
+				'the generated ProbeServer host to start',
+				() => host.events.some((event) => event['name'] === 'server-started'),
+				{ budget: 15_000, interval: 10 },
+			)
+			host.child.send({ command: 'destroy' })
+			await waitForCondition(
+				'the generated ProbeServer host teardown to settle',
+				() => host.events.some((event) => event['name'] === 'destroy-settled'),
+				{ budget: 15_000, interval: 10 },
+			)
+			await waitForCondition(
+				'the generated ProbeServer host to exit without intervention',
+				() => host.child.exitCode !== null || host.child.signalCode !== null,
+				{ budget: 15_000, interval: 25 },
+			)
+			expect(host.events.map((event) => event['name'])).toEqual(
+				expect.arrayContaining([
+					'server-created',
+					'server-started',
+					'destroy-called',
+					'destroy-settled',
+				]),
+			)
+			expect(await host.ending).toStrictEqual({ code: 0, signal: null })
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
 	it('extracts a claim literal through its matching indentation', () => {
 		const text = [
 			'async function register(): Promise<void> {',

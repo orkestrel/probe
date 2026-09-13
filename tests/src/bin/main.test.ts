@@ -1,8 +1,7 @@
-import type { ScratchInterface } from '@orkestrel/test/server'
 import type { JSONValue } from '@orkestrel/contract'
 import type { Interface } from 'node:readline'
 import { version } from '../../../package.json' with { type: 'json' }
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -22,8 +21,12 @@ import { describe, expect, it } from 'vitest'
 import {
 	PROBE_SERVER_WORKSPACES,
 	describeEnding,
+	readDirectoryNames,
 	readChildEnding,
 	readSignalEnding,
+	waitForProbeArmed,
+	waitForProbeArming,
+	writeProbeServerTarget,
 } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
@@ -101,63 +104,6 @@ const THROWING =
 // type stage and one breaking at the runtime stage differ only in the draft each replaces.
 const PASSING =
 	"import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n"
-
-function readWorkbench(directory: string): readonly string[] {
-	try {
-		return readdirSync(directory)
-	} catch (error: unknown) {
-		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return []
-		throw error
-	}
-}
-
-function readArming(directory: string): readonly string[] {
-	return readWorkbench(directory).filter((name) => name.startsWith('arm-'))
-}
-
-async function waitForArming(directory: string): Promise<readonly string[]> {
-	let arming: readonly string[] = []
-	await waitForCondition(
-		`two arming files in ${directory}`,
-		() => {
-			arming = readArming(directory)
-			return arming.length === 2
-		},
-		{ budget: ARMING_TIMEOUT, interval: 10 },
-	)
-	return arming
-}
-
-// Waits for the boot to finish rather than for the `arm` event, which no observer outside the
-// process can read. The boot dependencies exist for the whole boot and are removed as it ends,
-// so their disappearance is the same moment from out here.
-async function waitForArmed(directory: string): Promise<void> {
-	await waitForArming(directory)
-	await waitForCondition(
-		`the boot to end in ${directory}`,
-		() => readArming(directory).length === 0,
-		{
-			budget: ARMING_TIMEOUT,
-			interval: 10,
-		},
-	)
-}
-
-// Builds a target the entry can really arm against: a peer-resolution or configuration failure
-// surfaces at stage construction, so a workspace missing its TypeScript project or its Vitest
-// configuration aborts the boot at a point that varies per run.
-function writeTarget(scratch: ScratchInterface): void {
-	scratch.write('package.json', '{}\n')
-	scratch.link('node_modules', resolve(ROOT, 'node_modules'))
-	scratch.write(
-		'tsconfig.json',
-		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","strict":true,"types":[]}}\n',
-	)
-	scratch.write(
-		'vite.config.ts',
-		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
-	)
-}
 
 // Reads one JSON-RPC response line as the `result` record it carries, or `undefined` when the line
 // carries an error or anything else. `isJSONObject` is the installed guard, so nothing here
@@ -1304,7 +1250,7 @@ describe('bin entry', () => {
 					`this host ends a child holding its own ${delivery.signal} handler as ${describeEnding(ending)}, so child.kill runs no handler here and the entry's graceful teardown cannot be reached`,
 				)
 				const scratch = createScratch()
-				writeTarget(scratch)
+				writeProbeServerTarget(scratch, ROOT)
 				const directory = resolve(scratch.path, 'tmp/probe')
 				const specification = {
 					path: 'tmp/probe/signal-active.test.ts',
@@ -1339,13 +1285,13 @@ describe('bin entry', () => {
 				try {
 					child.stdin.write(JSON.stringify(request) + '\n')
 					if (delivery.phase === 'boot') {
-						await waitForArming(directory)
+						await waitForProbeArming(directory)
 					} else {
-						await waitForArmed(directory)
+						await waitForProbeArmed(directory)
 						await waitForCondition(
 							'the admitted runtime case to become active',
 							() =>
-								readWorkbench(directory).some((name) =>
+								readDirectoryNames(directory).some((name) =>
 									name.startsWith('signal-active.test.probe-'),
 								),
 							{ budget: ARMING_TIMEOUT, interval: 10 },
@@ -1361,7 +1307,7 @@ describe('bin entry', () => {
 					// because it is here to catch a hang rather than to grade the host.
 					expect(outcome).toStrictEqual({ code: 0, signal: null })
 					expect(elapsed).toBeLessThan(TEARDOWN_BOUND)
-					expect(readWorkbench(directory)).toStrictEqual([])
+					expect(readDirectoryNames(directory)).toStrictEqual([])
 				} finally {
 					const teardown = createTeardown()
 					teardown.add(() => scratch.destroy())
