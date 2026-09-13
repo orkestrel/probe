@@ -5,7 +5,7 @@ import { version } from '../../../package.json' with { type: 'json' }
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import {
 	MCP_FALLBACK_VERSION,
@@ -19,12 +19,18 @@ import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { formatVerdict, isVerdict } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { describeEnding, readChildEnding, readSignalEnding } from '../../setupServer.js'
+import {
+	PROBE_SERVER_WORKSPACES,
+	describeEnding,
+	readChildEnding,
+	readSignalEnding,
+} from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const ENTRY = 'src/bin/main.ts'
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
+const BUILT_SERVER = pathToFileURL(resolve(ROOT, 'dist/src/server/index.js')).href
 // The program that gives the entry a real terminal, by running it inside a pseudo-terminal session.
 // A proof needing one spawns this exact path, and skips where the path names no file: Git Bash on
 // Windows ships no `script` program, so the fixture these proofs drive is absent there. The skip
@@ -245,36 +251,284 @@ describe('bin entry', () => {
 		expect(source).not.toContain('|\\r/')
 	})
 
-	it('reports a construction refusal as a formatted stderr line without a stack', async () => {
+	it('retries an admitted arming refusal through the protocol without stderr', async () => {
 		const scratch = createScratch({ files: { 'package.json': '{}\n' } })
 		const child = spawn(process.execPath, [BUILT_ENTRY], {
 			cwd: scratch.path,
-			stdio: ['ignore', 'pipe', 'pipe'],
+			stdio: ['pipe', 'pipe', 'pipe'],
 		})
-		const output: Buffer[] = []
+		const ended = readChildEnding(child)
+		const frames: string[] = []
 		const errors: Buffer[] = []
-		child.stdout.on('data', (chunk: Buffer) => output.push(chunk))
 		child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+		const output = createInterface({ input: child.stdout })
+		output.on('line', (line) => {
+			if (line.trim() !== '') frames.push(line)
+		})
+		const request = {
+			jsonrpc: '2.0',
+			method: 'tools/call',
+			params: { name: 'prove', arguments: buildClaim('arming-refusal', BROKEN) },
+		}
 		try {
-			const status = await new Promise<number | null>((resolveClose) => {
-				child.once('close', (code) => resolveClose(code))
-			})
-			const reported = Buffer.concat(errors).toString('utf8')
-			expect(status).toBe(1)
-			expect(Buffer.concat(output).toString('utf8')).toBe('')
-			expect(reported).toContain(
-				'[workspace] missing: typescript does not publish a readable manifest\n',
+			child.stdin.write(JSON.stringify({ ...request, id: 1 }) + '\n')
+			await waitForCondition(
+				'the entry to report its missing toolchain',
+				() => frames.length === 1,
+				{
+					budget: 10_000,
+					interval: 10,
+				},
 			)
-			expect(reported).not.toContain('ProbeError:')
+			const missing = readAnswer(frames[0] ?? '')
+			expect(missing).toMatchObject({ isError: true })
+			if (missing === undefined) return
+			expect(readText(missing)).toContain('typescript does not publish a readable manifest')
+
+			scratch.write('node_modules/typescript/package.json', '{"name":"typescript"}\n')
+			child.stdin.write(JSON.stringify({ ...request, id: 2 }) + '\n')
+			await waitForCondition('the entry to retry workspace arming', () => frames.length === 2, {
+				budget: 10_000,
+				interval: 10,
+			})
+			const malformed = readAnswer(frames[1] ?? '')
+			expect(malformed).toMatchObject({ isError: true })
+			if (malformed === undefined) return
+			expect(readText(malformed)).toContain('typescript publishes no readable version')
+			expect(Buffer.concat(errors).toString('utf8')).toBe('')
+			expect({ code: child.exitCode, signal: child.signalCode }).toStrictEqual({
+				code: null,
+				signal: null,
+			})
 		} finally {
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
-			teardown.add(() => {
-				if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+			teardown.add(async () => {
+				if (child.exitCode !== null || child.signalCode !== null) return
+				child.kill('SIGTERM')
+				try {
+					await waitForCondition(
+						'the arming-refusal child to exit after teardown',
+						() => child.exitCode !== null || child.signalCode !== null,
+						{ budget: 10_000, interval: 10 },
+					)
+				} catch (error) {
+					child.kill('SIGKILL')
+					await ended
+					throw error
+				}
 			})
+			teardown.add(() => output.close())
 			await teardown.destroy()
 		}
 	})
+
+	it('serves discovery before workspace arming', { timeout: 30_000 }, async () => {
+		const scratch = createScratch({
+			files: {
+				'package.json': '{}\n',
+				'node_modules/typescript/package.json': '{\n',
+			},
+		})
+		const requests = [
+			{
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'initialize',
+				params: {
+					protocolVersion: '2025-06-18',
+					capabilities: {},
+					clientInfo: { name: 'probe-discovery-test', version: '1.0.0' },
+				},
+			},
+			{ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+			{
+				jsonrpc: '2.0',
+				id: 3,
+				method: 'tools/call',
+				params: { name: 'prove', arguments: {} },
+			},
+			{
+				jsonrpc: '2.0',
+				id: 4,
+				method: 'tools/call',
+				params: { name: 'prove', arguments: buildClaim('discovery', BROKEN) },
+			},
+		]
+		const child = spawn(process.execPath, [BUILT_ENTRY], {
+			cwd: scratch.path,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		})
+		const ended = readChildEnding(child)
+		const frames: string[] = []
+		const errors: Buffer[] = []
+		const input: Error[] = []
+		child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+		child.stdin.on('error', (error: Error) => input.push(error))
+		const output = createInterface({ input: child.stdout })
+		output.on('line', (line) => {
+			if (line.trim() !== '') frames.push(line)
+		})
+		try {
+			child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
+			await waitForCondition(
+				'the entry to answer discovery or terminate',
+				() =>
+					frames.length === requests.length || child.exitCode !== null || child.signalCode !== null,
+				{ budget: 10_000, interval: 10 },
+			)
+			const evidence = {
+				frames,
+				stderr: Buffer.concat(errors).toString('utf8'),
+				input: input.map((error) => error.message),
+				code: child.exitCode,
+				signal: child.signalCode,
+			}
+			const answered = indexFrames(frames)
+			const initialized = answered.get(1)
+			expect({ ...evidence, initialized }).toMatchObject({ initialized: expect.any(String) })
+			if (initialized === undefined) return
+			expect(readAnswer(initialized)).toMatchObject({
+				protocolVersion: '2025-06-18',
+				serverInfo: { name: 'probe', version },
+			})
+			const listed = answered.get(2)
+			expect({ ...evidence, listed }).toMatchObject({ listed: expect.any(String) })
+			if (listed === undefined) return
+			expect(readAnswer(listed)).toMatchObject({
+				tools: [expect.objectContaining({ name: 'prove' })],
+			})
+			const refused = answered.get(3)
+			expect({ ...evidence, refused }).toMatchObject({ refused: expect.any(String) })
+			if (refused === undefined) return
+			const refusedAnswer = readAnswer(refused)
+			expect(refusedAnswer).toMatchObject({ isError: true })
+			if (refusedAnswer === undefined) return
+			expect(readText(refusedAnswer)).toContain(
+				'The prove tool requires a claim matching the advertised schema',
+			)
+			const admitted = answered.get(4)
+			expect({ ...evidence, admitted }).toMatchObject({ admitted: expect.any(String) })
+			if (admitted === undefined) return
+			const admittedAnswer = readAnswer(admitted)
+			expect(admittedAnswer).toMatchObject({ isError: true })
+			if (admittedAnswer === undefined) return
+			expect(readText(admittedAnswer)).toContain('typescript does not publish a readable manifest')
+		} finally {
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(async () => {
+				if (child.exitCode !== null || child.signalCode !== null) return
+				child.kill('SIGTERM')
+				try {
+					await waitForCondition(
+						'the discovery child to exit after teardown',
+						() => child.exitCode !== null || child.signalCode !== null,
+						{ budget: 10_000, interval: 10 },
+					)
+				} catch (error) {
+					child.kill('SIGKILL')
+					await ended
+					throw error
+				}
+			})
+			teardown.add(() => output.close())
+			await teardown.destroy()
+		}
+	})
+
+	it(
+		'snapshots default and relative workspaces, lifecycle options, and hooks for admitted calls',
+		{ timeout: 300_000 },
+		async () => {
+			const scratch = createScratch()
+			const directory = resolve(ROOT, 'tmp/probe/bin')
+			mkdirSync(directory, { recursive: true })
+			try {
+				for (const workspace of PROBE_SERVER_WORKSPACES) {
+					const label = workspace === undefined ? 'default' : 'relative'
+					const marker = resolve(scratch.path, `${label}.log`)
+					const entry = `${label}.mjs`
+					const workspaceOption = workspace === undefined ? '' : "workspace: '.',"
+					scratch.write(
+						entry,
+						[
+							"import { appendFileSync } from 'node:fs'",
+							`import { ProbeServer } from ${JSON.stringify(BUILT_SERVER)}`,
+							'const marker = process.env.PROBE_MARKER',
+							'const changed = process.env.PROBE_CHANGED',
+							"if (marker === undefined || changed === undefined) throw new Error('The fixture environment is incomplete')",
+							"function arm() { appendFileSync(marker, 'arm\\n'); throw new Error('hook marker') }",
+							"function report(_error, event) { appendFileSync(marker, 'error ' + event + '\\n') }",
+							"function replaced() { appendFileSync(marker, 'replaced\\n') }",
+							'const hooks = { arm }',
+							`const options = { ${workspaceOption} deadline: 120_000, on: hooks, error: report }`,
+							'const server = new ProbeServer(options)',
+							'options.workspace = changed',
+							'options.deadline = 1',
+							'options.on = {}',
+							'options.error = replaced',
+							'hooks.arm = replaced',
+							'process.chdir(changed)',
+							'server.start()',
+						].join('\n') + '\n',
+					)
+					const child = spawn(process.execPath, [resolve(scratch.path, entry)], {
+						cwd: ROOT,
+						stdio: ['pipe', 'pipe', 'pipe'],
+						env: {
+							...process.env,
+							PROBE_CHANGED: scratch.path,
+							PROBE_MARKER: marker,
+						},
+					})
+					const ended = readChildEnding(child)
+					const errors: Buffer[] = []
+					child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+					const output = createInterface({ input: child.stdout })
+					const requests = [
+						{
+							jsonrpc: '2.0',
+							id: 1,
+							method: 'tools/call',
+							params: { name: 'prove', arguments: buildClaim(`snapshot-${label}-a`, BROKEN) },
+						},
+						{
+							jsonrpc: '2.0',
+							id: 2,
+							method: 'tools/call',
+							params: { name: 'prove', arguments: buildClaim(`snapshot-${label}-b`, BROKEN) },
+						},
+					]
+					try {
+						child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
+						const frames = await readFrames(output, requests.length)
+						expect(frames).toHaveLength(requests.length)
+						for (const frame of frames) {
+							const answer = readAnswer(frame)
+							expect(answer).toBeDefined()
+							if (answer === undefined) continue
+							expect(isVerdict(answer['structuredContent'])).toBe(true)
+							expect(readText(answer)).toMatch(/^probe .+receipt probe:/s)
+						}
+						expect(Buffer.concat(errors).toString('utf8')).toBe('')
+						expect(scratch.read(`${label}.log`)).toBe('arm\nerror arm\n')
+					} finally {
+						if (child.exitCode === null && child.signalCode === null) {
+							child.kill('SIGTERM')
+							await ended
+						}
+						output.close()
+					}
+				}
+			} finally {
+				try {
+					rmdirSync(directory)
+				} catch {}
+				scratch.destroy()
+			}
+		},
+	)
 
 	it.skipIf(!existsSync(TERMINAL))(
 		'answers both protocol eras without exposing worker output on stdout',
@@ -1052,14 +1306,51 @@ describe('bin entry', () => {
 				const scratch = createScratch()
 				writeTarget(scratch)
 				const directory = resolve(scratch.path, 'tmp/probe')
+				const specification = {
+					path: 'tmp/probe/signal-active.test.ts',
+					text: "import { test } from 'vitest'\ntest('waits', async () => await new Promise((resolve) => setTimeout(resolve, 60_000)))\n",
+				}
+				const request = {
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'tools/call',
+					params: {
+						name: 'prove',
+						arguments: {
+							project: 'tsconfig.json',
+							case: {
+								files: [{ path: 'src/signal/constants.ts', text: CLEAN }],
+								test: specification,
+							},
+							control: {
+								files: [{ path: 'src/signal/constants.ts', text: BROKEN }],
+								test: specification,
+								stage: 'type',
+								reason: 'the source assigns a string to a number',
+							},
+						},
+					},
+				}
 				const child = spawn(process.execPath, [BUILT_ENTRY], {
 					cwd: scratch.path,
 					stdio: ['pipe', 'pipe', 'pipe'],
 				})
 				const exited = readChildEnding(child)
 				try {
-					if (delivery.phase === 'boot') await waitForArming(directory)
-					else await waitForArmed(directory)
+					child.stdin.write(JSON.stringify(request) + '\n')
+					if (delivery.phase === 'boot') {
+						await waitForArming(directory)
+					} else {
+						await waitForArmed(directory)
+						await waitForCondition(
+							'the admitted runtime case to become active',
+							() =>
+								readWorkbench(directory).some((name) =>
+									name.startsWith('signal-active.test.probe-'),
+								),
+							{ budget: ARMING_TIMEOUT, interval: 10 },
+						)
+					}
 					const started = performance.now()
 					child.kill(delivery.signal)
 					const outcome = await exited

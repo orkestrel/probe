@@ -8,6 +8,12 @@ import { locateComment, unwrapComment } from '@orkestrel/guide'
 import { waitForCondition } from '@orkestrel/test'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
 
+/** Selects the default and relative workspace forms the server must snapshot at construction. */
+export const PROBE_SERVER_WORKSPACES: ReadonlyArray<string | undefined> = Object.freeze([
+	undefined,
+	'.',
+])
+
 /** Selects what one built Oxlint language server fixture publishes and how long it answers. */
 export interface LintFixtureOptions {
 	/**

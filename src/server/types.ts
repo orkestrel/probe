@@ -381,11 +381,16 @@ export interface WorkspaceManifest {
  * Serves one probe over this process's Model Context Protocol stdio transport.
  *
  * @remarks
+ * Construction snapshots the options and resolves the workspace against the current working
+ * directory without loading its toolchain. Discovery can therefore answer before an admitted
+ * `prove` call creates the real probe and starts arming. Invalid claims do not create it.
+ *
  * The server owns the process it runs in. `start` seizes standard input and standard output for
  * the transport and registers the termination handlers a harness signals, so a host that starts one
  * has already given the process to it. `destroy` reverses all of that and tears the probe down with
- * it, which is why there is no verb that stops serving and leaves the stages standing: a probe
- * nothing is reading from holds its tools and its mirror for nobody.
+ * it when an admitted call created it. Destruction before admission loads no workspace tools, which
+ * is why there is no verb that stops serving and leaves the stages standing: a probe nothing is
+ * reading from holds its tools and its mirror for nobody.
  *
  * @example
  * ```ts

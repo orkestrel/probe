@@ -1,10 +1,13 @@
 import type { MCPLimitOptions } from '@orkestrel/mcp'
 import type { JSONValue } from '@orkestrel/contract'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { captureError, createRecorder, createTeardown, waitForDelay } from '@orkestrel/test'
+import { createScratch } from '@orkestrel/test/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { PROBE_KEYS } from '@src/core'
 import { ProbeServer } from '@src/server'
@@ -151,14 +154,12 @@ describe('probe server', () => {
 
 	it('returns the process it seized, and settles once', { timeout: 180_000 }, async () => {
 		const input = readInput()
-		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
-		// Construction seizes no stream: a host that never starts the server still owns its own
-		// standard input. It does load the target's own Vitest, which installs one process-wide
-		// termination listener of its own the first time any host in this process loads it. That
-		// listener belongs to that package, defers to every other listener on the signal, and is
-		// not this server's to remove — so the signal baseline is read after construction.
-		expect(readInput()).toStrictEqual(input)
 		const signals = readSignals()
+		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
+		// Construction seizes no stream and loads no workspace toolchain, so a host that never starts
+		// or calls the server still owns its standard input and process listeners unchanged.
+		expect(readInput()).toStrictEqual(input)
+		expect(readSignals()).toStrictEqual(signals)
 		const seized = {
 			data: input.data + 1,
 			close: input.close + 1,
@@ -212,24 +213,42 @@ describe('probe server', () => {
 	})
 
 	it('destroys a server that never started', { timeout: 180_000 }, async () => {
+		const scratch = createScratch({
+			files: {
+				'package.json': '{}\n',
+				'node_modules/typescript/package.json': '{\n',
+			},
+		})
 		const input = readInput()
 		const signals = readSignals()
-		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
-		await expect(server.destroy()).resolves.toBeUndefined()
-		expect(readInput()).toStrictEqual(input)
-		expect(readSignals()).toStrictEqual(signals)
+		try {
+			const server = new ProbeServer({ workspace: scratch.path, deadline: 120_000 })
+			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+			await expect(server.destroy()).resolves.toBeUndefined()
+			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+			expect(readInput()).toStrictEqual(input)
+			expect(readSignals()).toStrictEqual(signals)
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('refuses a start after teardown', { timeout: 180_000 }, async () => {
-		const server = new ProbeServer({ workspace: ROOT, deadline: 120_000 })
-		await server.destroy()
-		const error = captureError(() => server.start())
-		expect(error).toMatchObject({
-			name: 'ProbeError',
-			origin: 'claimant',
-			code: 'destroyed',
-			message: 'The probe server has been destroyed',
-		})
+		const scratch = createScratch({ files: { 'package.json': '{}\n' } })
+		try {
+			const server = new ProbeServer({ workspace: scratch.path, deadline: 120_000 })
+			await server.destroy()
+			const error = captureError(() => server.start())
+			expect(error).toMatchObject({
+				name: 'ProbeError',
+				origin: 'claimant',
+				code: 'destroyed',
+				message: 'The probe server has been destroyed',
+			})
+			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	// The two following cases attach after `start`. A teardown that removed whatever an emitter had

@@ -2,6 +2,7 @@ import type { ProbeInterface, ProbeOptions, Verdict } from '@src/core'
 import type { MCPCallResult, MCPExecutionContext } from '@orkestrel/mcp'
 import type { ToolResult } from '@orkestrel/tool'
 import type { ProbeServerInterface } from './types.js'
+import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { compileSchema, schemaToParameters } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer, isBoundedJSON } from '@orkestrel/mcp'
@@ -27,9 +28,9 @@ import { Probe } from './Probe.js'
  * stdio transport.
  *
  * @remarks
- * Construction creates the probe, publishes the `prove` tool, and binds the dual-era dispatcher to
- * the stdio transport. The probe begins warming there, so a harness that spawns the entry pays
- * arming while its client is still handshaking.
+ * Construction snapshots the probe options, publishes the `prove` tool, and binds the dual-era
+ * dispatcher to the stdio transport. An admitted `prove` call creates the probe and begins
+ * workspace arming, so discovery does not depend on the workspace toolchain.
  *
  * `start` seizes standard input and registers the signals a harness ends a child with, and records
  * whether standard input was already flowing. Every listener it attaches is held as a field, and
@@ -51,7 +52,7 @@ import { Probe } from './Probe.js'
  * ```
  */
 export class ProbeServer implements ProbeServerInterface {
-	readonly #probe: ProbeInterface
+	readonly #options: ProbeOptions
 	readonly #stream: PassThrough
 	readonly #transport: ReturnType<typeof createStdioServer>
 	readonly #data: (chunk: Buffer) => void
@@ -60,15 +61,26 @@ export class ProbeServer implements ProbeServerInterface {
 	readonly #signal: () => void
 	readonly #server: ReturnType<typeof createMCPServer>
 	#owns: boolean | undefined
+	#probe: ProbeInterface | undefined
 	#closing: Promise<void> | undefined
 
 	/**
-	 * Creates the probe this server publishes and binds it to this process's stdio transport.
+	 * Snapshots the probe options this server will use and binds the published schema to this
+	 * process's stdio transport. An admitted `prove` call creates the probe.
 	 *
-	 * @param options - Workspace, deadline, and initial observation hooks for the probe it creates
+	 * @param options - Workspace, deadline, and initial observation hooks for the deferred probe
 	 */
 	constructor(options?: ProbeOptions) {
-		this.#probe = new Probe(options)
+		const workspace = options?.workspace
+		const deadline = options?.deadline
+		const on = options?.on
+		const error = options?.error
+		this.#options = Object.freeze({
+			workspace: resolve(workspace ?? process.cwd()),
+			...(deadline === undefined ? {} : { deadline }),
+			...(on === undefined ? {} : { on: Object.freeze({ ...on }) }),
+			...(error === undefined ? {} : { error }),
+		})
 		// `@orkestrel/mcp` 0.0.19 attaches three anonymous listeners to whatever stream it is given
 		// and detaches none of them when its transport closes. Give it a stream this server owns, so
 		// those listeners are never on `process.stdin` and teardown never has to decide which
@@ -138,7 +150,8 @@ export class ProbeServer implements ProbeServerInterface {
 		// Safe only after the forwarders are off: a chunk arriving on a destroyed stream would raise
 		// a write-after-destroy error nothing is left to answer.
 		this.#stream.destroy()
-		await this.#probe.destroy()
+		const probe = this.#probe
+		if (probe !== undefined) await probe.destroy()
 	}
 
 	// Forwards one chunk of this process's standard input into the stream the transport reads.
@@ -206,7 +219,18 @@ export class ProbeServer implements ProbeServerInterface {
 				},
 			)
 		}
-		return this.#probe.prove(input)
+		return this.#resolveProbe().prove(input)
+	}
+
+	// Returns the admitted-call probe, constructing it only after validation. Assignment happens
+	// before use so concurrent admitted calls share the same lifecycle and teardown target.
+	#resolveProbe(): ProbeInterface {
+		if (this.#closing !== undefined) throw createDestroyedError('probe server')
+		const current = this.#probe
+		if (current !== undefined) return current
+		const probe = new Probe(this.#options)
+		this.#probe = probe
+		return probe
 	}
 
 	async #execute(context: MCPExecutionContext): Promise<ToolResult | MCPCallResult> {

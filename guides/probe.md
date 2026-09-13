@@ -472,8 +472,9 @@ together — where `instanceof` refuses a failure the other copy raised.
 
 probe borrows the target workspace's own toolchain and configuration, so a workspace missing any of
 these returns a failure the caller cannot diagnose from the verdict alone. Check them before you
-make a claim; the boot controls run through the same stages a claim does, so a workspace missing one
-fails at construction rather than at `prove`.
+make a claim. A direct `Probe` runs its boot controls at construction. `ProbeServer` leaves discovery
+independent of the workspace toolchain and runs those controls when an admitted `prove` call
+constructs the real probe.
 
 - **A Vitest project whose name the test's path infers.** A test under `tmp/probe/` names the
   `probe` project, and a test under `tests/src/<environment>/` names `src:<environment>`. Any other
@@ -514,7 +515,8 @@ fails at construction rather than at `prove`.
   the gate only while probe and the gate read one installed copy of each tool.
 
 Declare `@orkestrel/probe` as a development dependency of the workspace it inspects. Its tools are
-optional peers, resolved from that workspace at construction.
+optional peers, resolved from that workspace when a direct probe is constructed or a server admits
+an admitted `prove` call.
 
 ## Registering the server
 
@@ -537,8 +539,10 @@ Register that entry rather than a global install, an `npx` invocation, or the `n
 shim. The shim is a shell script on POSIX hosts and a batch file on Windows, and spawning the
 JavaScript entry with the current executable is the form that survives both.
 
-When a prerequisite refuses construction, the binary writes the failure as one stderr line in
-the form `[origin] code: message` and exits with status 1.
+Workspace prerequisite failures from an admitted `prove` call return as an `isError: true` tool
+result. The server keeps serving discovery and later calls, and a later admitted call retries probe
+construction. An entry failure before the server starts writes the failure to stderr in the form
+`[origin] code: message` and exits with status 1.
 
 These facts decide whether a hand-written client works, and each fails silently when it is wrong:
 
@@ -557,10 +561,12 @@ These facts decide whether a hand-written client works, and each fails silently 
   list is `2026-07-28`, `2025-11-25`, and `2025-06-18`.
 
 The server answers the handshake era and the current revision together, so a client that sends
-`initialize` without `_meta` is served too. `ProbeServer` creates the probe it serves and takes
-every `ProbeOptions` member for it, because `start()` seizes this process's standard input and
-output: a host that starts one has given the process to it. `destroy()` gives the process back and
-tears the probe down with it.
+`initialize` without `_meta` is served too. `ProbeServer` snapshots the supplied `ProbeOptions` and
+resolves the default or relative workspace when the server is constructed. It creates and caches a
+real probe only after a structurally valid, contained `prove` call is admitted. Concurrent admitted
+calls share that probe. `start()` seizes this process's standard input and output: a host that starts
+the server has given the process to it. `destroy()` gives the process back and tears down the probe
+when a call created it; destruction before an admitted call does not arm the workspace.
 
 A handshake-era `tools/call` may carry `_meta.progressToken`, including `0` or an empty string.
 The token does not change the verdict or its receipt. Probe emits no progress reports of its own;
@@ -978,7 +984,8 @@ never imported.
 
 A probe has no `start`. Warming begins at construction and `prove` awaits it, because the harness
 owns the process: a restart is a new process rather than a second lifecycle, and a second client is
-a second process with its own stages. `ProbeServer.start` is the transport's verb rather
+a second process with its own stages. `ProbeServer` defers that real probe construction until an
+admitted call. `ProbeServer.start` is the transport's verb rather
 than the probe's — it decides which process reads the stdio, not when the stages warm.
 
 - **Arming.** Construction runs boot controls that mutate an imported dependency and refuse
@@ -1135,10 +1142,11 @@ inspection answers, and every inspection awaits that warm, so `ProbeOptions.dead
 over this repository a budget under about 8 s expires arming rather than a claim. The default
 `PROBE_DEADLINE` of 30,000 ms clears it with room for a contended host.
 
-Boot is dominated by arming, which runs its real controls through every stage before the service
-answers. The first answered `tools/call` also carries one `prove`, so it lands about one warm call
-after the `arm` event. A client whose timeout is tighter than boot reports a hang that is a wait.
-Handshake requests answer immediately; only `tools/call` waits on arming.
+An admitted `tools/call` is dominated by deferred arming, which runs its real controls through the
+stage sequence before the call answers. The call also carries `prove`, so it lands about a warm call after the
+`arm` event. A client whose timeout is tighter than arming reports a hang that is a wait. Handshake
+and discovery requests require no workspace toolchain; only an admitted `tools/call` waits on
+arming.
 
 `prove` runs the case through every stage and then the control through every stage, in sequence, so
 one call pays the runtime stage's floor twice. One runtime inspection in every 64 also replaces
