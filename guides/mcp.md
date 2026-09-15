@@ -911,22 +911,38 @@ resemblance to one.
 
 ### Configure modern subscriptions
 
-`subscription.notifications` declares what the server can actually honour;
-`subscription.producer` opens the event-driven source for the intersected filter.
-The built-in owns wire acknowledgement, filtering, id stamping, and graceful
-closure. A producer only yields project notifications and ends its iterable when
-the source closes; while idle it parks on its own events and may observe the
-supplied abort signal.
+The server supplies `toolsListChanged` from the tool registry's `add`, `remove`, and `clear`
+events. It registers the listeners before acknowledging the stream and releases them when
+`options.signal` aborts. Registry destruction delivers its final `clear`; the stream then
+stays open until its signal aborts. An already-destroyed registry registers no listeners; the
+server acknowledges the subscription, produces no tools frames, and waits for its signal. A
+stream read between changes receives one frame per change; changes that arrive together, or
+while the previous frame is unread, coalesce into one.
 
-**Every produced notification is owned before it is judged.** The built-in snapshots each
-one into bounded exact JSON before it matches the filter or stamps the id, so the values
-that admitted a notification are the values that reach the wire — a producer answering
-differently on a second read cannot have one URI pass the filter and another ride out.
-A notification that is not bounded exact JSON is dropped and the stream continues; a
-producer that throws ends the subscription with one detail-free `-32603` terminal, its
-caught value reported on the server's `error` event. Ending the source normally closes
-with the complete result; an abort closes with no terminal at all, because a cancelled
-request is not an answered one.
+`subscription.notifications` declares the consumer's supported families through
+`MCPConsumerFilter`, whose optional `toolsListChanged` member accepts only `false`;
+`subscription.producer` opens the event-driven source for the intersected filter, beside the
+built-in tools producer. The consumer producer advances on the stream's demand. A producer
+failure terminates the stream after the notifications it already produced. A consumer filter
+that is malformed, and one claiming `toolsListChanged: true`, are both invalid: construction
+throws `MCPError` with `JSONRPC_INVALID_PARAMS` (`-32602`). Consumer-produced tools
+notifications are dropped, so the tools family has only the registry as its source. The
+built-in owns wire acknowledgement, filtering, id stamping, and graceful closure. A producer
+only yields project notifications and ends its iterable when the source closes; while idle it
+parks on its own events and may observe the supplied abort signal. Releasing the producer
+cancels its source with that signal's abort reason, so a `ReadableStream` source sees its
+pending writes reject with the reason the request was aborted with.
+
+**Every produced notification is owned before it is judged.** The built-in snapshots each one
+into bounded exact JSON before it matches the filter or stamps the id, so the values that
+admitted a notification are the values that reach the wire — a producer answering differently
+on a second read cannot have one URI pass the filter and another ride out. A notification
+that is not bounded exact JSON is dropped and the stream continues; a producer that throws
+ends the subscription after queued notifications with one detail-free `-32603` terminal, its
+caught value reported on the server's `error` event. Ending the consumer source normally
+closes with the complete result only when the honoured filter omits `toolsListChanged`. A
+stream honouring the tools family stays open until failure or signal abort. An abort closes
+with no terminal at all, because a cancelled request is not an answered one.
 
 #### Configure the subscription producer
 
@@ -946,6 +962,7 @@ import {
 	buildSubscriptionFilter,
 	buildSubscriptionResult,
 	createMCPServer,
+	isMCPConsumerFilter,
 	isMCPSubscriptionFilter,
 	matchesSubscriptionNotification,
 	stampSubscriptionNotification,
@@ -953,11 +970,13 @@ import {
 import { createToolManager } from '@orkestrel/tool'
 
 const identity = { name: 'docs', version: '1.0.0' }
-const supported = { toolsListChanged: true, resourceSubscriptions: ['resource://guide'] }
-const input: unknown = { toolsListChanged: true, promptsListChanged: true }
+const supported = { promptsListChanged: true, resourceSubscriptions: ['resource://guide'] }
+isMCPConsumerFilter(supported) // true
+isMCPConsumerFilter({ toolsListChanged: true }) // false — the server owns this family
+const input: unknown = { promptsListChanged: true, resourcesListChanged: true }
 if (!isMCPSubscriptionFilter(input)) throw new Error('invalid filter')
 const honoured = buildSubscriptionFilter(input, supported)
-const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
 matchesSubscriptionNotification(event, honoured) // true
 stampSubscriptionNotification(event, 'listen-1') // every delivery carries the reserved id
 buildSubscriptionAcknowledgement(honoured, 'listen-1') // the first id-carrying message
@@ -1114,7 +1133,7 @@ await client.connect()
 
 const subscription = new AbortController()
 const stream = client.listen(
-	{ toolsListChanged: true, resourceSubscriptions: ['resource://guide'] },
+	{ promptsListChanged: true, resourceSubscriptions: ['resource://guide'] },
 	{ signal: subscription.signal, capacity: 16 },
 )
 
@@ -1146,7 +1165,11 @@ subscription.abort()
 
 `MCPServerOptions.execution` is the explicit modern execution port over the live
 `ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
-real `tools` manager, effective `signal`, and an optional `progress` reporter. Returning
+real `tools` manager, effective `signal`, optional `caller`, and an optional `progress` reporter.
+The default path calls `tools.execute(call, { signal, caller })`; caller identity is omitted
+when absent and never placed on the JSON call envelope. A delegating handler calls
+`tools.execute(context.call, { signal: context.signal, ...(context.caller === undefined ? {} : { caller: context.caller }) })`.
+A tool handler observes `context.signal` to stop work when its request is cancelled. Returning
 a `ToolResult` uses the normal text/structured normalization; returning a validated
 `MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
 content without guessing from an ordinary domain value.
@@ -2254,6 +2277,7 @@ A `Shape` cell holds the constant's declared type.
 | `isMCPContent`                     | function | Determines whether a value is one exact dated-schema MCP tool content block.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `isMCPPaginationParams`            | function | Determines whether a value carries the shared optional pagination cursor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `isMCPResource`                    | function | Determines whether a value is one `resources/list` descriptor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `isMCPToolAnnotations`             | function | Checks whether a value carries valid consumed MCP 2026-07-28 tool annotation hints.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `isMCPResourceTemplate`            | function | Determines whether a value is one resource-template descriptor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `isMCPResourceContents`            | function | Determines whether a value is structurally discriminated resource contents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `isMCPResourcePage`                | function | Determines whether a value is one consumer-owned resource page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -2287,6 +2311,7 @@ A `Shape` cell holds the constant's declared type.
 | `isInitializeRequest`              | function | Determines whether a parsed value is an MCP `initialize` invocation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPVersion`                     | function | Determines whether a value is a supported `MCPVersion`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `isMCPSubscriptionFilter`          | function | Determines whether a value is an MCP `MCPSubscriptionFilter`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `isMCPConsumerFilter`              | function | Checks whether a subscription filter leaves the built-in tools family to the server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPSubscriptionResult`          | function | Determines whether a value is a graceful `subscriptions/listen` result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `supportsFormElicitation`          | function | Determines whether a client capability record declares form-mode elicitation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `isMCPElicitFieldSchema`           | function | Determines whether a value is one restricted primitive form-elicitation schema.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -2326,6 +2351,8 @@ A `Shape` cell holds the constant's declared type.
 | `buildJSONRPCError`                | function | Builds a JSON-RPC error `JSONRPCErrorResponse` — the `id` echoed, the failure as an `error` object.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `buildMethodOptions`               | function | Resolves the caller-facing dispatch options into the options a dispatched method receives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildToolDescriptors`             | function | Maps a `ToolManagerInterface`'s definitions to MCP `tools/list` descriptors — renaming `parameters` to the wire's `inputSchema`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `toolAnnotationsToMCP`             | function | Projects domain tool annotations onto MCP wire hints without inventing defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `mcpAnnotationsToTool`             | function | Projects MCP wire hints onto domain tool annotations without inventing defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `buildToolCall`                    | function | Builds the canonical Tool call for one validated MCP `tools/call` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildProgressNotification`        | function | Builds one official progress notification for the original request stream.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildCancelledNotification`       | function | Builds one official cancellation notification for a request already sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -2367,6 +2394,20 @@ A `Shape` cell holds the constant's declared type.
 | `decodeEvent`                      | function | Decodes one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` when it is not one — the per-event step `readEventStream` folds over.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `readEventStream`                  | function | Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it carried — the client-side inverse of a server's Streamable-HTTP SSE response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `buildResponseError`               | function | Builds the error for a non-success HTTP response that carried no JSON-RPC message.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+### Project tool annotation hints
+
+The projection keeps explicit false values and omits hints with no counterpart.
+
+```ts
+import { toolAnnotationsToMCP, mcpAnnotationsToTool, isMCPToolAnnotations } from '@orkestrel/mcp'
+
+toolAnnotationsToMCP({ pure: true, consequential: false, untrusted: true })
+// { readOnlyHint: true, destructiveHint: false }
+mcpAnnotationsToTool({ readOnlyHint: false, destructiveHint: true })
+// { pure: false, consequential: true }
+isMCPToolAnnotations({ readOnlyHint: false }) // true
+```
 
 ### Types
 
@@ -2481,16 +2522,18 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `MCPProgress`                      | interface | `{ progress, total?, message? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents one official request-scoped progress payload.                                                                                                                                                    |
 | `MCPProgressInterface`             | interface | `{} plus report`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Reports request-scoped progress under backpressure — the reporter supplied to an explicit executor.                                                                                                         |
 | `MCPProgressOwnerInterface`        | interface | `MCPProgressInterface plus take, stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the owning half of one progress slot — `MCPProgressInterface` plus the consuming and stopping the slot's owner performs.                                                                         |
-| `MCPExecutionContext`              | interface | `{ request, call, tools, signal, progress? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Represents the explicit, host-neutral context for one modern tool execution.                                                                                                                                |
+| `MCPExecutionContext`              | interface | `{ request, call, tools, signal, caller?, progress? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the explicit, host-neutral context for one modern tool execution.                                                                                                                                |
 | `MCPExecutionHandler`              | type      | `(context: MCPExecutionContext,) => ToolResult \| MCPCallResult \| Promise<ToolResult \| MCPCallResult>`                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Executes one canonical tool call or returns a fully formed complete MCP result.                                                                                                                             |
 | `MCPListResult`                    | type      | `{ tools, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the MCP `tools/list` result — tool descriptors plus optional modern result stamps.                                                                                                               |
-| `MCPToolDescriptor`                | interface | `{ name, description?, inputSchema }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents one entry of the MCP `tools/list` result — a tool's `name`, optional `description`, and its JSON-Schema `inputSchema`.                                                                           |
+| `MCPToolAnnotations`               | interface | `{ title?, readOnlyHint?, destructiveHint?, idempotentHint?, openWorldHint? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Describes tool hints using the MCP 2026-07-28 specification's wire field names.                                                                                                                             |
+| `MCPToolDescriptor`                | interface | `{ name, title?, description?, inputSchema, annotations? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents one entry of the MCP `tools/list` result with its display metadata and JSON-Schema input.                                                                                                        |
 | `MCPHeaderPrimitive`               | type      | `'boolean' \| 'integer' \| 'string'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Names the JSON Schema types an `x-mcp-header` annotation may sit on.                                                                                                                                        |
 | `MCPHeaderParameter`               | interface | `{ name, path, primitive }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents one `x-mcp-header` projection a tool's `inputSchema` declares.                                                                                                                                   |
 | `MCPIdentity`                      | type      | `MCPMetaObject & { name, version, title?, description?, websiteUrl?, icons? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the complete dated identity of an MCP server or client.                                                                                                                                          |
 | `MCPRequestContext`                | interface | `{ version, capabilities, identity? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the validated per-request context projected from a modern request's reserved `_meta` keys.                                                                                                       |
 | `MCPDiscoverResult`                | type      | `{ supportedVersions, capabilities, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', instructions?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the mandatory modern `server/discover` result.                                                                                                                                                   |
-| `MCPSubscriptionFilter`            | interface | `{ toolsListChanged?, promptsListChanged?, resourcesListChanged?, resourceSubscriptions?, taskIds? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the notification families a client may opt in to on a `subscriptions/listen` stream.                                                                                                                  |
+| `MCPSubscriptionFilter`            | interface | `{ toolsListChanged?, promptsListChanged?, resourcesListChanged?, resourceSubscriptions?, taskIds? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the notification families a client may opt in to on a `subscriptions/listen` stream, including built-in registry changes.                                                                             |
+| `MCPConsumerFilter`                | interface | `MCPSubscriptionFilter plus { toolsListChanged?: false }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Declares the consumer-produced notification families, excluding registry-owned tools changes.                                                                                                               |
 | `MCPSubscriptionResultMetaObject`  | type      | `MCPResultMetaObject & { 'io.modelcontextprotocol/subscriptionId' }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Represents the required metadata on a graceful `subscriptions/listen` result.                                                                                                                               |
 | `MCPSubscriptionResult`            | type      | `{ resultType: 'complete', _meta }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents the terminating result returned when a `subscriptions/listen` stream closes gracefully.                                                                                                          |
 | `MCPSubscriptionStream`            | type      | `AsyncGenerator< JSONRPCNotification, MCPSubscriptionResult, unknown >`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Represents a client subscription's owned notifications and graceful terminal result.                                                                                                                        |
@@ -2595,8 +2638,8 @@ HTTP header validation have all passed, immediately before `mcp.dispatch`. With 
 extractor, or when it returns `undefined`, `caller` is omitted through the
 package's conditional-spread idiom, preserving the former dispatch-options shape
 exactly. A present value flows through both modern and legacy `tools/call` onto
-`ToolCall.caller`; the tool manager then supplies it to the real tool body's
-caller parameter.
+the execution context's `caller` member; the tool manager supplies that context to the
+real tool body's `context` parameter.
 
 This remains an asserted seam, never protocol authentication. A session id names
 an HTTP transport session, not a caller, and the session middleware preserves
@@ -3162,9 +3205,45 @@ parameter defaults to `globalThis`, so a worker boots with
 `createScopeServer({ tools })` alone and a test drives the same wiring by passing a scope
 double instead of a real worker.
 
-This face is DOM-free by construction (type-checked against `lib: ["ESNext",
-"WebWorker"]`, no `"dom"`), so it runs identically in a page, a Web Worker,
-and a Service Worker.
+`createPageServer` is that bootstrap's page twin, and the in-page pair as one call. It owns a
+native `MessageChannel`, binds an `MCPServer` to one half and an `MCPClientInterface` to the
+other, and hands the client back on `PageServerInterface`. Assembling the same pair by hand
+means writing the channel, two transports, `bindServer`, `createDuplexClientTransport`,
+`createMCPClient`, and `bindClient` in an order `MessagePortTransport`'s own doc warns about —
+a port starts dispatching at construction, so an `await` interleaved between a transport and
+its binder drops whatever arrived in the gap. The factory never suspends between the two. The
+returned client is bound and not connected, because connection is a protocol round trip and a
+factory that returned a promise could not return the terminal beside it: call
+`await page.client.connect()` yourself. `stop` closes the client's port first, so the client
+observes the close and reports `connected` as `false`, then unbinds both sides and closes the
+server's port; it is idempotent, and it is the verb `createScopeServer`'s handle already
+publishes for the same action.
+
+`createModelContext` is the WebMCP bridge: it publishes a `ToolManagerInterface`'s tools to the
+document's `document.modelContext` registry and reads that registry back as
+`@orkestrel/tool` tools. Feature detection is the return value — `undefined` means the document
+exposes no registry — so there is no `supported` flag to read and no polyfill behind the
+factory. `publish` registers each advertised tool through `registerTool` with the projected
+annotations, retains the `AbortController` whose abort is WebMCP's own unregistration path, and
+subscribes to the manager's own `emitter` so a later `add`, `remove`, or `clear` reaches the
+document registry without a second call; `adopt` reads `getTools` and wraps each
+`RegisteredTool` as a tool whose `execute` runs `executeTool` with the caller's
+`ToolContext.signal`; `destroy` aborts the registrations this handle made, releases that
+subscription, and leaves a name it never registered alone. WebMCP keys a registration by tool
+name per document, so a release takes whatever now stands under that name. See
+[WebMCP parity](#webmcp-parity) for the surface comparison, and
+[Declared conformance gaps](#declared-conformance-gaps) for what a browser that ships no
+registry leaves unproven.
+
+**The transports are host-neutral; the WebMCP bridge is not, and it says so at runtime.** This
+face type-checks against `lib: ["ESNext", "DOM", "DOM.Iterable"]`
+(`configs/src/tsconfig.browser.json`), because `createModelContext` takes a `Document` and
+`WebMCPRegisteredTool` carries a `Window`. Nothing else here touches a DOM-only global:
+`WebSocket`, `fetch`, `MessagePort`, and `MessageChannel` exist in a page, a Web Worker, and a
+Service Worker alike, so every transport, `createScopeServer`, and `createPageServer` run
+identically in all three. `createModelContext` reads `globalThis.document`, which is `undefined`
+in a worker, and answers `undefined` there — the same answer it gives a page whose browser
+ships no registry.
 
 ```ts
 import { createMCPClient } from '@orkestrel/mcp'
@@ -3194,6 +3273,8 @@ const tools = await http.tools()
 | `createScopeServer`              | function | Creates an `MCPServer` hosted inside a worker scope and wires that scope's message events to it — the browser face's bootstrap, and the twin of the Node face's `createStdioServer`.                                                                                                                      |
 | `createScopeTransport`           | function | Adapts a hostable `ScopeInterface` (`self` in a dedicated Web Worker, or any structurally matching double) into a `ScopeTransportInterface` — the implicit, portless message channel `createScopeServer` binds for the dedicated-worker shape.                                                            |
 | `createScopeMessageListener`     | function | Builds `createScopeServer`'s `message`-event listener — the unified dispatcher that routes every inbound event on a hostable scope, portless or port-bearing, to the right binding.                                                                                                                       |
+| `createPageServer`               | function | Creates an `MCPServer` hosted inside the calling page and hands back the client bound to it — the page twin of `createScopeServer`, and the in-page MCP pair as one call.                                                                                                                                 |
+| `createModelContext`             | function | Creates the bridge between a tool registry and a document's WebMCP registry, or reports that the document exposes none.                                                                                                                                                                                   |
 
 #### Classes
 
@@ -3201,6 +3282,7 @@ const tools = await http.tools()
 | -------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WebSocketClientTransport` | class | Drives a remote MCP server over the native `WebSocket` global from the browser face, as a client `MCPMessageTransportInterface`. This class is the browser sibling of the Node face's `WebSocketClientTransport`. |
 | `MessagePortTransport`     | class | Carries the Model Context Protocol over a native `MessagePort` from the browser face — a `MCPTransportInterface`, the genuinely new capability this face adds: MCP over `postMessage`.                            |
+| `ModelContext`             | class | Bridges a `ToolManagerInterface` and a document's WebMCP tool registry — the `ModelContextInterface` `createModelContext` returns.                                                                                |
 
 #### Constants
 
@@ -3210,11 +3292,30 @@ A `Shape` cell holds the constant's declared type.
 | ---------------------------- | ----- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_MCP_SERVER_NAME`    | const | `'@orkestrel/mcp'` | Supplies the default server name `createScopeServer` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted.          |
 | `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'`          | Supplies the default server version `createScopeServer` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. |
+| `WEBMCP_CHANGE_EVENT`        | const | `'toolchange'`     | Names the WebMCP registry event the bridge republishes as its own `change`.                                                              |
 
 #### Helpers
 
-_This face declares none. The SSE decoders `decodeEvent` and `readEventStream` are
-host-independent and ship from `@orkestrel/mcp`; see [Core § Helpers](#helpers)._
+This table lists the WebMCP projections, the batches `publish` and a followed change project
+through, and the registry guards. Each projection is the WebMCP direction of the translation
+`toolAnnotationsToMCP` and `mcpAnnotationsToTool` perform for the MCP wire; see
+[Core § Helpers](#helpers) for those.
+
+| API                        | Kind     | Summary                                                                                       |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `toolAnnotationsToWebMCP`  | function | Projects domain tool annotations onto WebMCP registry hints without inventing defaults.       |
+| `webMCPAnnotationsToTool`  | function | Projects WebMCP registry hints onto domain tool annotations without inventing defaults.       |
+| `toolToWebMCP`             | function | Projects one advertised tool definition onto the WebMCP descriptor a registration carries.    |
+| `describeWebMCPTool`       | function | Projects the descriptor a registry advertises for one tool name, or reports that it has none. |
+| `webMCPToTool`             | function | Projects one registered WebMCP tool onto the tool definition an adopted tool advertises.      |
+| `matchesDescriptor`        | function | Determines whether two WebMCP descriptors advertise the same tool to the registry.            |
+| `buildWebMCPProjections`   | function | Builds the WebMCP projection of every tool a registry advertises, or refuses the batch.       |
+| `collectWebMCPProjections` | function | Collects the WebMCP projection of every tool a registry advertises that WebMCP can carry.     |
+| `isWebMCPRegistry`         | function | Determines whether an unknown value is a WebMCP tool registry.                                |
+| `isWebMCPDocument`         | function | Determines whether an unknown value is a document exposing the WebMCP tool registry.          |
+
+The SSE decoders `decodeEvent` and `readEventStream` are host-independent and ship from
+`@orkestrel/mcp`; see [Core § Helpers](#helpers).
 
 #### Types
 
@@ -3223,14 +3324,33 @@ optional member and `plus` introducing its call-signature members, and a type al
 literal with a union's arms escaped as `\|`.
 An extended interface's name comes before `plus`, with the members it adds after.
 
-| Type                              | Kind      | Shape                                                        | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------------- | --------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransportOptions` | interface | `{ url, protocols? }`                                        | Options for `createWebSocketClientTransport` (browser face) — the remote MCP WebSocket endpoint and any negotiated subprotocols.                                                                                                                                                                                                                                                                                                                                                        |
-| `MessagePortTransportOptions`     | interface | `{ port }`                                                   | Options for `createMessagePortTransport` — the native `MessagePort` a `MessagePortTransport` sends and listens on.                                                                                                                                                                                                                                                                                                                                                                      |
-| `ScopeInterface`                  | interface | `{} plus postMessage, addEventListener, removeEventListener` | Describes the structural shape `createScopeServer` needs from a hostable scope — `self` in a dedicated Web Worker or a Service Worker (or any double matching this shape).                                                                                                                                                                                                                                                                                                              |
-| `ScopeTransportInterface`         | interface | `MCPTransportInterface plus deliver`                         | Adapts a message-event-bearing scope (`self` in a dedicated Web Worker, or any object shaped the same way) as a duplex `MCPTransportInterface` — the internal carrier `createScopeServer` binds to route the implicit (portless) message channel, plus the `deliver` entry point the scope's own `message` listener pushes an inbound string through (the scope itself never registers `listen`'s handler for the caller — the scope server's dispatcher does, through this `deliver`). |
-| `ScopeServerInterface`            | interface | `{} plus stop`                                               | Represents one MCP server hosted inside a worker scope — what `createScopeServer` returns.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `ScopeServerOptions`              | interface | `{ tools, name?, version? } plus accept?`                    | Options for `createScopeServer` — the live `ToolManagerInterface` to expose plus the optional server identity, mirroring `createMCPServer`'s `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version` optional (defaulting to `DEFAULT_MCP_SERVER_NAME` / `DEFAULT_MCP_SERVER_VERSION`).                                                                                                                                                                                         |
+| Type                              | Kind      | Shape                                                                                            | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransportOptions` | interface | `{ url, protocols? }`                                                                            | Options for `createWebSocketClientTransport` (browser face) — the remote MCP WebSocket endpoint and any negotiated subprotocols.                                                                                                                                                                                                                                                                                                                                                        |
+| `MessagePortTransportOptions`     | interface | `{ port }`                                                                                       | Options for `createMessagePortTransport` — the native `MessagePort` a `MessagePortTransport` sends and listens on.                                                                                                                                                                                                                                                                                                                                                                      |
+| `ScopeInterface`                  | interface | `{} plus postMessage, addEventListener, removeEventListener`                                     | Describes the structural shape `createScopeServer` needs from a hostable scope — `self` in a dedicated Web Worker or a Service Worker (or any double matching this shape).                                                                                                                                                                                                                                                                                                              |
+| `ScopeTransportInterface`         | interface | `MCPTransportInterface plus deliver`                                                             | Adapts a message-event-bearing scope (`self` in a dedicated Web Worker, or any object shaped the same way) as a duplex `MCPTransportInterface` — the internal carrier `createScopeServer` binds to route the implicit (portless) message channel, plus the `deliver` entry point the scope's own `message` listener pushes an inbound string through (the scope itself never registers `listen`'s handler for the caller — the scope server's dispatcher does, through this `deliver`). |
+| `ScopeServerInterface`            | interface | `{} plus stop`                                                                                   | Represents one MCP server hosted inside a worker scope — what `createScopeServer` returns.                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ScopeServerOptions`              | interface | `{ tools, name?, version? } plus accept?`                                                        | Options for `createScopeServer` — the live `ToolManagerInterface` to expose plus the optional server identity, mirroring `createMCPServer`'s `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version` optional (defaulting to `DEFAULT_MCP_SERVER_NAME` / `DEFAULT_MCP_SERVER_VERSION`).                                                                                                                                                                                         |
+| `PageServerOptions`               | interface | `{ tools, name?, version?, client? }`                                                            | Options for `createPageServer` — the live `ToolManagerInterface` to expose, the optional server identity, and the optional settings for the client half the pair owns.                                                                                                                                                                                                                                                                                                                  |
+| `PageServerInterface`             | interface | `{ client } plus stop`                                                                           | Represents one MCP server hosted inside the calling page — what `createPageServer` returns.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `WebMCPAnnotations`               | interface | `{ readOnlyHint?, untrustedContentHint?, consequentialHint? }`                                   | Describes a tool's observable effects as the WebMCP registry declares them.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `WebMCPDescriptor`                | interface | `{ name, title?, description, inputSchema?, annotations? }`                                      | Describes the members a WebMCP tool carries into the registry and back out of it.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `WebMCPHandlerOptions`            | interface | `{ signal }`                                                                                     | Carries the execution signal the WebMCP registry hands a registered tool's callback.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `WebMCPExecuteHandler`            | type      | `(input: Readonly<Record<string, unknown>>, options: WebMCPHandlerOptions,) => Promise<unknown>` | Runs one registered WebMCP tool with the caller's input and the registry's signal.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `WebMCPTool`                      | interface | `WebMCPDescriptor plus execute`                                                                  | Describes one tool as handed to the WebMCP registry for registration.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `WebMCPRegisteredTool`            | interface | `WebMCPDescriptor plus window, origin`                                                           | Describes one tool as the WebMCP registry reports it back.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `WebMCPRegisterOptions`           | interface | `{ exposedTo?, signal? }`                                                                        | Options for the WebMCP registry's `registerTool` — the exposure list and the unregistration signal.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `WebMCPToolsOptions`              | interface | `{ fromOrigins? }`                                                                               | Options for the WebMCP registry's `getTools` — the origins whose tools are read.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `WebMCPExecuteOptions`            | interface | `{ signal? }`                                                                                    | Options for the WebMCP registry's `executeTool` — the caller's cancellation signal.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `WebMCPRegistryInterface`         | interface | `{} plus registerTool, getTools, executeTool, addEventListener, removeEventListener`             | Represents the WebMCP tool registry a document exposes as `document.modelContext`.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `WebMCPDocument`                  | interface | `{ modelContext }`                                                                               | Describes a document that exposes the WebMCP tool registry.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `WebMCPProjection`                | interface | `{ tool, descriptor }`                                                                           | Pairs one tool with the WebMCP descriptor a registry advertises for it.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ModelContextEventMap`            | type      | `{ change: readonly [] }`                                                                        | Reports the moments a WebMCP registry's contents changed.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ModelContextOptions`             | interface | `{ document?, on?, error? }`                                                                     | Options for `createModelContext` — the document to bridge and the emitter's initial wiring.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `ModelContextPublishOptions`      | interface | `{ origins? }`                                                                                   | Options for `ModelContextInterface.publish` — the origins each registration is exposed to.                                                                                                                                                                                                                                                                                                                                                                                              |
+| `ModelContextAdoptOptions`        | interface | `{ origins? }`                                                                                   | Options for `ModelContextInterface.adopt` — the origins whose tools are read.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `ModelContextInterface`           | interface | `{ emitter } plus publish, adopt, destroy`                                                       | Represents the bridge between a `ToolManagerInterface` and a document's WebMCP registry — what `createModelContext` returns.                                                                                                                                                                                                                                                                                                                                                            |
 
 _This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
 `@orkestrel/mcp`; see [Core § Types](#types)._
@@ -3336,7 +3456,8 @@ const reply = await server.handle(
 	{ signal: controller.signal, caller: authenticatedPrincipal },
 )
 // reply → {"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28"],
-//   "capabilities":{"tools":{}},"resultType":"complete","ttlMs":60000,"cacheScope":"private",
+//   "capabilities":{"tools":{"listChanged":true}},"resultType":"complete","ttlMs":60000,
+//   "cacheScope":"private",
 //   "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}
 ```
 
@@ -3516,6 +3637,33 @@ The completion port, configured independently of the `resources` and `prompts` p
 | ---------- | ------------------------------------------- | -------------------------------------------------------- |
 | `complete` | `MCPCompletion \| undefined` (or a promise) | Completes one argument against its host-owned reference. |
 
+#### `MCPContinuationInterface`
+
+The integrity and storage port `MCPInputOptions.continuation` requires, implemented by
+`createMCPContinuation` (`@orkestrel/mcp/server`) and by any consumer port that can protect an
+opaque string. Core supplies no signer of its own, so the integrity of every binding inside a
+continuation carrier — principal, expiry, original id, revision, method, tool name, argument
+digest, and the issued round — rests on whatever port is passed here.
+
+| Method | Returns                        | Summary                                                                   |
+| ------ | ------------------------------ | ------------------------------------------------------------------------- |
+| `seal` | `Promise<string>`              | Protects a canonical state string and returns the opaque client carrier.  |
+| `open` | `Promise<string \| undefined>` | Recovers a protected canonical state string, or `undefined` when invalid. |
+
+This example seals a canonical state string and recovers it, then shows a tampered carrier
+opening as `undefined` — which is what turns a rewritten `requestState` into `-32602` rather
+than into a trusted claim.
+
+```ts
+import { createMCPContinuation } from '@orkestrel/mcp/server'
+
+const continuation = createMCPContinuation(['current-secret', 'older-secret'])
+const carrier = await continuation.seal('{"principal":"user-42"}')
+
+log(await continuation.open(carrier)) // '{"principal":"user-42"}'
+log(await continuation.open(`${carrier}x`)) // undefined
+```
+
 #### `MCPClientInterface`
 
 The egress mirror: `connect` negotiates the modern revision and stores the selected
@@ -3526,6 +3674,38 @@ remote tools as local `ToolInterface`s, `call` runs a remote `tools/call`,
 closes the connection it owns. Subscribe to client events through `emitter.on`.
 The `tasks` data member is the stable Tasks extension's client half — see
 [`MCPTaskClientInterface`](#mcptaskclientinterface).
+
+`tools()` returns a snapshot. The wire preserves `title`, the advertised `description`,
+`inputSchema` (wrapped as `parameters`), and the mapped `annotations`. The server maps
+`pure` to `readOnlyHint` and `consequential` to `destructiveHint`; the client applies the
+inverse projection. For a schema-less tool, the wire adds `inputSchema: { type: 'object' }`.
+`untrusted` has no MCP counterpart. Unmapped hints remain absent from
+the wrapped tool, and omitted hints receive no invented defaults. These hints do not authorize
+execution. The wire loses `summary` as a separate field and, when a summary was authored,
+the full description: the registry advertises that summary as `description`.
+The wrapped tool forwards `context.signal` into `call`, so agent-side abort reaches the
+remote request. Refresh snapshots explicitly between agent runs; see
+[Refresh the tools an agent holds](#refresh-the-tools-an-agent-holds).
+
+**Every session-bound request refuses at once while the client holds no connection.** `call`,
+`tools`, each `tasks/*` method reached through `client.tasks`, and a `listen` stream all carry
+the same refusal, because they all issue through one correlated-request door. A client that has
+never connected, or whose connection has ended, rejects with an `MCPError` carrying `-32600`
+and writes nothing to the transport. A stream refuses on its first `next()`, which is when a
+generator's body runs and therefore the first moment `listen` could refuse without making the
+stream eager. The alternative is the symptom this closes: a carrier that has already closed
+drops the frame without reporting it, so the caller waits out the whole request deadline —
+`DEFAULT_MCP_REQUEST_TIMEOUT`, 30 seconds, unless `timeout` shortened it — and is then told
+about a deadline rather than about the connection. A `connect` exempts its own round trips, and
+only while it is still the attempt this client is making: `connect` is emitted from inside the
+attempt, so a transport lost from a `connect` listener — a closed port, a stopped page server —
+supersedes that attempt at once, and every request issued after that loss refuses rather than
+riding an exemption the loss already ended. A `disconnect` from that same listener is the other
+sequence. It defers its teardown through the microtask queue, so the transport is still open
+when the listener's next request is issued: that request is admitted, and the teardown's own
+drain then rejects it with `MCP client disconnected`. It settles well inside its deadline rather
+than refusing, and it never parks. `discover` is outside the rule and stays available on a
+client that has never connected, because it is the probe a connection is built from.
 
 | Method       | Returns                             | Summary                                                                                                                               |
 | ------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
@@ -3808,6 +3988,38 @@ stdio.start() // a repeat arms nothing further — one reply per request
 stdio.stop() // unbind, release stdin, and end this handle
 ```
 
+#### `ScopeInterface`
+
+The hostable scope `createScopeServer` binds — `self` in a dedicated Web Worker or a Service
+Worker, or any object of this shape. No class implements it: the host does. It declares the
+members the scope server touches and stops there, so a real `self` satisfies it structurally
+while exposing far more.
+
+| Method                | Returns | Summary                                                                      |
+| --------------------- | ------- | ---------------------------------------------------------------------------- |
+| `postMessage`         | `void`  | Posts one reply onto the scope's implicit channel.                           |
+| `addEventListener`    | `void`  | Subscribes to the scope's `message` events, portless and port-bearing alike. |
+| `removeEventListener` | `void`  | Drops a `message` subscription.                                              |
+
+The fence under [Start a worker scope server](#start-a-worker-scope-server) drives a scope of
+exactly this shape, which is what lets that example round-trip a `tools/list` with no worker
+harness.
+
+#### `ScopeTransportInterface`
+
+The scope's duplex carrier, returned by `createScopeTransport` and bound by
+`createScopeServer`. It is an `MCPTransportInterface` — `send`, `listen`, `closed`, `close` —
+plus the one member the scope shape needs: the scope's own `message` listener has to push an
+inbound string into it, because the scope never registers `listen`'s handler itself.
+
+| Method    | Returns | Summary                                                             |
+| --------- | ------- | ------------------------------------------------------------------- |
+| `deliver` | `void`  | Pushes one inbound message string into the active `listen` handler. |
+
+The in-memory duplex channel under
+[Bind a server or a client to any duplex transport](#bind-a-server-or-a-client-to-any-duplex-transport)
+is the same shape, and its `deliver` is what the peer calls to hand a frame across.
+
 #### `ScopeServerInterface`
 
 The worker-scope handle `createScopeServer` returns, and the browser twin of
@@ -3829,6 +4041,196 @@ import { createToolManager } from '@orkestrel/tool'
 const worker = createScopeServer({ tools: createToolManager() }) // arms on the current scope
 worker.stop() // release every binding this call owns
 worker.stop() // a repeat releases nothing further
+```
+
+#### `PageServerInterface`
+
+The in-page handle `createPageServer` returns. No class implements it: the factory owns the
+`MessageChannel`, the hosted `MCPServer`, and both bindings behind it, and publishes the client
+beside the one door that ends them. The `client` data member is bound and not connected —
+`connect` is yours to await, because it is a protocol round trip rather than a construction
+step.
+
+The terminal is `stop`, the same verb `ScopeServerInterface` publishes for the same action, so
+a consumer who learned one factory reads the other without checking. The published `client`
+outlives the pair and is inert afterwards: every session-bound request — `call`, `tools`, each
+`tasks/*` method, and a `listen` stream — rejects at once with an `MCPError` carrying `-32600`,
+per [`MCPClientInterface`](#mcpclientinterface).
+
+| Method | Returns | Summary                                                                         |
+| ------ | ------- | ------------------------------------------------------------------------------- |
+| `stop` | `void`  | Closes both ports, unbinds both sides, and disconnects the client — idempotent. |
+
+This example hosts a server in the page, drives it, and shows that repeated cleanup is inert.
+
+```ts
+import { createPageServer } from '@orkestrel/mcp/browser'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: () => 5 }))
+
+const page = createPageServer({ tools })
+await page.client.connect() // the pair negotiates over the channel; nothing touches the network
+page.stop() // both ports closed, both sides unbound, the client disconnected
+page.stop() // a repeat releases nothing further
+```
+
+#### `ModelContextInterface`
+
+The WebMCP bridge `createModelContext` returns, implemented by `ModelContext`. `publish` sends
+this page's tools out to `document.modelContext`; `adopt` brings that registry's tools back as
+`@orkestrel/tool` tools. The `emitter` data member republishes the registry's `toolchange` as
+`change`. Subscribe through `emitter.on`.
+
+`publish` takes a snapshot **and** subscribes. The snapshot is taken when `publish` is called,
+before the work queues behind an earlier publication, so a manager mutated while a call waits
+its turn does not change what that call registers. The same call then subscribes to the
+manager's own `emitter` — `@orkestrel/tool` publishes `add`, `remove`, and `clear`. The
+document registry tracks the tool registry, and a consumer that changes the tool registry calls
+nothing.
+
+**A followed change is a trigger, not a fact.** Each `add`, `remove`, and `clear` queues one
+synchronisation of the registrations this handle holds for that manager against what the
+manager holds when that queued work runs, so the bridge converges on the manager's state after
+every change it follows. One synchronisation covers every change that reaches it before it
+starts. A `publish` call made in between ends that cover: the publication runs after the queued
+synchronisation and prunes what it registered, so a change made after that call takes a
+synchronisation of its own, which runs after the publication. What the event carries cannot
+decide the outcome, and each of these cases is why: `remove` and `clear` name tools the manager
+no longer holds; a listener that ran earlier in the same dispatch can add a tool back under one
+of those names, with the same descriptor or another; the manager empties its map before it
+publishes `clear`, so such an addition stays in the manager; and `tools.destroy()` publishes
+`clear`, destroys its emitter, and then empties the map again, erasing an addition with no
+event left to report it. Reading the manager answers all of them the same way. A registration
+whose name the manager no longer advertises is aborted, and only registrations bound to that
+manager are — a name another manager's publication put there is left standing.
+
+One manager is followed at a time. A `publish` naming another manager releases the subscription
+and takes up the new one, and `destroy` releases it outright. An event from a manager this
+handle no longer follows is ignored: releasing a subscription inside a dispatch does not
+withdraw the handler from the listener array that dispatch is walking, so a listener that
+republishes another manager leaves this handle's own handler still to run for a subscription
+that no longer exists. A followed change reaches no caller, so a tool advertising neither a
+`description` nor a `summary` is left unregistered rather than refusing anything, and a
+registration the document registry refuses is dropped, so the next `publish` or the next
+synchronisation registers that name again. Refusal is the caller's answer, and a followed
+change has no caller to give it to. A synchronisation registers only what it can carry, so such
+a tool standing under a name this handle already registered releases that registration instead
+of leaving it advertising a descriptor the manager no longer stands behind. Under a name this
+handle never registered the skip emits no `change`, because nothing reached the document
+registry; releasing a name this handle did register emits the registry's `change` like any
+other release. Compare the manager's own `definitions()` with what `adopt()` returns to read
+the mismatch, and `describeWebMCPTool` answers `undefined` for a name `definitions()` still
+lists, which is that mismatch read from the manager's own side.
+
+Every name reconciles against what this handle registered for it, whether it arrives in a
+snapshot or through a synchronisation. The same manager still holding the same tool leaves the
+registration untouched, so a repeat registers nothing and the registry fires no `toolchange`
+reporting a change nobody made — and a descriptor JSON cannot encode, such as a cyclic
+`inputSchema`, is left alone rather than re-registered on every change to another name. Another
+tool of that manager advertising an equal descriptor leaves the registration standing too:
+execution routes through the manager by name, so the replacement's handler is already what a
+foreign agent reaches. A changed projection, or the same name arriving from a different
+manager, releases the registration this handle holds and registers the new descriptor bound to
+the new manager. A name the snapshot dropped is released, and so is a name the followed manager
+no longer holds — after everything the batch carries has reconciled, so the registry never
+withdraws a name while the tools replacing it are still being registered. A failed batch
+releases them too, because the prune runs whether or not every registration the batch asked
+for was made, and it still withdraws nothing the batch carries. Descriptor equality is
+structural and key-order-independent, so re-authoring one schema in another key order is not
+a change.
+
+Every tool is projected before anything is registered, so a manager holding a tool that
+advertises neither a `description` nor a `summary` is refused whole, with an `MCPError`
+carrying `-32602` and naming the tool, and nothing registered.
+
+**A registration's identity is its name, per document.** WebMCP keys the registry by tool name,
+so a later registration of a name replaces the earlier one whichever handle made it, and the
+release the earlier handle performs takes whatever now stands under that name. This is the
+whole of what `destroy` touching "only its own registrations" means: the handle aborts its own
+controllers, and a name it never registered is left alone, but a same-name registration another
+handle made later goes with the release. Publish overlapping names from one handle, or give
+each handle names of its own.
+
+**A published tool's `execute` rejects with an `Error` carrying the failure's message.** The
+manager contains a throwing handler and reports `ToolFailure.error`, which is text, so the
+value that was thrown no longer exists to forward and a foreign caller receives a fresh
+`Error` whose `message` is that text.
+
+**An adopted tool validates nothing.** It advertises the foreign `inputSchema` as its
+`parameters` and forwards the arguments it is given. Compiling that schema into a contract
+would let one page's unreadable or hostile schema refuse the whole `adopt` call, and the
+arguments reach a handler in another document that has to validate them anyway.
+
+| Method    | Returns                             | Summary                                                                                                               |
+| --------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `publish` | `Promise<void>`                     | Registers every tool the manager holds at this moment, then follows it.                                               |
+| `adopt`   | `Promise<readonly ToolInterface[]>` | Reads the document's registered tools as locally executable tools.                                                    |
+| `destroy` | `void`                              | Aborts every registration this handle made, stops following the tool registry, and releases the emitter — idempotent. |
+
+This example publishes a registry to a document that exposes WebMCP, reads the document's own
+tools back, and releases only what it registered.
+
+```ts
+import { createModelContext } from '@orkestrel/mcp/browser'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', description: 'Adds two numbers', execute: () => 5 }))
+
+const bridge = createModelContext() // undefined where the document exposes no registry
+if (bridge !== undefined) {
+	bridge.emitter.on('change', () => console.log('the registry changed'))
+	await bridge.publish(tools, { origins: ['https://partner.example'] })
+	const foreign = await bridge.adopt()
+	bridge.destroy() // aborts this handle's registrations and stops following `tools`
+}
+```
+
+#### `WebMCPRegistryInterface`
+
+The foreign registry itself, as `document.modelContext` exposes it, declared here because
+TypeScript's DOM library declares none of it. No class implements it: a user agent does, and
+`isWebMCPDocument` is what narrows a document onto it. The declaration carries the members the
+bridge dereferences and stops there, exactly as `ScopeInterface` carries what
+`createScopeServer` touches — a real registry satisfies it structurally and so does an
+IDL-faithful double. Reach it directly only to do something `ModelContextInterface` does not;
+the bridge is the supported path, and it is what owns the registration lifetime.
+
+`executeTool` resolves `unknown` because the primary source disagrees with itself: the WebIDL
+types it `Promise<DOMString>` while the specification's own README sample answers the MCP
+content shape `{ content: [...] }`. See [WebMCP parity](#webmcp-parity) for that row.
+
+| Method                | Returns                                    | Summary                                                               |
+| --------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| `registerTool`        | `Promise<void>`                            | Registers one tool, resolving when the registry has accepted it.      |
+| `getTools`            | `Promise<readonly WebMCPRegisteredTool[]>` | Reads the registered tools this document may see.                     |
+| `executeTool`         | `Promise<unknown>`                         | Runs one registered tool and resolves whatever its callback returned. |
+| `addEventListener`    | `void`                                     | Subscribes to the registry's `toolchange` event.                      |
+| `removeEventListener` | `void`                                     | Drops a `toolchange` subscription.                                    |
+
+This example drives the registry directly: it subscribes, registers a tool, reads the registry
+back, runs one entry, releases the subscription, and unregisters by aborting the registration
+signal — which is WebMCP's own removal path.
+
+```ts
+import { isWebMCPDocument } from '@orkestrel/mcp/browser'
+
+if (isWebMCPDocument(document)) {
+	const registry = document.modelContext
+	const controller = new AbortController()
+	const onChange = () => console.log('the registry changed')
+	registry.addEventListener('toolchange', onChange)
+	await registry.registerTool(
+		{ name: 'add', description: 'Adds two numbers', execute: async () => '5' },
+		{ exposedTo: ['https://partner.example'], signal: controller.signal },
+	)
+	const [registered] = await registry.getTools()
+	if (registered !== undefined) await registry.executeTool(registered, { x: 2, y: 3 })
+	registry.removeEventListener('toolchange', onChange)
+	controller.abort() // the unregistration path: aborting the registration signal
+}
 ```
 
 ## Patterns
@@ -3866,6 +4268,72 @@ const listed = await server.handle(
 	'{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
 )
 // listed → '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search","inputSchema":{"type":"object"},"description":"Search the docs"},{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}'
+```
+
+### Refresh the tools an agent holds
+
+The server produces each tools notification directly from its registry. A server-side `add`
+triggers this refresh without a consumer producer or a second notification written by the
+application. Apply each snapshot between agent runs. The refresh owns the names it installed
+from the client and replaces or removes tools by name. You must not register a local tool under a
+name the refresh installed. A collision with a local tool records the remote name and
+keeps the local tool. A failed fetch records the error and leaves the last snapshot installed.
+Open the subscription before fetching the initial snapshot so changes during that fetch stay
+queued. The loop processes notifications serially and performs no polling.
+
+The following example uses an already-connected `client`. The application owns when this loop
+runs relative to its agent and aborts `subscription` when it stops consuming notifications.
+
+```ts
+import type { MCPClientInterface } from '@orkestrel/mcp'
+import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+export interface ToolRefreshResult {
+	readonly installed: readonly string[]
+	readonly collisions: readonly string[]
+	readonly failures: readonly unknown[]
+}
+
+export async function refreshTools(
+	client: MCPClientInterface,
+	tools: ToolManagerInterface,
+	installed: readonly string[],
+): Promise<ToolRefreshResult> {
+	const collisions: string[] = []
+	let snapshot: readonly ToolInterface[]
+	try {
+		snapshot = await client.tools()
+	} catch (error) {
+		return { installed, collisions, failures: [error] }
+	}
+	const accepted = snapshot.filter((tool) => {
+		if (tools.tool(tool.name) !== undefined && !installed.includes(tool.name)) {
+			collisions.push(tool.name)
+			return false
+		}
+		return true
+	})
+	tools.remove(installed)
+	tools.add(accepted)
+	return { installed: accepted.map((tool) => tool.name), collisions, failures: [] }
+}
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'local', execute: () => 'local value' }))
+const subscription = new AbortController()
+const notifications = client.listen({ toolsListChanged: true }, { signal: subscription.signal })
+try {
+	await notifications.next() // Consume the subscription acknowledgement.
+	let outcome = await refreshTools(client, tools, [])
+	for await (const notification of notifications) {
+		if (notification.method === 'notifications/tools/list_changed') {
+			outcome = await refreshTools(client, tools, outcome.installed)
+		}
+	}
+} finally {
+	subscription.abort()
+}
 ```
 
 ### Drive the typed core directly
@@ -4318,8 +4786,47 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../tests/src/server/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, and transport demonstrations](../tests/guides.test.ts)
+- [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, transport, and Refresh the tools an agent holds demonstrations](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
+- [The packed artifact composed with the installed agent, tool, and parser artifacts in a real Chromium page](../tests/distribution.test.ts)
+
+The `distribution` project runs from `prepublishOnly` as
+`npm run test:distribution -- --mode release`. Under `--mode release` the proof fails when it
+cannot reach the registry or a browser; anywhere else it skips and names what it could not
+reach.
+
+Beside the checks that read this package's published surface, that project composes its packed
+artifact with the installed `@orkestrel/agent`, `@orkestrel/tool`, and `@orkestrel/ndjson`
+artifacts inside a real Chromium page, served by the isolated consumer's own Node fixture. The
+page loads every one of those artifacts over an import map answered from the consumer's own
+`node_modules`, so no bundler stands between the published files and the page. The recorders arm
+after the page and its modules have loaded — the browser's request log and a counter around
+the page's global transport — so each reading covers the composition alone. These are the
+receipts that project reads:
+
+- `evaluates every @orkestrel entry the installed agent imports` — the page evaluates each root
+  entry the installed agent's own module names, and every one of them publishes a defined
+  export.
+- `runs a page tool through an installed agent with no request at all` — an agent driven by a
+  scripted provider dispatches a tool that writes into the document, and neither recorder
+  reports a request.
+- `completes an in-page MCP pair with no request at all` — `createPageServer` connects, lists,
+  and calls, the listing carries the tool's `title` and its `pure` annotation back off the wire,
+  and the client its `stop` leaves behind refuses a later call with `-32600`.
+- `dispatches an agent call into the page server with no request at all` — an agent whose
+  registry holds the pair's tools runs one in the hosted server, the registry's own entry keeps
+  that `title` and annotation, and a name that server does not hold comes back as a failed tool
+  result.
+- `carries a caller abort into the page server handler` — `abort` on the agent's run reaches the
+  hosted handler's own execution-context signal.
+- `spends one relay request per model turn and runs the tool in the page` — an agent over
+  `createRelayProvider` against a `createRelay` fixture on `127.0.0.1` executes its page tool in
+  the page.
+- `refuses a relay turn presenting a credential the fixture does not hold` — the installed relay
+  refuses a credential its `authorize` callback rejects, answering `401`, and the route records
+  the request it refused.
+- `reports one deliberate request on the request log and the counter` — the control that shows
+  the request log and the counter report traffic.
 
 ## Declared non-goals
 
@@ -4390,6 +4897,37 @@ supplied once as `origin.origins` and consumed by both enforcement sites (the PO
 the session middleware). A deployment that already validates origin upstream says so explicitly with
 `origin: { enabled: false }` rather than by passing an empty list, because delegation
 is a different decision from an empty allowlist and deserves its own word.
+
+## WebMCP parity
+
+WebMCP puts a tool registry on the document — `document.modelContext` — so a page can offer its
+own capabilities to an agent running in the browser. It is a different door onto the same idea
+this package serves over a wire, so each surface it defines is compared here against what this
+package publishes, and every row ends implement, retain, or exclude with the source it was read
+from. `G5c` is the verbatim WebIDL, samples, and chromestatus reading taken from the
+[WebMCP specification](https://webmachinelearning.github.io/webmcp) on 2026-09-15; `G5` is the
+surrounding research context. `createModelContext` is where the implemented rows live.
+
+| WebMCP surface                                                                                   | Ours                                                                                             | Verdict                                                                                                                                                                                                                                 | Source              |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `registerTool(tool, { exposedTo, signal })`                                                      | `ModelContextInterface.publish(tools, { origins })`                                              | implement — `origins` becomes `exposedTo`, and the retained controller's abort is the unregistration path                                                                                                                               | `G5c` § 1, § 2      |
+| `getTools({ fromOrigins })`                                                                      | `ModelContextInterface.adopt({ origins })`                                                       | implement — `origins` becomes `fromOrigins`, and each `RegisteredTool` comes back as a `ToolInterface`                                                                                                                                  | `G5c` § 1           |
+| `executeTool(tool, input, { signal })`                                                           | an adopted tool's `execute(args, context)`, and `ToolManagerInterface.execute` on the other side | implement — the caller's `ToolContext.signal` becomes WebMCP's `signal` in both directions                                                                                                                                              | `G5c` § 1           |
+| `toolchange` event                                                                               | `ModelContextEventMap.change`                                                                    | implement — the registry names no changed tool, so ours is a bare signal and a listener re-reads `adopt`                                                                                                                                | `G5c` § 2           |
+| Registry change events on our own tool registry                                                  | `ToolManagerEventMap` (`add`, `remove`, `clear`), followed by `publish`                          | implement — `@orkestrel/tool` publishes registry events, so `publish` subscribes to the manager's `emitter` and the document registry tracks the tool registry with no second call                                                      | `G5c` § 2           |
+| `inputSchema` (JSON Schema)                                                                      | `ToolDefinition.parameters`, derived from `ToolOptions.contract`                                 | implement, exceeds in the publish direction — a published tool carries the contract that validates arguments before execution; an adopted tool carries the foreign `inputSchema` as `parameters` and validates nothing                  | `G5c` § 1; `G5` § 8 |
+| `ModelContextTool.title`                                                                         | `ToolDefinition.title`                                                                           | implement                                                                                                                                                                                                                               | `G5c` § 1           |
+| `ToolAnnotations` hints                                                                          | `ToolAnnotations { pure, untrusted, consequential }`, projected by `toolAnnotationsToWebMCP`     | implement — `pure` to `readOnlyHint`, `untrusted` to `untrustedContentHint`, `consequential` to `consequentialHint`; the MCP wire carries `pure` to `readOnlyHint` and `consequential` to `destructiveHint` and drops `untrusted`       | `G5c` § 1, § 4      |
+| Declarative form attributes                                                                      | none                                                                                             | exclude — `index.bs` marks that section "entirely a TODO", the submission path is a fetch-tool paraphrase, and markup is application policy                                                                                             | `G5c` § 3           |
+| Consent and user activation                                                                      | none; `ToolAnnotations.consequential` is the datum a consent layer reads                         | exclude — no source states an activation requirement, and consent belongs to the user agent                                                                                                                                             | `G5` § 5            |
+| Origin scoping (`Permissions-Policy: tools`, `allow="tools"`)                                    | `createScopeServer`'s `accept` gate, and `publish`/`adopt`'s `origins`                           | implement the library half; the header is the application's                                                                                                                                                                             | `G5c` § 5           |
+| Cross-document handshake from the client side                                                    | none                                                                                             | exclude — separate origin, navigation, and lifecycle work with its own design round                                                                                                                                                     | `G5c` § 5           |
+| Result shape (`Promise<DOMString>` in the IDL against `{ content: [...] }` in the README sample) | the executed tool's value, resolved unchanged                                                    | exclude the contradiction, retain ours — the primary source disagrees with itself, and the bridge projects to MCP content blocks in neither direction                                                                                   | `G5c` § 1, § 4      |
+| Structured refusal                                                                               | a rejection carrying the failure's message, which is what the specification's own sample catches | exclude — the specification's issue #282 leaves the shape open; do not invent one                                                                                                                                                       | `G5` § 8            |
+| Streaming and partial result on abort                                                            | `notifications/progress` plus `MCPCallOptions.progress`                                          | retain, exceeds — WebMCP defines none                                                                                                                                                                                                   | `G5` § 8            |
+| Resources, prompts, sampling, elicitation, tasks                                                 | published by `MCPServer` today                                                                   | retain — no WebMCP counterpart was found in the sources reached, and whether WebMCP addresses any of them is recorded as unknown rather than as an absence                                                                              | `G5` § 6            |
+| Server-initiated requests                                                                        | none                                                                                             | exclude — a modern-protocol non-goal recorded under [Declared non-goals](#declared-non-goals), not a WebMCP gap                                                                                                                         | `G5` § 6            |
+| Shipping status                                                                                  | `createModelContext` returning `undefined`                                                       | exclude as a dependency — the detection is the return value, there is no `supported` flag, and the chromestatus record, read 2026-09-15 and last updated 2026-08-12, reports `Proposed` with `"flag": false` and `"origintrial": false` | `G5c` § 7           |
 
 ## Declared conformance gaps
 
@@ -4645,17 +5183,6 @@ after its caller has gone. **The consumer's options:** bound the tool itself, or
 a held-open `MCPStream` from a registered method so the keepalive seam applies.
 **Closer:** none named; the limit is structural to a unary HTTP response.
 
-**A tool run through the default registry cannot observe cancellation.** Dispatch resolves
-one signal per request and hands it to every method, selector, principal resolver, and
-subscription producer the request reaches — but the default execution path calls
-`ToolManagerInterface.execute(call)`, whose signature takes a call and nothing else. There is
-no seam to hand a signal through, so a server configured without `execution` runs its tool to
-completion after the request that asked for it has ended, and abandons the result. **What it
-costs:** a long or expensive tool keeps spending after its caller is gone. **The consumer's
-options:** supply `MCPServerOptions.execution`, whose `MCPExecutionContext` carries `signal`
-and can stop the work; or bound the tool itself. **Closer:** none inside this package — the
-limit is in the `execute` signature, which `@orkestrel/tool` owns.
-
 **A producer that ignores its signal cannot be forced to finish.** A controlled stream
 settles its consumer promptly whatever the producer is doing, and aborts the request's
 signal before delegating cleanup — but JavaScript cannot settle work a generator is
@@ -4670,9 +5197,9 @@ frame as the message-based cancellation path for the transports that still have 
 WebSocket, and `MessagePort`. `bindServer` holds one `AbortController` per live request, keyed
 by request id and retired whenever that request leaves, and supplies its signal to `handle`,
 so an inbound cancellation aborts the named request and the cancelled request writes no
-response. A tool observes that abort only through `MCPServerOptions.execution`, whose
-`MCPExecutionContext` carries `signal`; the default `ToolManagerInterface.execute` path has no
-seam to hand one through, which is a separate declared task limit. **What remains:** on
+response. The default execution path forwards that signal through the tool context. A custom
+`MCPServerOptions.execution` handler receives `signal` and `caller` and forwards them
+when delegating to `ToolManagerInterface.execute`. **What remains:** on
 Streamable HTTP there is no such frame at all — there, closing the response stream is the
 cancellation signal, and only a streamed response has one to close. **Closer:** none possible
 for the HTTP face; the limit is the dated revision's.
@@ -4696,7 +5223,9 @@ server `SHOULD` send the empty `subscriptions/listen` result to signal a gracefu
 attributes the notification to the client alone. The schema carries only the generic
 `CancelledNotification` with `requestId` and an optional `reason` — no subscription-specific
 field or variant — so it corroborates neither page. This server sends the empty result,
-correlated by the original request id through `buildSubscriptionResult`, on every transport.
+correlated by the original request id through `buildSubscriptionResult`, on every transport
+when a consumer producer ends and the honoured filter omits `toolsListChanged`. A stream
+honouring the tools family has no graceful end; it stays open until failure or signal abort.
 **What it costs:** a client written against the cancellation page, watching for a notification
 it believes is required, sees the result instead. **Do not "fix" this toward the cancellation
 page** — emitting the notification as well would send a frame the governing page does not
@@ -4748,11 +5277,31 @@ The modern-only scope of `subscriptions/listen` is a stated limit rather than a 
 it is recorded under [Declared non-goals](#declared-non-goals) with the other era-scoped
 surfaces.
 
+**`document.modelContext` is proven against an IDL-faithful double alone.** `createModelContext`,
+`ModelContext`, and the `WebMCP*` wire types translate the registry the
+[WebMCP specification](https://webmachinelearning.github.io/webmcp) defines, and the
+chromestatus record, read 2026-09-15 and last updated 2026-08-12, reports that feature as
+`Proposed` with `"flag": false` and `"origintrial": false` — no browser ships it, behind a flag or in an origin trial. The real
+Chromium the browser suite drives therefore exposes no `document.modelContext`, which
+`tests/src/browser/factories.test.ts` records as its own reading of the page rather than
+assuming, and every bridge scenario runs against `tests/fixtures/modelContext.ts`: an in-memory
+implementation of that WebIDL, member for member and nothing beyond it. **What that proves:**
+the translation each way — the projected annotations, the exposure and origin options, the
+signal carried into a published tool and out to an adopted one, the `toolchange` republication,
+and the registration ownership `destroy` releases. **What it does not prove:** that a user
+agent's own registry accepts these registrations, or that an agent driving one reaches this
+page's tools. **What it costs:** nothing a consumer can reach today, because
+`createModelContext` answers `undefined` on every shipping browser, so feature absence stays
+absence instead of becoming a passing integration claim. **Closer:** a browser that ships the
+registry, after which the same scenarios run against the real global and this entry names the
+version that closed it.
+
 **Not every guide fence is executed.** `tests/guides.test.ts` transcribes and drives the
 flagship ones: the `tools/list` metadata pair, the stdio child's merged environment, its piped
 stderr and the retained evidence tail, the composed stdio server's legacy handshake, the
-consumer-visible client's modern version, and the subscription stream's delivery order and
-capacity refusal. Every other fence carries named-import, symbol, and link parity alone. **What
+consumer-visible client's modern version, the subscription stream's delivery order and
+capacity refusal, and `Refresh the tools an agent holds`. Every other fence carries
+named-import, symbol, and link parity alone. **What
 it costs:** a fence whose comment claims a value nothing asserts is checked for its names and
 not for its answer, so a behaviour that drifts under one of those fences reddens no gate.
 **Closer:** a transcription per fence, added with the claim it pins.
@@ -4878,9 +5427,10 @@ capabilities: { tools: {} }, serverInfo: { name, version } }`, the version negot
    absent one to the shared frozen `EMPTY_MCP_ARGUMENTS`),
    narrowed with `@orkestrel/contract`'s guards (no `as`); a missing /
    non-string `name` → a `-32602` invalid-params error. Otherwise it runs
-   `tools.execute({ id, name, arguments, ...(options.caller === undefined ? {} : { caller: options.caller }) })`
-   under the modern and legacy wire eras, so a present asserted caller reaches the real tool body while
-   absence preserves the former `ToolCall` shape exactly. Because the `ToolManager`
+   `tools.execute(call, context)` under the modern and legacy wire eras. The call carries
+   `{ id, name, arguments }`; the context carries the request's `signal` and the optional
+   `caller` from `options.caller`, omitted when absent. The tool body receives that context.
+   Because the `ToolManager`
    (`@orkestrel/tool`) already isolates a thrown tool (and an unknown name)
    into a `success: false` result, the server adds no try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
@@ -4916,9 +5466,11 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    requires `params.notifications`; the server acknowledges the exact intersection
    with its configured support, and that acknowledgement is the first message
    carrying this request's reserved subscription id. Every delivered notification
-   carries the same stamp. Ending the event-driven producer closes gracefully with
+   carries the same stamp. Ending the consumer's producer closes gracefully when the
+   honoured filter omits `toolsListChanged`, with
    `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
-… } }`. The request id is only stream identity: a later request does not supersede
+… } }`. A stream honouring the tools family stays open until failure or signal abort.
+   The request id is only stream identity: a later request does not supersede
    an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
    JSON) → a serialized `-32700` (Parse error) response with no `id` member; a
