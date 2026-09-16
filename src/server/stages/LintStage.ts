@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { createLSPClient } from '@orkestrel/lsp'
 import { createStdioClientTransport } from '@orkestrel/lsp/server'
 import { LINT_DEADLINE, ProbeError, createDestroyedError } from '@src/core'
+import { isError } from '@orkestrel/contract'
 import {
 	describeUnknown,
 	guardStage,
@@ -244,7 +245,7 @@ export class LintStage implements LintStageInterface {
 		if (ending !== undefined) {
 			return this.#fault(`The Oxlint language server exited with ${ending}`, error, path)
 		}
-		if (error instanceof Error) return error
+		if (isError(error)) return error
 		return this.#fault(describeUnknown(error), error, path)
 	}
 

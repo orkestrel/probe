@@ -19,7 +19,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { attempt } from '@orkestrel/contract'
+import { attempt, isArray, isNumber, isObject, isString } from '@orkestrel/contract'
 import {
 	PROBE_SPECIFICATIONS,
 	ProbeError,
@@ -201,7 +201,7 @@ export class RuntimeStage implements StageInterface {
 			}
 			this.#revalidate(vitest)
 			const specification = this.#specification(subject.test)
-			if (typeof specification !== 'string') {
+			if (!isString(specification)) {
 				return {
 					stage: this.stage,
 					elapsed: Math.round(performance.now() - started),
@@ -233,7 +233,7 @@ export class RuntimeStage implements StageInterface {
 						...this.#misses(project, file),
 					]
 				} catch (error) {
-					if (error instanceof ProbeError) throw error
+					if (isProbeError(error)) throw error
 					throw new ProbeError(
 						`The runtime stage could not run the generated specification (${describeUnknown(error)})`,
 						{
@@ -261,9 +261,7 @@ export class RuntimeStage implements StageInterface {
 						...cleanup,
 						{
 							origin:
-								error instanceof ProbeError && error.origin === 'workspace'
-									? 'workspace'
-									: 'instrument',
+								isProbeError(error) && error.origin === 'workspace' ? 'workspace' : 'instrument',
 							path: relativeWorkspaceFile(this.#workspace, file),
 							message: `The runtime stage could not delete the generated specification (${describeUnknown(error)})`,
 						},
@@ -387,7 +385,7 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#augment(project: TestProjectConfiguration): TestProjectConfiguration {
-		if (typeof project === 'string') return project
+		if (isString(project)) return project
 		if (typeof project === 'function') return this.#wrap(project)
 		return Promise.resolve(project).then(this.#instrument.bind(this))
 	}
@@ -492,7 +490,7 @@ export class RuntimeStage implements StageInterface {
 			return file
 		})
 		if (outcome.success) return outcome.value
-		if (outcome.error instanceof ProbeError && outcome.error.origin === 'claimant') {
+		if (isProbeError(outcome.error) && outcome.error.origin === 'claimant') {
 			throw new ProbeError(outcome.error.message, {
 				origin: outcome.error.origin,
 				code: outcome.error.code,
@@ -517,7 +515,7 @@ export class RuntimeStage implements StageInterface {
 		}
 		return {
 			origin:
-				(outcome.error instanceof ProbeError && outcome.error.origin === 'workspace') || creating
+				(isProbeError(outcome.error) && outcome.error.origin === 'workspace') || creating
 					? 'workspace'
 					: 'instrument',
 			path: test.path,
@@ -886,14 +884,14 @@ export class RuntimeStage implements StageInterface {
 			basename(specification),
 			basename(original),
 		)
-		if (typeof error !== 'object' || error === null || !('stacks' in error)) {
+		if (!isObject(error) || !('stacks' in error)) {
 			return { origin: 'claimant', path: original, message }
 		}
 		const stacks = error.stacks
-		if (!Array.isArray(stacks)) return { origin: 'claimant', path: original, message }
+		if (!isArray(stacks)) return { origin: 'claimant', path: original, message }
 		for (const stack of stacks) {
-			if (typeof stack !== 'object' || stack === null) continue
-			if (!('file' in stack) || typeof stack.file !== 'string') continue
+			if (!isObject(stack)) continue
+			if (!('file' in stack) || !isString(stack.file)) continue
 			const declared = stack.file.startsWith('file:')
 				? fileURLToPath(stack.file)
 				: isAbsolute(stack.file)
@@ -904,14 +902,14 @@ export class RuntimeStage implements StageInterface {
 				reported === specification
 					? original
 					: relativeWorkspaceFile(this.#real(this.#workspace), reported)
-			if (!('line' in stack) || typeof stack.line !== 'number') {
+			if (!('line' in stack) || !isNumber(stack.line)) {
 				return { origin: 'claimant', path, message }
 			}
 			// A reported frame numbers its line and its column from one, so both are lowered into the
 			// zero-based coordinates the issue stores. A frame names a point rather than a span, so
 			// the end resolves to the start and the stored range is zero-width there. A frame
 			// carrying no numeric column names the line alone, which starts at its first character.
-			const character = 'column' in stack && typeof stack.column === 'number' ? stack.column - 1 : 0
+			const character = 'column' in stack && isNumber(stack.column) ? stack.column - 1 : 0
 			const position = { line: stack.line - 1, character }
 			return { origin: 'claimant', path, message, range: { start: position, end: position } }
 		}

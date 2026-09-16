@@ -104,7 +104,7 @@
 		"@microsoft/api-extractor": "^7.59.1",
 		"@orkestrel/guide": "^0.0.19",
 		"@orkestrel/scaffold": "^0.0.70",
-		"@orkestrel/test": "^0.0.14",
+		"@orkestrel/test": "^0.0.15",
 		"@types/node": "^26.6.0",
 		"oxfmt": "^0.68.0",
 		"oxlint": "^1.83.0",

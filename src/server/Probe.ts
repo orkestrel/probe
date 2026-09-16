@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs
 import { randomUUID } from 'node:crypto'
 import { basename, relative } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
+import { isString } from '@orkestrel/contract'
 import { createQueue } from '@orkestrel/queue'
 import { createTimeout } from '@orkestrel/timeout'
 import {
@@ -26,6 +27,7 @@ import {
 	createDestroyedError,
 	formatCheck,
 	formatSpecification,
+	isProbeError,
 } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
@@ -203,7 +205,7 @@ export class Probe implements ProbeInterface {
 		} catch (error) {
 			// An arming failure reached the error channel as its attempt rejected. Reporting it here
 			// too would show one refused boot as two faults.
-			if (!(error instanceof ProbeError) || !this.#surfaced.has(error)) {
+			if (!isProbeError(error) || !this.#surfaced.has(error)) {
 				this.#emitter.emit('error', error)
 			}
 			throw error
@@ -275,7 +277,7 @@ export class Probe implements ProbeInterface {
 	// keeps `prove` from reporting one refusal a second time when the same attempt reaches it.
 	// Observation only: the retry, its timing, and what the next caller reads are unchanged.
 	#surface(error: unknown): void {
-		if (error instanceof ProbeError) this.#surfaced.add(error)
+		if (isProbeError(error)) this.#surfaced.add(error)
 		this.#emitter.emit('error', error)
 	}
 
@@ -288,8 +290,7 @@ export class Probe implements ProbeInterface {
 		try {
 			mkdirSync(resolveWorkspaceFile(this.#workspace, path, true), { recursive: true })
 		} catch (error) {
-			const code =
-				error instanceof ProbeError && error.origin === 'workspace' ? error.code : 'malformed'
+			const code = isProbeError(error) && error.origin === 'workspace' ? error.code : 'malformed'
 			throw new ProbeError(
 				`The probe could not create the boot workbench (${describeUnknown(error)})`,
 				{
@@ -669,14 +670,14 @@ export class Probe implements ProbeInterface {
 		} catch (error) {
 			// A teardown overrun cannot replace the destroyed stage, and every sibling still receives
 			// its own bound. A teardown that fails before the deadline keeps its original rejection.
-			if (!(error instanceof ProbeError) || !this.#deadlines.has(error)) throw error
+			if (!isProbeError(error) || !this.#deadlines.has(error)) throw error
 		}
 	}
 
 	#version(name: string): string {
 		const manifest = readWorkspaceManifest(this.#workspace, name)
 		const version = manifest.contents.version
-		if (typeof version !== 'string') {
+		if (!isString(version)) {
 			throw new ProbeError(`${name} publishes no readable version`, {
 				origin: 'workspace',
 				code: 'malformed',

@@ -19,8 +19,17 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { attempt, compileGuard, isArray, isRecord } from '@orkestrel/contract'
-import { CLAIM_SHAPE, ProbeError, TYPE_MIRROR, isDraft } from '@src/core'
+import {
+	attempt,
+	compileGuard,
+	isArray,
+	isError,
+	isNumber,
+	isObject,
+	isRecord,
+	isString,
+} from '@orkestrel/contract'
+import { CLAIM_SHAPE, ProbeError, TYPE_MIRROR, isDraft, isProbeError } from '@src/core'
 
 /**
  * Rewrites one path into the forward-slash spelling this package compares and reports paths in.
@@ -67,11 +76,11 @@ export function normalizePath(path: string): string {
  * ```
  */
 export function readFaultCode(error: unknown): string | undefined {
-	if (typeof error !== 'object' || error === null) return undefined
+	if (!isObject(error)) return undefined
 	const fault = error
 	const reading = attempt(() => ('code' in fault ? fault.code : undefined))
 	if (!reading.success) return undefined
-	return typeof reading.value === 'string' ? reading.value : undefined
+	return isString(reading.value) ? reading.value : undefined
 }
 
 /**
@@ -167,7 +176,7 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 			}
 		}
 	} catch (error) {
-		if (error instanceof ProbeError) throw error
+		if (isProbeError(error)) throw error
 		const code = readFaultCode(error)
 		const claimant = code === 'ENAMETOOLONG' || code === 'ERR_INVALID_ARG_VALUE'
 		throw new ProbeError(`The workspace path cannot be inspected: ${target}`, {
@@ -492,7 +501,7 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 	try {
 		path = resolveWorkspaceModule(workspace, `${name}/package.json`)
 	} catch (error) {
-		if (!(error instanceof ProbeError)) throw error
+		if (!isProbeError(error)) throw error
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
 			origin: 'workspace',
 			code: error.code,
@@ -564,7 +573,7 @@ export function resolveWorkspaceBinary(workspace: string, name: string, command 
 			context: { name },
 		})
 	}
-	if (typeof bin === 'string') return resolve(manifest.path, '..', bin)
+	if (isString(bin)) return resolve(manifest.path, '..', bin)
 	if (!isRecord(bin) || !(command in bin)) {
 		throw new ProbeError(`${name} does not publish the ${command} binary`, {
 			origin: 'workspace',
@@ -573,7 +582,7 @@ export function resolveWorkspaceBinary(workspace: string, name: string, command 
 		})
 	}
 	const entry = bin[command]
-	if (typeof entry !== 'string') {
+	if (!isString(entry)) {
 		throw new ProbeError(`${name} publishes an invalid ${command} binary`, {
 			origin: 'workspace',
 			code: 'malformed',
@@ -744,7 +753,7 @@ export function matchesWorkspaceModule(path: string): boolean {
  * ```
  */
 export function matchesLiveProcess(id: number): boolean {
-	if (!Number.isSafeInteger(id) || id <= 0) return true
+	if (!isNumber(id) || !Number.isSafeInteger(id) || id <= 0) return true
 	try {
 		process.kill(id, 0)
 		return true
@@ -810,13 +819,8 @@ export function collectWorkspaceFiles(workspace: string): readonly string[] {
  * ```
  */
 export function describeUnknown(value: unknown): string {
-	if (value instanceof Error) return value.message
-	if (
-		typeof value === 'object' &&
-		value !== null &&
-		'message' in value &&
-		typeof value.message === 'string'
-	) {
+	if (isError(value)) return value.message
+	if (isObject(value) && 'message' in value && isString(value.message)) {
 		return value.message
 	}
 	return String(value)
@@ -839,7 +843,7 @@ export async function guardStage<T>(stage: Stage, operation: Promise<T>): Promis
 	try {
 		return await operation
 	} catch (error) {
-		if (error instanceof ProbeError) throw error
+		if (isProbeError(error)) throw error
 		throw new ProbeError(`The ${stage} stage could not serve (${describeUnknown(error)})`, {
 			origin: 'instrument',
 			code: 'malformed',
@@ -920,7 +924,7 @@ export function findRefusedPaths(value: unknown): readonly string[] {
  */
 export function normalizeValue(workspace: string, value: unknown): unknown {
 	const root = resolve(workspace)
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		if (!isAbsolute(value)) return value
 		const path = relative(root, resolve(value))
 		if (path === '') return '.'

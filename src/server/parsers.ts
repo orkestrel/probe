@@ -1,5 +1,5 @@
 import type { ProjectConfig } from './types.js'
-import { attempt, isArray, isRecord } from '@orkestrel/contract'
+import { isArray, isRecord, parseJSON, isString } from '@orkestrel/contract'
 
 /**
  * Parses the configuration one compiler run printed for a TypeScript project.
@@ -23,14 +23,14 @@ import { attempt, isArray, isRecord } from '@orkestrel/contract'
  * ```
  */
 export function parseProjectConfig(text: string): ProjectConfig | undefined {
-	const parsed = attempt<unknown>(() => JSON.parse(text))
-	if (!parsed.success || !isRecord(parsed.value)) return undefined
-	const files = parsed.value.files
-	const include = parsed.value.include
+	const parsed = parseJSON(text)
+	if (!isRecord(parsed)) return undefined
+	const files = parsed.files
+	const include = parsed.include
 	return {
-		compilerOptions: parsed.value.compilerOptions,
-		...(isArray(files) && files.every((entry) => typeof entry === 'string') ? { files } : {}),
-		...(isArray(include) && include.every((entry) => typeof entry === 'string') ? { include } : {}),
+		compilerOptions: parsed.compilerOptions,
+		...(isArray(files) && files.every(isString) ? { files } : {}),
+		...(isArray(include) && include.every(isString) ? { include } : {}),
 	}
 }
 
