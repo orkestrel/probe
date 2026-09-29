@@ -19,7 +19,8 @@ receipt's verification method and its limits, and what a receipt does not vouch 
 npm install --save-dev @orkestrel/probe
 ```
 
-`typescript`, `oxlint`, and `vitest` are optional peers, resolved from the workspace probe inspects.
+The `typescript` and `vitest` packages are optional peers, and the `oxlint` package carries no peer
+range; probe resolves all three from the workspace it inspects.
 
 ## The `probe` binary
 
