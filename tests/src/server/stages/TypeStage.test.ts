@@ -1011,7 +1011,10 @@ describe('type stage workspace faults', () => {
 			const stage = new TypeStage(scratch.path)
 			try {
 				const failure: unknown = await stage
-					.inspect({ files: [], test: { path: 'tmp/probes/declared.test.ts', text: 'export {}\n' } })
+					.inspect({
+						files: [],
+						test: { path: 'tmp/probes/declared.test.ts', text: 'export {}\n' },
+					})
 					.catch((error: unknown) => error)
 				expect(isProbeError(failure)).toBe(true)
 				expect(failure).toMatchObject({

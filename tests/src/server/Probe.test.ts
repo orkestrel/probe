@@ -735,7 +735,9 @@ describe.sequential('probe', () => {
 					reason: 'the source assigns a string to a number',
 				},
 			}
-			mkdirSync(fileURLToPath(new URL('../../../tmp/probes/', import.meta.url)), { recursive: true })
+			mkdirSync(fileURLToPath(new URL('../../../tmp/probes/', import.meta.url)), {
+				recursive: true,
+			})
 			try {
 				const expired = probe.prove(hanging)
 				await waitForDelay(100)
