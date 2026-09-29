@@ -57,7 +57,6 @@ const DIAGNOSTIC_PATTERN = /^(.+?)\(\d+,\d+\): error TS\d+: /u
 const PING = ['ping', '--fetch-retries=0', '--fetch-timeout=5000', '--loglevel=silent']
 const ESM_DRIVER = 'drive.mjs'
 const CJS_DRIVER = 'drive.cjs'
-const CONSUMER_MANIFEST = `{ "name": "distribution-consumer", "private": true, "type": "module" }\n`
 const ESM_DRIVER_SOURCE = `const entry = await import(process.argv[2])
 process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 `
@@ -214,6 +213,24 @@ function readManifestName(path: string): string {
 		throw new Error(`The manifest at ${path} declares no package name`)
 	}
 	return manifest.name
+}
+
+// The consumer declares the toolchain this package peers against, at the ranges its manifest
+// names, because that toolchain is what a consumer runs a probe with. In an empty project npm
+// resolves the peer set of an optional peer too: oxlint's optional `vite-plus` peer depends on
+// vitest 5 (vite-plus 1.0.0), which conflicts with the vitest 4 peer range, while a consumer that
+// already declares the toolchain installs the archive cleanly.
+function buildConsumerManifest(path: string): string {
+	const manifest = readJson(path)
+	const peers =
+		isRecord(manifest) && isRecord(manifest.peerDependencies) ? manifest.peerDependencies : {}
+	const consumer = {
+		name: 'distribution-consumer',
+		private: true,
+		type: 'module',
+		devDependencies: peers,
+	}
+	return `${JSON.stringify(consumer)}\n`
 }
 
 function writeFile(path: string, content: string): void {
@@ -596,7 +613,7 @@ function buildStage(): Stage {
 	if (archives.length !== 1 || archive === undefined) {
 		throw new Error(`npm pack wrote no single archive: ${archives.join(', ')}`)
 	}
-	writeFile(join(consumer, 'package.json'), CONSUMER_MANIFEST)
+	writeFile(join(consumer, 'package.json'), buildConsumerManifest(join(ROOT, 'package.json')))
 	writeFile(join(consumer, ESM_DRIVER), ESM_DRIVER_SOURCE)
 	writeFile(join(consumer, CJS_DRIVER), CJS_DRIVER_SOURCE)
 	const install = runNpm(

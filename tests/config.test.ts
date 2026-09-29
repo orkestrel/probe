@@ -186,6 +186,14 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts', './tests/setupServer.ts'],
 			})
 		}
+		// The `configs/agents/tsconfig.skills.json` wrapper selects the `skills` blueprint fact, and the
+		// project it registers runs the mirrored proofs under `tests/agents/`.
+		if (existsSync(resolve(root, 'configs/agents/tsconfig.skills.json'))) {
+			expected.set('skills', {
+				include: 'tests/agents/**/*.test.ts',
+				setup: ['./tests/setup.ts'],
+			})
+		}
 		for (const label of [
 			'policy',
 			'config',
@@ -220,8 +228,8 @@ describe('root configuration', () => {
 			})
 		}
 		expected.set('probe', {
-			benchmark: ['tmp/probe/**/*.test.ts', 'tests/**/*.test.ts'],
-			include: 'tmp/probe/**/*.test.ts',
+			benchmark: ['tmp/probes/**/*.test.ts', 'tests/**/*.test.ts'],
+			include: 'tmp/probes/**/*.test.ts',
 			parallel: false,
 			pool: 'threads',
 			setup: ['./tests/setup.ts'],

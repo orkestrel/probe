@@ -202,7 +202,7 @@ await new GuideCommand({
 	}
 
 	const OPENING = 'const claim: Claim = {'
-	const DIGEST = 'fcb88a2dee987b8673c1fc7107979470'
+	const DIGEST = 'bdf03e5dfd6bd413ead671c7a2940fcf'
 	const DEFAULT_DESCRIPTION = 'The @orkestrel/probe package.'
 
 	// Each published class beside the contracts it declares it implements, inherited ones included,
