@@ -228,7 +228,7 @@ export function createProbeServerInitialize(): Readonly<Record<string, unknown>>
  */
 export function createProbeServerRequest(active = true): Readonly<Record<string, unknown>> {
 	const test = {
-		path: 'tmp/probe/public-destroy-active.test.ts',
+		path: 'tmp/probes/public-destroy-active.test.ts',
 		text: active
 			? "import { test } from 'vitest'\ntest('waits for teardown', async () => await new Promise((resolve) => setTimeout(resolve, 60_000)))\n"
 			: "import { expect, test } from 'vitest'\ntest('accepts the subject', () => expect(true).toBe(true))\n",
@@ -279,7 +279,7 @@ export function writeProbeServerTarget(scratch: ScratchInterface, root: string):
 	)
 	scratch.write(
 		'vite.config.ts',
-		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 	)
 }
 
@@ -332,7 +332,7 @@ export function writeProbeServerConstruction(scratch: ScratchInterface, root: st
 	)
 	scratch.write(
 		'vite.config.ts',
-		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 	)
 }
 

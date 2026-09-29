@@ -178,8 +178,8 @@ export const RUNTIME_PLUGIN = 'orkestrel-runtime-overlay'
  * @remarks
  * Each stage owns one directory beneath this one, named for the writing host's process id and a
  * fresh UUID, and deletes it at teardown. The directory sits under `tmp/` so nothing the stage
- * writes reaches a version-controlled path, and beside `tmp/probe/` rather than inside it because
- * the workbench Vitest project collects `tmp/probe/**` and would otherwise collect a mirrored test.
+ * writes reaches a version-controlled path, and beside `tmp/probes/` rather than inside it because
+ * the workbench Vitest project collects `tmp/probes/**` and would otherwise collect a mirrored test.
  * A target that runs its own `check`, `lint:check`, or `format:check` while a probe is resident
  * reads whatever it does not exclude, so exclude this directory there.
  *

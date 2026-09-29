@@ -58,7 +58,7 @@ export interface Draft {
  * 		},
  * 	],
  * 	test: {
- * 		path: 'tmp/probe/greeting.test.ts',
+ * 		path: 'tmp/probes/greeting.test.ts',
  * 		text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 	},
  * }
@@ -89,7 +89,7 @@ export interface Case {
  * 		},
  * 	],
  * 	test: {
- * 		path: 'tmp/probe/greeting.test.ts',
+ * 		path: 'tmp/probes/greeting.test.ts',
  * 		text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 	},
  * 	stage: 'type',
@@ -130,7 +130,7 @@ export interface Control extends Case {
  * 			},
  * 		],
  * 		test: {
- * 			path: 'tmp/probe/greeting.test.ts',
+ * 			path: 'tmp/probes/greeting.test.ts',
  * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 	},
@@ -142,7 +142,7 @@ export interface Control extends Case {
  * 			},
  * 		],
  * 		test: {
- * 			path: 'tmp/probe/greeting.test.ts',
+ * 			path: 'tmp/probes/greeting.test.ts',
  * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 		stage: 'type',

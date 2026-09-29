@@ -221,7 +221,7 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
  *
  * @example
  * ```ts
- * const file = resolveWorkspaceFile('/srv/checkout', 'tmp/probe/arm-type.ts', true)
+ * const file = resolveWorkspaceFile('/srv/checkout', 'tmp/probes/arm-type.ts', true)
  * writeFileSync(file, 'export type Signal = string\n', { encoding: 'utf8', flag: 'wx' })
  * overwriteFile(file, 'export type Signal = number\n')
  * readFileSync(file, 'utf8') // 'export type Signal = number\n'
@@ -265,11 +265,11 @@ export function overwriteFile(file: string, text: string): void {
  * @example
  * ```ts
  * try {
- * 	writeFileSync('tmp/probe/greeting\0.test.ts', '')
+ * 	writeFileSync('tmp/probes/greeting\0.test.ts', '')
  * } catch (error) {
- * 	isRefusedName('tmp/probe/greeting\0.test.ts', error) // true
+ * 	isRefusedName('tmp/probes/greeting\0.test.ts', error) // true
  * }
- * isRefusedName('tmp/probe/greeting.test.ts', new Error('the runtime stage was destroyed')) // false
+ * isRefusedName('tmp/probes/greeting.test.ts', new Error('the runtime stage was destroyed')) // false
  * ```
  */
 export function isRefusedName(file: string, error: unknown): boolean {
@@ -631,14 +631,14 @@ export function inferTypeProject(path: string): string {
  *
  * @example
  * ```ts
- * inferTestProject('tmp/probe/greeting.test.ts') // 'probe'
+ * inferTestProject('tmp/probes/greeting.test.ts') // 'probe'
  * inferTestProject('tests/src/server/helpers.test.ts') // 'src:server'
  * inferTestProject('tests/config.test.ts') // undefined
  * ```
  */
 export function inferTestProject(path: string): string | undefined {
 	const [root, axis, environment] = normalizePath(path).split('/')
-	if (root === 'tmp' && axis === 'probe') return 'probe'
+	if (root === 'tmp' && axis === 'probes') return 'probe'
 	if (root !== 'tests' || axis === undefined || environment === undefined) return undefined
 	if (axis !== 'src' && axis !== 'app') return undefined
 	return `${axis}:${environment}`
@@ -677,9 +677,9 @@ export function inferDocumentLanguage(path: string): string {
  * ```ts
  * relativeWorkspaceFile(
  * 	'/srv/checkout',
- * 	buildRevisionPath('/srv/checkout', 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+ * 	buildRevisionPath('/srv/checkout', 'tmp/probes/greeting.test.ts', '4821-9f0c'),
  * )
- * // 'tmp/probe/greeting.test.probe-4821-9f0c.ts'
+ * // 'tmp/probes/greeting.test.probe-4821-9f0c.ts'
  * ```
  */
 export function buildRevisionPath(workspace: string, path: string, revision: string): string {
@@ -874,7 +874,7 @@ export async function guardStage<T>(stage: Stage, operation: Promise<T>): Promis
  *
  * @example
  * ```ts
- * const test = { path: 'tmp/probe/greeting.test.ts', text: '' }
+ * const test = { path: 'tmp/probes/greeting.test.ts', text: '' }
  * findRefusedPaths({
  * 	project: 'tsconfig.json',
  * 	case: { files: [{ path: '../../etc/hosts', text: '' }], test },

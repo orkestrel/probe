@@ -63,7 +63,7 @@ describe('type stage', () => {
 		scratch.write('tsconfig.json', STRICT)
 		scratch.write('src/value.ts', 'export const VALUE = 1\n')
 		const stage = new TypeStage(scratch.path)
-		const test = { path: 'tmp/probe/real.test.ts', text: 'export {}\n' }
+		const test = { path: 'tmp/probes/real.test.ts', text: 'export {}\n' }
 		try {
 			const clean = await stage.inspect(
 				{
@@ -120,7 +120,7 @@ describe('type stage', () => {
 				const broken = await stage.inspect(
 					{
 						files: [{ path: 'src/reading.ts', text }],
-						test: { path: 'tmp/probe/point.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/point.test.ts', text: 'export {}\n' },
 					},
 					'tsconfig.json',
 				)
@@ -163,7 +163,7 @@ describe('type stage', () => {
 				"import { SIGNAL } from './signal.js'\nexport const READING: string = SIGNAL\n",
 			)
 			const stage = new TypeStage(scratch.path)
-			const test = { path: 'tmp/probe/shadow.test.ts', text: 'export {}\n' }
+			const test = { path: 'tmp/probes/shadow.test.ts', text: 'export {}\n' }
 			try {
 				// The control: the workspace as it stands compiles, so the reading below is the draft's
 				// doing rather than a tree that was already red.
@@ -216,7 +216,7 @@ describe('type stage', () => {
 				path: 'src/second.ts',
 				text: "import { FIRST } from './first.js'\nconst VALUE: 'draft' = FIRST\nvoid VALUE\n",
 			}
-			const test = { path: 'tmp/probe/sibling.test.ts', text: 'export {}\n' }
+			const test = { path: 'tmp/probes/sibling.test.ts', text: 'export {}\n' }
 			try {
 				const paired = await stage.inspect(
 					{
@@ -341,7 +341,7 @@ describe('type stage', () => {
 								text: "import { REAL } from './linked.js'\nvoid REAL\n",
 							},
 						],
-						test: { path: 'tmp/probe/linked.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/linked.test.ts', text: 'export {}\n' },
 					},
 					'tsconfig.json',
 				)
@@ -381,7 +381,7 @@ describe('type stage', () => {
 			const stage = new TypeStage(scratch.path)
 			const subject = {
 				files: [{ path: 'src/core/version.ts', text: 'export const VERSION = process.version\n' }],
-				test: { path: 'tmp/probe/project.test.ts', text: 'export {}\n' },
+				test: { path: 'tmp/probes/project.test.ts', text: 'export {}\n' },
 			}
 			try {
 				const named = await stage.inspect(subject, 'tsconfig.json')
@@ -413,7 +413,7 @@ describe('type stage', () => {
 			)
 			scratch.write('src/core/value.ts', 'export const VALUE = 1\n')
 			const stage = new TypeStage(scratch.path)
-			const test = { path: 'tmp/probe/spelling.test.ts', text: 'export {}\n' }
+			const test = { path: 'tmp/probes/spelling.test.ts', text: 'export {}\n' }
 			try {
 				const indirect = await stage.inspect({
 					files: [{ path: 'src/server/../core/reading.ts', text: 'export const READING = 1\n' }],
@@ -487,7 +487,7 @@ describe('type stage', () => {
 			try {
 				await expect(
 					stage.inspect(
-						{ files, test: { path: 'tmp/probe/escape.test.ts', text: 'export {}\n' } },
+						{ files, test: { path: 'tmp/probes/escape.test.ts', text: 'export {}\n' } },
 						'tsconfig.json',
 					),
 				).rejects.toThrow('Path escapes the workspace: ../outside.ts')
@@ -605,7 +605,7 @@ describe('type stage', () => {
 			const inspection = stage.inspect(
 				{
 					files: [{ path: 'src/reading.ts', text: "export const READING = 'ok'\n" }],
-					test: { path: 'tmp/probe/abandon.test.ts', text: 'export {}\n' },
+					test: { path: 'tmp/probes/abandon.test.ts', text: 'export {}\n' },
 				},
 				'tsconfig.json',
 			)
@@ -780,7 +780,7 @@ describe('type stage project resolution', () => {
 							{ path: project, text: '{"compilerOptions":{"strict":false}}\n' },
 							{ path: 'projects/value.ts', text: 'export const VALUE = 1\n' },
 						],
-						test: { path: 'tmp/probe/digest-order.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/digest-order.test.ts', text: 'export {}\n' },
 					},
 					project,
 				)
@@ -864,7 +864,7 @@ describe('type stage workspace faults', () => {
 			// and the run that reads the project for real is where the syntax fault surfaces.
 			scratch.write('projects/value.ts', 'export const VALUE = 1\n')
 			const stage = new TypeStage(scratch.path)
-			const test = { path: 'tmp/probe/broken.test.ts', text: 'export {}\n' }
+			const test = { path: 'tmp/probes/broken.test.ts', text: 'export {}\n' }
 			try {
 				const failure: unknown = await stage
 					.inspect(
@@ -934,7 +934,7 @@ describe('type stage workspace faults', () => {
 							{ path: 'src/settings.json', text: '{ "name": \n' },
 							{ path: 'src/reader.ts', text: 'export const READING = 1\n' },
 						],
-						test: { path: 'tmp/probe/drafted-json.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/drafted-json.test.ts', text: 'export {}\n' },
 					},
 					'tsconfig.json',
 				)
@@ -971,7 +971,7 @@ describe('type stage workspace faults', () => {
 					.inspect(
 						{
 							files: [{ path: 'src/reading.ts', text: 'export const READING = 1\n' }],
-							test: { path: 'tmp/probe/missing.test.ts', text: 'export {}\n' },
+							test: { path: 'tmp/probes/missing.test.ts', text: 'export {}\n' },
 						},
 						'projects/tsconfig.detached.json',
 					)
@@ -1011,7 +1011,7 @@ describe('type stage workspace faults', () => {
 			const stage = new TypeStage(scratch.path)
 			try {
 				const failure: unknown = await stage
-					.inspect({ files: [], test: { path: 'tmp/probe/declared.test.ts', text: 'export {}\n' } })
+					.inspect({ files: [], test: { path: 'tmp/probes/declared.test.ts', text: 'export {}\n' } })
 					.catch((error: unknown) => error)
 				expect(isProbeError(failure)).toBe(true)
 				expect(failure).toMatchObject({
@@ -1061,7 +1061,7 @@ describe('type stage workspace faults', () => {
 				const failure: unknown = await stage
 					.inspect({
 						files: [],
-						test: { path: 'tmp/probe/instrument-exit.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/instrument-exit.test.ts', text: 'export {}\n' },
 					})
 					.catch((error: unknown) => error)
 				expect(isProbeError(failure)).toBe(true)
@@ -1124,7 +1124,7 @@ describe('type stage workspace faults', () => {
 				const failure: unknown = await stage
 					.inspect({
 						files: [],
-						test: { path: 'tmp/probe/instrument-signal.test.ts', text: 'export {}\n' },
+						test: { path: 'tmp/probes/instrument-signal.test.ts', text: 'export {}\n' },
 					})
 					.catch((error: unknown) => error)
 				expect(isProbeError(failure)).toBe(true)

@@ -246,9 +246,9 @@ describe('probe server', () => {
 		const signals = readSignals()
 		try {
 			const server = new ProbeServer({ workspace: scratch.path, deadline: 120_000 })
-			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+			expect(existsSync(resolve(scratch.path, 'tmp/probes'))).toBe(false)
 			await expect(server.destroy()).resolves.toBeUndefined()
-			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+			expect(existsSync(resolve(scratch.path, 'tmp/probes'))).toBe(false)
 			expect(readInput()).toStrictEqual(input)
 			expect(readSignals()).toStrictEqual(signals)
 		} finally {
@@ -264,7 +264,7 @@ describe('probe server', () => {
 				const scratch = createScratch({ prefix: `probe-server-${scenario}-` })
 				teardown.add(() => destroyScratch(scratch))
 				writeProbeServerTarget(scratch, ROOT)
-				scratch.write('tmp/probe', 'occupied\n')
+				scratch.write('tmp/probes', 'occupied\n')
 				const host = spawnProbeServerHost(scratch, BUILT_SERVER, scenario)
 				hosts.push(host)
 				teardown.add(() => killChildTree(host.child))
@@ -313,7 +313,7 @@ describe('probe server', () => {
 		const teardown = createTeardown()
 		teardown.add(() => destroyScratch(scratch))
 		writeProbeServerTarget(scratch, ROOT)
-		const workbench = resolve(scratch.path, 'tmp/probe')
+		const workbench = resolve(scratch.path, 'tmp/probes')
 		const mirror = resolve(scratch.path, 'tmp/type')
 		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
 		teardown.add(() => killChildTree(host.child))
@@ -493,7 +493,7 @@ describe('probe server', () => {
 			const teardown = createTeardown()
 			teardown.add(() => destroyScratch(scratch))
 			writeProbeServerTarget(scratch, ROOT)
-			const directory = resolve(scratch.path, 'tmp/probe')
+			const directory = resolve(scratch.path, 'tmp/probes')
 			const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
 			teardown.add(() => killChildTree(host.child))
 			try {
@@ -555,7 +555,7 @@ describe('probe server', () => {
 				code: 'destroyed',
 				message: 'The probe server has been destroyed',
 			})
-			expect(existsSync(resolve(scratch.path, 'tmp/probe'))).toBe(false)
+			expect(existsSync(resolve(scratch.path, 'tmp/probes'))).toBe(false)
 		} finally {
 			scratch.destroy()
 		}

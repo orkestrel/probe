@@ -93,7 +93,7 @@ describe.sequential('probe', () => {
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 			const test = {
-				path: 'tmp/probe/probe-receipt.test.ts',
+				path: 'tmp/probes/probe-receipt.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 			}
 			const clean = {
@@ -105,7 +105,7 @@ describe.sequential('probe', () => {
 				text: "export function value(): number {\n\treturn 'bad'\n}\n",
 			}
 			const skipped = {
-				path: 'tmp/probe/probe-skipped.test.ts',
+				path: 'tmp/probes/probe-skipped.test.ts',
 				text: "import { describe, expect, test } from 'vitest'\ntest.skip('skips', () => expect(1).toBe(2))\ntest.todo('defers')\ndescribe.skip('group', () => { test('skips with its group', () => expect(1).toBe(2)) })\n",
 			}
 			const unmapped = {
@@ -120,7 +120,7 @@ describe.sequential('probe', () => {
 				text: "export function value(): number {\n\treturn 'bad'\n}\n",
 			}
 			const foreignTest = {
-				path: 'tmp/probe/probe-foreign.test.ts',
+				path: 'tmp/probes/probe-foreign.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(3 * 3).toBe(9))\n",
 			}
 			try {
@@ -220,9 +220,9 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const files = [
 				{
 					path: 'src/core/identical.ts',
@@ -230,7 +230,7 @@ describe.sequential('probe', () => {
 				},
 			]
 			const test = {
-				path: 'tmp/probe/identical.test.ts',
+				path: 'tmp/probes/identical.test.ts',
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			const armed = {
@@ -293,7 +293,7 @@ describe.sequential('probe', () => {
 						control: {
 							files,
 							test: {
-								path: 'tmp/probe/identical.test.ts',
+								path: 'tmp/probes/identical.test.ts',
 								text: "import { test } from 'vitest'\ntest('Passes', () => {})\n",
 							},
 							stage: 'runtime',
@@ -334,7 +334,7 @@ describe.sequential('probe', () => {
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 			const test = {
-				path: 'tmp/probe/probe-elapsed.test.ts',
+				path: 'tmp/probes/probe-elapsed.test.ts',
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			try {
@@ -391,7 +391,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/toolchain.test.ts',
+						path: 'tmp/probes/toolchain.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				},
@@ -403,7 +403,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/toolchain.test.ts',
+						path: 'tmp/probes/toolchain.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 					stage: 'type',
@@ -425,9 +425,9 @@ describe.sequential('probe', () => {
 		{ timeout: 60_000 },
 		async () => {
 			const marker = `probe-blocked-${randomUUID()}`
-			const path = `tmp/probe/${marker}/deep/missing-runtime.test.ts`
-			const blocker = resolve(ROOT, 'tmp/probe', marker)
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			const path = `tmp/probes/${marker}/deep/missing-runtime.test.ts`
+			const blocker = resolve(ROOT, 'tmp/probes', marker)
+			mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 			// A file where the case's declared test directory belongs. The runtime stage creates the
 			// directory a claim declares, so a directory it cannot create is what leaves the stage
 			// with nowhere to write.
@@ -453,7 +453,7 @@ describe.sequential('probe', () => {
 							},
 						],
 						test: {
-							path: 'tmp/probe/missing-runtime-control.test.ts',
+							path: 'tmp/probes/missing-runtime-control.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						},
 						stage: 'type',
@@ -496,12 +496,12 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			// A file where the workbench directory belongs is what the workbench refuses: a workspace
 			// path that does not exist is created by the same recursive call, and a workspace missing a
 			// tool is refused in the constructor before arming begins.
-			scratch.write('tmp/probe', '')
+			scratch.write('tmp/probes', '')
 			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({ workspace: scratch.path, on: { error: failures.handler } })
 			try {
@@ -521,7 +521,7 @@ describe.sequential('probe', () => {
 						message: expect.stringContaining('The probe could not create the boot workbench'),
 						origin: 'workspace',
 						code: 'malformed',
-						context: { path: 'tmp/probe' },
+						context: { path: 'tmp/probes' },
 					}),
 				)
 				const thrown = await probe
@@ -530,14 +530,14 @@ describe.sequential('probe', () => {
 						case: {
 							files: [],
 							test: {
-								path: 'tmp/probe/blocked-workbench.test.ts',
+								path: 'tmp/probes/blocked-workbench.test.ts',
 								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 							},
 						},
 						control: {
 							files: [],
 							test: {
-								path: 'tmp/probe/blocked-workbench.test.ts',
+								path: 'tmp/probes/blocked-workbench.test.ts',
 								text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
 							},
 							stage: 'runtime',
@@ -550,7 +550,7 @@ describe.sequential('probe', () => {
 					message: expect.stringContaining('The probe could not create the boot workbench'),
 					origin: 'workspace',
 					code: 'malformed',
-					context: { path: 'tmp/probe' },
+					context: { path: 'tmp/probes' },
 					cause: expect.any(Error),
 				})
 				// One emission per attempt on this path too: the constructor's attempt and the attempt
@@ -595,14 +595,14 @@ describe.sequential('probe', () => {
 					case: {
 						files: [],
 						test: {
-							path: 'tmp/probe/unsupported.test.ts',
+							path: 'tmp/probes/unsupported.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						},
 					},
 					control: {
 						files: [],
 						test: {
-							path: 'tmp/probe/unsupported.test.ts',
+							path: 'tmp/probes/unsupported.test.ts',
 							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
 						},
 						stage: 'runtime',
@@ -641,7 +641,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/exit-code.test.ts',
+						path: 'tmp/probes/exit-code.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				},
@@ -653,7 +653,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/exit-code.test.ts',
+						path: 'tmp/probes/exit-code.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 					stage: 'type',
@@ -692,14 +692,14 @@ describe.sequential('probe', () => {
 				case: {
 					files: [],
 					test: {
-						path: 'tmp/probe/expiry.test.ts',
+						path: 'tmp/probes/expiry.test.ts',
 						text: "import { test } from 'vitest'\ntest('never returns', () => { while (true) {} })\n",
 					},
 				},
 				control: {
 					files: [],
 					test: varyDraft({
-						path: 'tmp/probe/expiry.test.ts',
+						path: 'tmp/probes/expiry.test.ts',
 						text: "import { test } from 'vitest'\ntest('never returns', () => { while (true) {} })\n",
 					}),
 					stage: 'runtime',
@@ -716,7 +716,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/after-expiry.test.ts',
+						path: 'tmp/probes/after-expiry.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				},
@@ -728,14 +728,14 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/after-expiry.test.ts',
+						path: 'tmp/probes/after-expiry.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 					stage: 'type',
 					reason: 'the source assigns a string to a number',
 				},
 			}
-			mkdirSync(fileURLToPath(new URL('../../../tmp/probe/', import.meta.url)), { recursive: true })
+			mkdirSync(fileURLToPath(new URL('../../../tmp/probes/', import.meta.url)), { recursive: true })
 			try {
 				const expired = probe.prove(hanging)
 				await waitForDelay(100)
@@ -751,7 +751,7 @@ describe.sequential('probe', () => {
 				})
 				expect(expirations.calls).toStrictEqual([[hanging]])
 				expect(
-					readdirSync(fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))).filter(
+					readdirSync(fileURLToPath(new URL('../../../tmp/probes/', import.meta.url))).filter(
 						(name) => name.startsWith('expiry.test.probe-'),
 					),
 				).toStrictEqual([])
@@ -774,7 +774,7 @@ describe.sequential('probe', () => {
 			on: { expire: expirations.handler },
 		})
 		const test = {
-			path: 'tmp/probe/heavy-type.test.ts',
+			path: 'tmp/probes/heavy-type.test.ts',
 			text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 		}
 		// Thirty candidates are one compiler run of about 33 seconds behind a 20-second deadline,
@@ -798,7 +798,7 @@ describe.sequential('probe', () => {
 			path: 'src/core/after-type-expiry/helpers.ts',
 			text: "export function value(): string {\n\treturn 'ok'\n}\n",
 		}
-		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+		mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 		try {
 			await expect(probe.prove(heavy)).rejects.toMatchObject({
 				name: 'ProbeError',
@@ -846,9 +846,9 @@ describe.sequential('probe', () => {
 			scratch.write('src/core/index.ts', 'export const READY = true\n')
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const project = 'projects/tsconfig.generated.json'
 			const expirations = createRecorder<[Claim]>()
 			const probe = new Probe({
@@ -857,7 +857,7 @@ describe.sequential('probe', () => {
 				on: { expire: expirations.handler },
 			})
 			const test = {
-				path: 'tmp/probe/project-deadline.test.ts',
+				path: 'tmp/probes/project-deadline.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 			}
 			const claim: Claim = {
@@ -967,9 +967,9 @@ describe.sequential('probe', () => {
 			scratch.write('src/core/index.ts', 'export const READY = true\n')
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const projectA = 'projects/tsconfig.a.json'
 			const projectB = 'projects/tsconfig.b.json'
 			const project =
@@ -978,7 +978,7 @@ describe.sequential('probe', () => {
 			scratch.write(projectB, '{"compilerOptions" {"strict":true}}\n')
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			const test = {
-				path: 'tmp/probe/project-serialization.test.ts',
+				path: 'tmp/probes/project-serialization.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 			}
 			const first: Claim = {
@@ -1065,9 +1065,9 @@ describe.sequential('probe', () => {
 		)
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 		)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		// 15_000 ms clears the stalled lint stage's expiry on a contended host, which a saturated
 		// host on 2026-09-06 showed 6_000 ms did not.
 		const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
@@ -1091,7 +1091,7 @@ describe.sequential('probe', () => {
 								},
 							],
 							test: {
-								path: 'tmp/probe/stalled-lint.test.ts',
+								path: 'tmp/probes/stalled-lint.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
 						},
@@ -1103,7 +1103,7 @@ describe.sequential('probe', () => {
 								}),
 							],
 							test: {
-								path: 'tmp/probe/stalled-lint.test.ts',
+								path: 'tmp/probes/stalled-lint.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 							},
 							stage: 'lint',
@@ -1129,7 +1129,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/served-lint.test.ts',
+						path: 'tmp/probes/served-lint.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				},
@@ -1141,7 +1141,7 @@ describe.sequential('probe', () => {
 						}),
 					],
 					test: {
-						path: 'tmp/probe/served-lint.test.ts',
+						path: 'tmp/probes/served-lint.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 					stage: 'lint',
@@ -1178,9 +1178,9 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			// The marker silences every document, so the boot control's own lint inspection outruns the
 			// deadline and arming fails the way a slow workspace makes it fail.
 			scratch.write('stall-lint', '')
@@ -1202,7 +1202,7 @@ describe.sequential('probe', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/rearmed.test.ts',
+						path: 'tmp/probes/rearmed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				},
@@ -1214,7 +1214,7 @@ describe.sequential('probe', () => {
 						}),
 					],
 					test: {
-						path: 'tmp/probe/rearmed.test.ts',
+						path: 'tmp/probes/rearmed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 					stage: 'lint',
@@ -1258,7 +1258,7 @@ describe.sequential('probe', () => {
 		"writes its boot dependencies under the sweep's revision identity",
 		{ timeout: 60_000 },
 		async () => {
-			// The boot controls write real files into the target's `tmp/probe`, and a host killed
+			// The boot controls write real files into the target's `tmp/probes`, and a host killed
 			// before the boot's own cleanup runs leaves them there. They carry the revision marker
 			// for the same reason a generated specification does: the next warm sweeps a file whose
 			// writing process is gone and leaves a live neighbour's alone.
@@ -1271,9 +1271,9 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
-			const directory = resolve(scratch.path, 'tmp/probe')
+			const directory = resolve(scratch.path, 'tmp/probes')
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			let observed: readonly string[] = []
 			try {
@@ -1327,7 +1327,7 @@ describe.sequential('probe', () => {
 			scratch.write('src/core/index.ts', 'export const READY = true\n')
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nconst probe = { test: { name: { label: 'probe' }, include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ test: { projects: [probe, './vitest.src.config.ts'] } })\n",
+				"import { defineConfig } from 'vitest/config'\nconst probe = { test: { name: { label: 'probe' }, include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ test: { projects: [probe, './vitest.src.config.ts'] } })\n",
 			)
 			scratch.write(
 				'vitest.src.config.ts',
@@ -1392,9 +1392,9 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({
 				workspace: scratch.path,
@@ -1425,14 +1425,14 @@ describe.sequential('probe', () => {
 						case: {
 							files: [],
 							test: {
-								path: 'tmp/probe/refused.test.ts',
+								path: 'tmp/probes/refused.test.ts',
 								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 							},
 						},
 						control: {
 							files: [],
 							test: varyDraft({
-								path: 'tmp/probe/refused.test.ts',
+								path: 'tmp/probes/refused.test.ts',
 								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 							}),
 							stage: 'type',
@@ -1487,14 +1487,14 @@ describe.sequential('probe', () => {
 							},
 						],
 						test: {
-							path: 'tmp/probe/stage-failure.test.ts',
+							path: 'tmp/probes/stage-failure.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						},
 					},
 					control: {
 						files: [],
 						test: {
-							path: 'tmp/probe/stage-failure.test.ts',
+							path: 'tmp/probes/stage-failure.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						},
 						stage: 'type',
@@ -1512,7 +1512,7 @@ describe.sequential('probe', () => {
 		'destroys idempotently and releases the listeners its host registered',
 		{ timeout: 60_000 },
 		async () => {
-			const directory = fileURLToPath(new URL('../../../tmp/probe/', import.meta.url))
+			const directory = fileURLToPath(new URL('../../../tmp/probes/', import.meta.url))
 			mkdirSync(directory, { recursive: true })
 			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({
@@ -1530,14 +1530,14 @@ describe.sequential('probe', () => {
 					case: {
 						files: [],
 						test: {
-							path: 'tmp/probe/after-destroy.test.ts',
+							path: 'tmp/probes/after-destroy.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						},
 					},
 					control: {
 						files: [],
 						test: varyDraft({
-							path: 'tmp/probe/after-destroy.test.ts',
+							path: 'tmp/probes/after-destroy.test.ts',
 							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 						}),
 						stage: 'runtime',
@@ -1575,19 +1575,19 @@ describe.sequential('probe', () => {
 			scratch.write('src/core/index.ts', 'export const READY = true\n')
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const absent = resolve(scratch.path, 'absent/destroy-gate')
 			expect(spawnSync('mkfifo', [absent]).status).not.toBe(0)
 			expect(existsSync(absent)).toBe(false)
-			const gate = resolve(scratch.path, 'tmp/probe/destroy-gate')
+			const gate = resolve(scratch.path, 'tmp/probes/destroy-gate')
 			const fifo = spawnSync('mkfifo', [gate])
 			context.skip(
 				fifo.status !== 0 || !existsSync(gate) || !lstatSync(gate).isFIFO(),
 				'this host cannot create the FIFO that parks a generated Vitest specification during teardown',
 			)
-			const ready = resolve(scratch.path, 'tmp/probe/destroy-ready')
+			const ready = resolve(scratch.path, 'tmp/probes/destroy-ready')
 			// 15_000 ms clears the parked FIFO teardown's warm on a contended host, which a saturated
 			// host on 2026-09-06 showed 6_000 ms did not.
 			const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
@@ -1597,14 +1597,14 @@ describe.sequential('probe', () => {
 				case: {
 					files: [],
 					test: {
-						path: 'tmp/probe/destroy-bound.test.ts',
+						path: 'tmp/probes/destroy-bound.test.ts',
 						text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks in a FIFO', { timeout: 60_000 }, () => { writeFileSync(new URL('destroy-ready', import.meta.url), ''); readFileSync(new URL('destroy-gate', import.meta.url)) })\n",
 					},
 				},
 				control: {
 					files: [],
 					test: varyDraft({
-						path: 'tmp/probe/destroy-bound.test.ts',
+						path: 'tmp/probes/destroy-bound.test.ts',
 						text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks in a FIFO', { timeout: 60_000 }, () => { writeFileSync(new URL('destroy-ready', import.meta.url), ''); readFileSync(new URL('destroy-gate', import.meta.url)) })\n",
 					}),
 					stage: 'runtime',
@@ -1669,9 +1669,9 @@ describe.sequential('probe', () => {
 			)
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			scratch.write('probe-lint.log', '')
 			const armings = createRecorder<[Toolchain]>()
 			const verdicts = createRecorder<[Verdict]>()
@@ -1688,7 +1688,7 @@ describe.sequential('probe', () => {
 				},
 			})
 			const passing = {
-				path: 'tmp/probe/order.test.ts',
+				path: 'tmp/probes/order.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 			}
 			const first: Claim = {
@@ -1778,15 +1778,15 @@ describe.sequential('probe', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const id = randomUUID()
-			const lax = `tmp/probe/probe-project-${id}.json`
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			const lax = `tmp/probes/probe-project-${id}.json`
+			mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 			writeFileSync(
 				resolve(ROOT, lax),
 				'{"compilerOptions":{"strict":false,"target":"ESNext","module":"ESNext","moduleResolution":"bundler","skipLibCheck":true,"types":[]},"files":["../../src/core/index.ts"]}\n',
 				'utf8',
 			)
 			const test = {
-				path: `tmp/probe/probe-project-${id}.test.ts`,
+				path: `tmp/probes/probe-project-${id}.test.ts`,
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			const clean = {
@@ -1849,15 +1849,15 @@ describe.sequential('probe', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const id = randomUUID()
-			const lax = `tmp/probe/probe-forgery-${id}.json`
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			const lax = `tmp/probes/probe-forgery-${id}.json`
+			mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 			writeFileSync(
 				resolve(ROOT, lax),
 				'{"compilerOptions":{"strict":false,"target":"ESNext","module":"ESNext","moduleResolution":"bundler","skipLibCheck":true,"types":[]},"files":["../../src/core/index.ts"]}\n',
 				'utf8',
 			)
 			const test = {
-				path: `tmp/probe/probe-forgery-${id}.test.ts`,
+				path: `tmp/probes/probe-forgery-${id}.test.ts`,
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 			}
 			// Clean under a project without `strictNullChecks` and reported under the workspace's
@@ -1915,7 +1915,7 @@ describe.sequential('probe', () => {
 	it('separates two claims answered under one project', { timeout: 120_000 }, async () => {
 		const id = randomUUID()
 		const test = {
-			path: `tmp/probe/probe-claims-${id}.test.ts`,
+			path: `tmp/probes/probe-claims-${id}.test.ts`,
 			text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 		}
 		const broken = {
@@ -1961,8 +1961,8 @@ describe.sequential('probe', () => {
 
 	it('mints one token for one claim in two separate processes', { timeout: 180_000 }, async () => {
 		const id = randomUUID()
-		const spec = `tmp/probe/probe-portable-${id}.test.ts`
-		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+		const spec = `tmp/probes/probe-portable-${id}.test.ts`
+		mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 		const claim: Claim = {
 			project: 'configs/src/tsconfig.core.json',
 			case: {
@@ -1973,7 +1973,7 @@ describe.sequential('probe', () => {
 					},
 				],
 				test: {
-					path: `tmp/probe/probe-portable-subject-${id}.test.ts`,
+					path: `tmp/probes/probe-portable-subject-${id}.test.ts`,
 					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 				},
 			},
@@ -1985,7 +1985,7 @@ describe.sequential('probe', () => {
 					},
 				],
 				test: {
-					path: `tmp/probe/probe-portable-subject-${id}.test.ts`,
+					path: `tmp/probes/probe-portable-subject-${id}.test.ts`,
 					text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 				},
 				stage: 'type',

@@ -79,7 +79,7 @@ describe('server helper examples', () => {
 		)
 		// Node refuses a NUL byte before any filesystem reads the name, so this block writes nothing
 		// and needs no directory of its own.
-		const embedded = 'tmp/probe/greeting\0.test.ts'
+		const embedded = 'tmp/probes/greeting\0.test.ts'
 		expect(
 			isRefusedName(
 				embedded,
@@ -87,7 +87,7 @@ describe('server helper examples', () => {
 			),
 		).toBe(true)
 		expect(
-			isRefusedName('tmp/probe/greeting.test.ts', new Error('the runtime stage was destroyed')),
+			isRefusedName('tmp/probes/greeting.test.ts', new Error('the runtime stage was destroyed')),
 		).toBe(false)
 		expect(relativeWorkspaceFile(ROOT, resolve(ROOT, 'src/core/greeting.ts'))).toBe(
 			'src/core/greeting.ts',
@@ -130,7 +130,7 @@ describe('server helper examples', () => {
 		expect(() => inferTypeProject('tests/src/core/greeting.test.ts')).toThrow(
 			'Cannot infer a scoped TypeScript project for tests/src/core/greeting.test.ts',
 		)
-		expect(inferTestProject('tmp/probe/greeting.test.ts')).toBe('probe')
+		expect(inferTestProject('tmp/probes/greeting.test.ts')).toBe('probe')
 		expect(inferTestProject('tests/src/server/helpers.test.ts')).toBe('src:server')
 		expect(inferTestProject('tests/config.test.ts')).toBeUndefined()
 		expect(inferDocumentLanguage('src/core/greeting.ts')).toBe('typescript')
@@ -138,9 +138,9 @@ describe('server helper examples', () => {
 		expect(
 			relativeWorkspaceFile(
 				ROOT,
-				buildRevisionPath(ROOT, 'tmp/probe/greeting.test.ts', '4821-9f0c'),
+				buildRevisionPath(ROOT, 'tmp/probes/greeting.test.ts', '4821-9f0c'),
 			),
-		).toBe('tmp/probe/greeting.test.probe-4821-9f0c.ts')
+		).toBe('tmp/probes/greeting.test.probe-4821-9f0c.ts')
 		expect(matchesWorkspaceModule('src/core/greeting.ts')).toBe(true)
 		expect(matchesWorkspaceModule('src/styles/tokens.css')).toBe(false)
 		expect(describeUnknown(new Error('The lint stage has been destroyed'))).toBe(
@@ -156,8 +156,8 @@ describe('server helper examples', () => {
 		// against the workspace the illustrative root stands for.
 		const scratch = createScratch({ prefix: 'probe-helper-example-' })
 		try {
-			scratch.ensure('tmp/probe')
-			const file = resolveWorkspaceFile(scratch.path, 'tmp/probe/arm-type.ts', true)
+			scratch.ensure('tmp/probes')
+			const file = resolveWorkspaceFile(scratch.path, 'tmp/probes/arm-type.ts', true)
 			writeFileSync(file, 'export type Signal = string\n', { encoding: 'utf8', flag: 'wx' })
 			overwriteFile(file, 'export type Signal = number\n')
 			expect(readFileSync(file, 'utf8')).toBe('export type Signal = number\n')
@@ -205,7 +205,7 @@ describe('workspace message paths', () => {
 		expect(relativeWorkspaceMessage(host, `Cannot read ${project}`)).toBe(
 			'Cannot read tsconfig.json',
 		)
-		const nested = resolve(host, 'tmp/probe/greeting.test.ts')
+		const nested = resolve(host, 'tmp/probes/greeting.test.ts')
 		expect(relativeWorkspaceMessage(host, `Cannot find ${nested}`)).toBe(
 			`Cannot find ${relative(host, nested)}`,
 		)
@@ -225,11 +225,11 @@ describe('workspace message paths', () => {
 		// would send a reader to a file the tree does not hold. A name carrying a complete marker is
 		// still the target's: only the stage that generated a specification knows which exact name it
 		// wrote, and it renames that one itself.
-		const owned = 'tmp/probe/notes.probe-draft.ts'
+		const owned = 'tmp/probes/notes.probe-draft.ts'
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${owned}`)).toBe(
 			`Failed to load ${owned}`,
 		)
-		const partial = 'tmp/probe/notes.probe-4821-1f0c9d2e.ts'
+		const partial = 'tmp/probes/notes.probe-4821-1f0c9d2e.ts'
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${partial}`)).toBe(
 			`Failed to load ${partial}`,
 		)
@@ -237,7 +237,7 @@ describe('workspace message paths', () => {
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${complete}`)).toBe(
 			`Failed to load ${complete}`,
 		)
-		const generated = buildRevisionPath(ROOT, 'tmp/probe/greeting.test.ts', `${process.pid}-1f0c`)
+		const generated = buildRevisionPath(ROOT, 'tmp/probes/greeting.test.ts', `${process.pid}-1f0c`)
 		// The root is removed even from a marker-carrying name, and the remainder keeps the separator
 		// the tool wrote rather than the forward-slash form `Issue.path` uses.
 		expect(relativeWorkspaceMessage(ROOT, `Failed to load ${generated}`)).toBe(
@@ -327,7 +327,7 @@ describe('server project inferers', () => {
 	})
 
 	it('infers every mapped Vitest project and returns undefined for every unmapped shape', () => {
-		expect(inferTestProject('tmp/probe/value.test.ts')).toBe('probe')
+		expect(inferTestProject('tmp/probes/value.test.ts')).toBe('probe')
 		expect(inferTestProject('tests/src/server/value.test.ts')).toBe('src:server')
 		expect(inferTestProject('tests/app/core/value.test.ts')).toBe('app:core')
 		expect(inferTestProject('source/src/core/value.test.ts')).toBeUndefined()
@@ -351,7 +351,7 @@ describe('server path helpers', () => {
 	// backslash spelling and a forward-slash spelling of one path can never miss each other.
 	it('rewrites every backslash and leaves an already-normalized path alone', () => {
 		expect(normalizePath('C:\\workspace\\src\\value.ts')).toBe('C:/workspace/src/value.ts')
-		expect(normalizePath('tmp/probe/value.test.ts')).toBe('tmp/probe/value.test.ts')
+		expect(normalizePath('tmp/probes/value.test.ts')).toBe('tmp/probes/value.test.ts')
 		expect(normalizePath('mixed\\path/value.ts')).toBe('mixed/path/value.ts')
 		expect(normalizePath('')).toBe('')
 		expect(normalizePath('\\\\server\\share\\value.ts')).toBe('//server/share/value.ts')
@@ -369,11 +369,11 @@ describe('server path helpers', () => {
 	})
 
 	it('builds sibling revision paths with and without extensions', () => {
-		expect(buildRevisionPath(ROOT, 'tmp/probe/value.test.ts', 'revision')).toBe(
-			resolve(ROOT, 'tmp/probe/value.test.probe-revision.ts'),
+		expect(buildRevisionPath(ROOT, 'tmp/probes/value.test.ts', 'revision')).toBe(
+			resolve(ROOT, 'tmp/probes/value.test.probe-revision.ts'),
 		)
-		expect(buildRevisionPath(ROOT, 'tmp/probe/value', 'revision')).toBe(
-			resolve(ROOT, 'tmp/probe/value.probe-revision'),
+		expect(buildRevisionPath(ROOT, 'tmp/probes/value', 'revision')).toBe(
+			resolve(ROOT, 'tmp/probes/value.probe-revision'),
 		)
 	})
 
@@ -528,7 +528,7 @@ describe('server path helpers', () => {
 		expect(captureError(() => 'code' in trapped)).toMatchObject({
 			message: 'this trap refuses the membership test',
 		})
-		expect(isRefusedName('tmp/probe/value.test.ts', trapped)).toBe(false)
+		expect(isRefusedName('tmp/probes/value.test.ts', trapped)).toBe(false)
 
 		const throwing: { message: string; code?: unknown } = new Error('the write failed')
 		Object.defineProperty(throwing, 'code', {
@@ -539,7 +539,7 @@ describe('server path helpers', () => {
 		expect(captureError(() => throwing.code)).toMatchObject({
 			message: 'this getter refuses the read',
 		})
-		expect(isRefusedName('tmp/probe/value.test.ts', throwing)).toBe(false)
+		expect(isRefusedName('tmp/probes/value.test.ts', throwing)).toBe(false)
 	})
 
 	// The shared reading every fault classification in this package runs through. Each value below

@@ -55,7 +55,7 @@ const claim: Claim = {
 			},
 		],
 		test: {
-			path: 'tmp/probe/greeting.test.ts',
+			path: 'tmp/probes/greeting.test.ts',
 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 	},
@@ -67,7 +67,7 @@ const claim: Claim = {
 			},
 		],
 		test: {
-			path: 'tmp/probe/greeting.test.ts',
+			path: 'tmp/probes/greeting.test.ts',
 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 		},
 		stage: 'type',

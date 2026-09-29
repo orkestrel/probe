@@ -70,7 +70,7 @@ import { TypeStage } from './stages/TypeStage.js'
  * 			},
  * 		],
  * 		test: {
- * 			path: 'tmp/probe/greeting.test.ts',
+ * 			path: 'tmp/probes/greeting.test.ts',
  * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 	},
@@ -82,7 +82,7 @@ import { TypeStage } from './stages/TypeStage.js'
  * 			},
  * 		],
  * 		test: {
- * 			path: 'tmp/probe/greeting.test.ts',
+ * 			path: 'tmp/probes/greeting.test.ts',
  * 			text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
  * 		},
  * 		stage: 'type',
@@ -282,7 +282,7 @@ export class Probe implements ProbeInterface {
 	}
 
 	#workbench(): boolean {
-		const path = 'tmp/probe'
+		const path = 'tmp/probes'
 		const directory = resolveWorkspaceFile(this.#workspace, path)
 		// A returned `true` means this directory was absent before this call, so the boot teardown
 		// that follows owns removing it again.
@@ -310,20 +310,20 @@ export class Probe implements ProbeInterface {
 		// fresh UUID. A boot the host does not survive leaves them behind, and the next runtime
 		// warm sweeps a file whose writer is gone while leaving a live neighbour's alone.
 		const revision = `${process.pid}-${randomUUID()}`
-		const typeDependency = buildRevisionPath(this.#workspace, 'tmp/probe/arm-type.ts', revision)
+		const typeDependency = buildRevisionPath(this.#workspace, 'tmp/probes/arm-type.ts', revision)
 		const runtimeDependency = buildRevisionPath(
 			this.#workspace,
-			'tmp/probe/arm-runtime.ts',
+			'tmp/probes/arm-runtime.ts',
 			revision,
 		)
 		const typeModule = basename(typeDependency, '.ts')
 		const runtimeModule = basename(runtimeDependency, '.ts')
 		const typeTest = {
-			path: `tmp/probe/${typeModule}.test.ts`,
+			path: `tmp/probes/${typeModule}.test.ts`,
 			text: `import type { Signal } from './${typeModule}.js'\nimport { expect, test } from 'vitest'\nconst SIGNAL: Signal = 'before'\ntest('revalidates a mutated type', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
 		}
 		const runtimeTest = {
-			path: `tmp/probe/${runtimeModule}.test.ts`,
+			path: `tmp/probes/${runtimeModule}.test.ts`,
 			text: `import { SIGNAL } from './${runtimeModule}.js'\nimport { expect, test } from 'vitest'\ntest('revalidates a mutated value', () => {\n\texpect(SIGNAL).toBe('before')\n})\n`,
 		}
 		const typeClaim: Claim = {
@@ -427,7 +427,7 @@ export class Probe implements ProbeInterface {
 			)
 			if (created) {
 				try {
-					rmdirSync(resolveWorkspaceFile(this.#workspace, 'tmp/probe', true))
+					rmdirSync(resolveWorkspaceFile(this.#workspace, 'tmp/probes', true))
 				} catch {}
 			}
 		}

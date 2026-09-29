@@ -590,7 +590,7 @@ describe('lint stage', () => {
 				const excluded = await stage.inspect(
 					{
 						files: [],
-						test: { path: 'tmp/probe/lint-excluded.test.ts', text: 'debugger\n' },
+						test: { path: 'tmp/probes/lint-excluded.test.ts', text: 'debugger\n' },
 					},
 					{ signal: UNBOUNDED },
 				)
@@ -783,7 +783,7 @@ describe('lint stage', () => {
 		'reports an issue for a boot control candidate the target workspace lints',
 		{ timeout: 60_000 },
 		async () => {
-			// The boot control stages its candidates under `tmp/probe`, and a target workspace that
+			// The boot control stages its candidates under `tmp/probes`, and a target workspace that
 			// lints that directory selects its rules from there. This workspace turns `no-debugger` on
 			// for that directory alone, so a stage that reported the candidate under any other path
 			// answers with the workspace's default rules and finds nothing.
@@ -792,12 +792,12 @@ describe('lint stage', () => {
 					...createLintFixture({ binary: resolveWorkspaceBinary(ROOT, 'oxlint') }).files,
 					'.oxlintrc.json': `${JSON.stringify({
 						rules: { 'no-debugger': 'off' },
-						overrides: [{ files: ['tmp/probe/**'], rules: { 'no-debugger': 'error' } }],
+						overrides: [{ files: ['tmp/probes/**'], rules: { 'no-debugger': 'error' } }],
 					})}\n`,
 				},
 			})
 			const stage = new LintStage(scratch.path)
-			const path = 'tmp/probe/arm-runtime-89ab.test.ts'
+			const path = 'tmp/probes/arm-runtime-89ab.test.ts'
 			const violation = `debugger\n${PASSING}`
 			try {
 				const violating = await stage.inspect(

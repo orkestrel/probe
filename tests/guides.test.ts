@@ -165,7 +165,7 @@ await new GuideCommand({
 	// beside it.
 
 	const ROOT = root
-	const WORKBENCH = resolve(root, 'tmp/probe')
+	const WORKBENCH = resolve(root, 'tmp/probes')
 
 	// The claim the guide tells a reader to run verbatim. The same literal appears in
 	// `guides/probe.md`, in the `Claim` contract's own `@example`, and here; the transcription case
@@ -181,7 +181,7 @@ await new GuideCommand({
 				},
 			],
 			test: {
-				path: 'tmp/probe/greeting.test.ts',
+				path: 'tmp/probes/greeting.test.ts',
 				text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 			},
 		},
@@ -193,7 +193,7 @@ await new GuideCommand({
 				},
 			],
 			test: {
-				path: 'tmp/probe/greeting.test.ts',
+				path: 'tmp/probes/greeting.test.ts',
 				text: "import { expect, test } from 'vitest'\nimport { createGreeting } from '../../src/core/factories.js'\ntest('greets', () => expect(createGreeting()).toBe('hi'))\n",
 			},
 			stage: 'type',
@@ -381,7 +381,7 @@ await new GuideCommand({
 			const anchored = {
 				case: {
 					files: [],
-					test: { path: 'tmp/probe/anchored.test.ts', text: '/srv/checkout/src/core/greeting.ts' },
+					test: { path: 'tmp/probes/anchored.test.ts', text: '/srv/checkout/src/core/greeting.ts' },
 				},
 				control: CLAIM.control,
 			}
@@ -423,7 +423,7 @@ await new GuideCommand({
 
 		it('earns the receipt the guide documents', { timeout: 300_000 }, async () => {
 			// `tmp` is ignored by version control, so a fresh clone of a consumer's repository holds no
-			// `tmp/probe`, and the flagship claim declares its test there. The deletion belongs before
+			// `tmp/probes`, and the flagship claim declares its test there. The deletion belongs before
 			// construction rather than before `prove`: arming creates that directory for its own controls
 			// and tidies it away again, so the claim below runs against exactly what a consumer's first
 			// claim runs against.

@@ -192,8 +192,8 @@ describe('root configuration', () => {
 			})
 		}
 		expected.set('probe', {
-			benchmark: ['tmp/probe/**/*.test.ts', 'tests/**/*.test.ts'],
-			include: 'tmp/probe/**/*.test.ts',
+			benchmark: ['tmp/probes/**/*.test.ts', 'tests/**/*.test.ts'],
+			include: 'tmp/probes/**/*.test.ts',
 			parallel: false,
 			pool: 'threads',
 			setup: ['./tests/setup.ts'],

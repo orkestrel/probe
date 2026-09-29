@@ -155,7 +155,7 @@ async function readFrames(output: Interface, expected: number): Promise<readonly
 // `control` is the text the named module carries in the control phase, which is what decides how
 // many issues the type stage reports for it.
 function buildClaim(name: string, control: string): Readonly<Record<string, unknown>> {
-	const specification = { path: `tmp/probe/bin/${name}-runtime.test.ts`, text: PASSING }
+	const specification = { path: `tmp/probes/bin/${name}-runtime.test.ts`, text: PASSING }
 	return {
 		project: 'configs/src/tsconfig.core.json',
 		case: {
@@ -388,7 +388,7 @@ describe('bin entry', () => {
 		{ timeout: 300_000 },
 		async () => {
 			const scratch = createScratch()
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			try {
 				for (const workspace of PROBE_SERVER_WORKSPACES) {
@@ -495,7 +495,7 @@ describe('bin entry', () => {
 				case: {
 					files: [{ path: 'src/core/wire/constants.ts', text: "export const VALUE = 'ok'\n" }],
 					test: {
-						path: 'tmp/probe/bin/wire-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				},
@@ -507,7 +507,7 @@ describe('bin entry', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/bin/wire-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 					stage: 'type',
@@ -519,14 +519,14 @@ describe('bin entry', () => {
 				case: {
 					...passing.case,
 					test: {
-						path: 'tmp/probe/bin/wire-without-newline-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-without-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
 				control: {
 					...passing.control,
 					test: {
-						path: 'tmp/probe/bin/wire-without-newline-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-without-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-without-newline'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
@@ -536,14 +536,14 @@ describe('bin entry', () => {
 				case: {
 					...passing.case,
 					test: {
-						path: 'tmp/probe/bin/wire-with-newline-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-with-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
 				control: {
 					...passing.control,
 					test: {
-						path: 'tmp/probe/bin/wire-with-newline-runtime.test.ts',
+						path: 'tmp/probes/bin/wire-with-newline-runtime.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('writes', () => { process.stdout.write('worker-with-newline\\n'); expect(2 + 2).toBe(4) })\n",
 					},
 				},
@@ -584,7 +584,7 @@ describe('bin entry', () => {
 					params: { name: 'prove', arguments: withNewline, _meta: modern },
 				},
 			]
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(
 				TERMINAL,
@@ -738,7 +738,7 @@ describe('bin entry', () => {
 					params: { name: 'prove', arguments: buildClaim('era-modern', BROKEN), _meta: modern },
 				},
 			]
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(process.execPath, [BUILT_ENTRY], {
 				cwd: ROOT,
@@ -798,7 +798,7 @@ describe('bin entry', () => {
 		'carries a record whose control reports an issue per refused declaration',
 		{ timeout: 300_000 },
 		async () => {
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(process.execPath, [BUILT_ENTRY], {
 				cwd: ROOT,
@@ -874,7 +874,7 @@ describe('bin entry', () => {
 					params: { _meta: { ...RESERVED, ...EXTENSIONS } },
 				},
 			]
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(process.execPath, [BUILT_ENTRY], {
 				cwd: ROOT,
@@ -932,7 +932,7 @@ describe('bin entry', () => {
 		'answers a rendering past the content bound with the receipt block',
 		{ timeout: 300_000 },
 		async () => {
-			const specification = { path: 'tmp/probe/bin/throwing-runtime.test.ts', text: PASSING }
+			const specification = { path: 'tmp/probes/bin/throwing-runtime.test.ts', text: PASSING }
 			const module = { path: 'src/core/throwing/constants.ts', text: CLEAN }
 			const reason = 'the test throws a message longer than the reply can carry'
 			const request = {
@@ -953,7 +953,7 @@ describe('bin entry', () => {
 					},
 				},
 			}
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const child = spawn(process.execPath, [BUILT_ENTRY], {
 				cwd: ROOT,
@@ -1012,7 +1012,7 @@ describe('bin entry', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const claim = buildClaim('client', BROKEN)
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const client = createMCPClient({
 				transport: createStdioClientTransport({
@@ -1060,7 +1060,7 @@ describe('bin entry', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const claim = buildClaim('legacy', BROKEN)
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const client = createMCPClient({
 				transport: createMCPLegacyClientTransport(
@@ -1138,7 +1138,7 @@ describe('bin entry', () => {
 								},
 							],
 							test: {
-								path: 'tmp/probe/bin/stderr-runtime.test.ts',
+								path: 'tmp/probes/bin/stderr-runtime.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
 							},
 						},
@@ -1150,7 +1150,7 @@ describe('bin entry', () => {
 								},
 							],
 							test: {
-								path: 'tmp/probe/bin/stderr-runtime.test.ts',
+								path: 'tmp/probes/bin/stderr-runtime.test.ts',
 								text: "import { expect, test } from 'vitest'\ntest('warns', () => { process.emitWarning('worker-stderr-marker'); expect(2 + 2).toBe(4) })\n",
 							},
 							stage: 'type',
@@ -1160,7 +1160,7 @@ describe('bin entry', () => {
 					_meta: modern,
 				},
 			}
-			const directory = resolve(ROOT, 'tmp/probe/bin')
+			const directory = resolve(ROOT, 'tmp/probes/bin')
 			mkdirSync(directory, { recursive: true })
 			const diagnostic = resolve(directory, 'worker-stderr.txt')
 			const child = spawn(
@@ -1251,9 +1251,9 @@ describe('bin entry', () => {
 				)
 				const scratch = createScratch()
 				writeProbeServerTarget(scratch, ROOT)
-				const directory = resolve(scratch.path, 'tmp/probe')
+				const directory = resolve(scratch.path, 'tmp/probes')
 				const specification = {
-					path: 'tmp/probe/signal-active.test.ts',
+					path: 'tmp/probes/signal-active.test.ts',
 					text: "import { test } from 'vitest'\ntest('waits', async () => await new Promise((resolve) => setTimeout(resolve, 60_000)))\n",
 				}
 				const request = {

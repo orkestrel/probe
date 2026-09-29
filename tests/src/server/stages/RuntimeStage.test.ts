@@ -64,11 +64,11 @@ describe('runtime stage', () => {
 	it('writes a generated specification no Vitest project collects', () => {
 		const file = buildRevisionPath(
 			ROOT,
-			'tmp/probe/greeting.test.ts',
+			'tmp/probes/greeting.test.ts',
 			`${process.pid}-${randomUUID()}`,
 		)
 		const name = relative(ROOT, file).replaceAll('\\', '/')
-		expect(name.startsWith('tmp/probe/greeting.test.probe-')).toBe(true)
+		expect(name.startsWith('tmp/probes/greeting.test.probe-')).toBe(true)
 		expect(name.endsWith('.test.ts')).toBe(false)
 		const config = readFileSync(resolve(ROOT, 'vite.config.ts'), 'utf8')
 		const includes = [...config.matchAll(/include: \['([^']+)'\]/g)].map((match) => match[1] ?? '')
@@ -84,7 +84,7 @@ describe('runtime stage', () => {
 			const error: unknown = await stage
 				.inspect({
 					files: [],
-					test: { path: 'tmp/probe/missing-runtime.test.ts', text: '' },
+					test: { path: 'tmp/probes/missing-runtime.test.ts', text: '' },
 				})
 				.catch((failure: unknown) => failure)
 			expect(isProbeError(error)).toBe(true)
@@ -108,7 +108,7 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nconst refusal = new Error('the project refuses specification construction')\nexport default defineConfig({ test: { projects: [{ plugins: [{ name: 'refuse-specification', configureVitest({ project }) { project.createSpecification = () => { throw refusal } } }], test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nconst refusal = new Error('the project refuses specification construction')\nexport default defineConfig({ test: { projects: [{ plugins: [{ name: 'refuse-specification', configureVitest({ project }) { project.createSpecification = () => { throw refusal } } }], test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 		)
 		const stage = new RuntimeStage(scratch.path)
 		try {
@@ -116,7 +116,7 @@ describe('runtime stage', () => {
 				.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/specification-fault.test.ts',
+						path: 'tmp/probes/specification-fault.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				})
@@ -145,14 +145,14 @@ describe('runtime stage', () => {
 				const passing = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/runtime-passing.test.ts',
+						path: 'tmp/probes/runtime-passing.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				})
 				const failing = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/runtime-failing.test.ts',
+						path: 'tmp/probes/runtime-failing.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
 					},
 				})
@@ -163,7 +163,7 @@ describe('runtime stage', () => {
 				// whose stack carries a frame arrives with `range` set.
 				expect(failing.issues[0]).toMatchObject({
 					origin: 'claimant',
-					path: 'tmp/probe/runtime-failing.test.ts',
+					path: 'tmp/probes/runtime-failing.test.ts',
 					range: {
 						start: { line: expect.any(Number), character: expect.any(Number) },
 						end: { line: expect.any(Number), character: expect.any(Number) },
@@ -201,7 +201,7 @@ describe('runtime stage', () => {
 			try {
 				const check = await stage.inspect({
 					files: [],
-					test: { path: 'tmp/probe/runtime-coordinates.test.ts', text },
+					test: { path: 'tmp/probes/runtime-coordinates.test.ts', text },
 				})
 
 				expect(check.issues).toHaveLength(1)
@@ -216,7 +216,7 @@ describe('runtime stage', () => {
 				// A stack frame names a point, so the stored span has no width.
 				expect(issue?.range?.end).toStrictEqual(issue?.range?.start)
 				expect(formatIssue(issue ?? { origin: 'claimant', path: '', message: '' })).toContain(
-					'tmp/probe/runtime-coordinates.test.ts:6 ',
+					'tmp/probes/runtime-coordinates.test.ts:6 ',
 				)
 			} finally {
 				await stage.destroy()
@@ -238,9 +238,9 @@ describe('runtime stage', () => {
 			scratch.link('real/node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'real/vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('real/tmp/probe/.keep', '')
+			scratch.write('real/tmp/probes/.keep', '')
 			// The stage is handed the link rather than its target, which is what a consumer running
 			// under a symlinked checkout supplies. Vitest reports every stack frame at the real path,
 			// so the generated specification only maps back to the declared test path when both sides
@@ -252,7 +252,7 @@ describe('runtime stage', () => {
 				const check = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/symlinked.test.ts',
+						path: 'tmp/probes/symlinked.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
 					},
 				})
@@ -260,7 +260,7 @@ describe('runtime stage', () => {
 				expect(check.issues).toHaveLength(1)
 				expect(check.issues[0]).toMatchObject({
 					origin: 'claimant',
-					path: 'tmp/probe/symlinked.test.ts',
+					path: 'tmp/probes/symlinked.test.ts',
 					range: {
 						start: { line: expect.any(Number), character: expect.any(Number) },
 						end: { line: expect.any(Number), character: expect.any(Number) },
@@ -285,16 +285,16 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			mkdirSync(resolve(scratch.path, 'tmp'), { recursive: true })
-			symlinkSync(outside.path, resolve(scratch.path, 'tmp/probe'), 'junction')
+			symlinkSync(outside.path, resolve(scratch.path, 'tmp/probes'), 'junction')
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const check = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/escape.test.ts',
+						path: 'tmp/probes/escape.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				})
@@ -302,7 +302,7 @@ describe('runtime stage', () => {
 				expect(check.issues).toEqual([
 					expect.objectContaining({
 						origin: 'workspace',
-						path: 'tmp/probe/escape.test.ts',
+						path: 'tmp/probes/escape.test.ts',
 						message: expect.stringContaining('symbolic link'),
 					}),
 				])
@@ -323,14 +323,14 @@ describe('runtime stage', () => {
 			const check = await stage.inspect({
 				files: [],
 				test: {
-					path: 'tmp/probe/runtime-skipped.test.ts',
+					path: 'tmp/probes/runtime-skipped.test.ts',
 					text: "import { describe, expect, test } from 'vitest'\ntest.skip('skips', () => expect(1).toBe(2))\ntest.todo('defers')\ndescribe.skip('group', () => { test('skips with its group', () => expect(1).toBe(2)) })\n",
 				},
 			})
 			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
-					path: 'tmp/probe/runtime-skipped.test.ts',
+					path: 'tmp/probes/runtime-skipped.test.ts',
 					message: 'Vitest ran no tests in the module',
 				},
 			])
@@ -346,7 +346,7 @@ describe('runtime stage', () => {
 			const check = await stage.inspect({
 				files: [],
 				test: {
-					path: `tmp/probe/${marker}.test.ts`,
+					path: `tmp/probes/${marker}.test.ts`,
 					// The failure carries the module's own name, rather than an assertion about it: Vitest
 					// truncates a value it prints into an assertion message, and the declared path is
 					// longer than that limit.
@@ -357,7 +357,7 @@ describe('runtime stage', () => {
 			const message = check.issues[0]?.message ?? ''
 			// The run executes a generated sibling, so a message quoting the module names both a
 			// file the caller never wrote and the host directory holding it.
-			expect(message).toContain(`tmp/probe/${marker}.test.ts`)
+			expect(message).toContain(`tmp/probes/${marker}.test.ts`)
 			expect(message).not.toContain('.probe-')
 			expect(message).not.toContain(normalizePath(ROOT))
 		} finally {
@@ -371,21 +371,21 @@ describe('runtime stage', () => {
 			const check = await stage.inspect({
 				files: [],
 				test: {
-					path: 'tmp/probe/runtime-context-skip.test.ts',
+					path: 'tmp/probes/runtime-context-skip.test.ts',
 					text: "import { test } from 'vitest'\ntest('skips', (context) => { context.skip(); throw new Error('never reached') })\n",
 				},
 			})
 			const control = await stage.inspect({
 				files: [],
 				test: {
-					path: 'tmp/probe/runtime-context-skip-control.test.ts',
+					path: 'tmp/probes/runtime-context-skip-control.test.ts',
 					text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(1).toBe(2))\n",
 				},
 			})
 			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
-					path: 'tmp/probe/runtime-context-skip.test.ts',
+					path: 'tmp/probes/runtime-context-skip.test.ts',
 					message: 'Vitest did not run the test (skips)',
 				},
 			])
@@ -424,21 +424,21 @@ describe('runtime stage', () => {
 				const skipped = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/runtime-receipt-skipped.test.ts',
+						path: 'tmp/probes/runtime-receipt-skipped.test.ts',
 						text: "import { test } from 'vitest'\ntest('skips', (context) => { context.skip(); throw new Error('never reached') })\n",
 					},
 				})
 				const failed = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/runtime-receipt-failed.test.ts',
+						path: 'tmp/probes/runtime-receipt-failed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('fails', () => expect(2 + 2).toBe(5))\n",
 					},
 				})
 				const passed = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/runtime-receipt-passed.test.ts',
+						path: 'tmp/probes/runtime-receipt-passed.test.ts',
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 					},
 				})
@@ -465,7 +465,7 @@ describe('runtime stage', () => {
 				expect(skipped.issues).toStrictEqual([
 					{
 						origin: 'instrument',
-						path: 'tmp/probe/runtime-receipt-skipped.test.ts',
+						path: 'tmp/probes/runtime-receipt-skipped.test.ts',
 						message: 'Vitest did not run the test (skips)',
 					},
 				])
@@ -489,19 +489,19 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], passWithNoTests: true } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], passWithNoTests: true } }] } })\n",
 		)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			const check = await stage.inspect({
 				files: [],
-				test: { path: 'tmp/probe/empty.test.ts', text: '' },
+				test: { path: 'tmp/probes/empty.test.ts', text: '' },
 			})
 			expect(check.issues).toStrictEqual([
 				{
 					origin: 'instrument',
-					path: 'tmp/probe/empty.test.ts',
+					path: 'tmp/probes/empty.test.ts',
 					message: 'Vitest ran no tests in the module',
 				},
 			])
@@ -518,14 +518,14 @@ describe('runtime stage', () => {
 		{ timeout: 60_000 },
 		async () => {
 			const id = randomUUID()
-			const dependency = resolve(ROOT, `tmp/probe/runtime-dependency-${id}.ts`)
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			const dependency = resolve(ROOT, `tmp/probes/runtime-dependency-${id}.ts`)
+			mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 			writeFileSync(dependency, "export const SIGNAL = 'before'\n", 'utf8')
 			const stage = new RuntimeStage(ROOT)
 			const subject = {
 				files: [],
 				test: {
-					path: `tmp/probe/runtime-case-${id}.test.ts`,
+					path: `tmp/probes/runtime-case-${id}.test.ts`,
 					text: `import { SIGNAL } from './runtime-dependency-${id}.js'\nimport { expect, test } from 'vitest'\ntest('reads the dependency', () => expect(SIGNAL).toBe('before'))\n`,
 				},
 			}
@@ -549,8 +549,8 @@ describe('runtime stage', () => {
 		{ timeout: 60_000 },
 		async () => {
 			const id = randomUUID()
-			const dependency = resolve(ROOT, `tmp/probe/runtime-content-${id}.ts`)
-			mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+			const dependency = resolve(ROOT, `tmp/probes/runtime-content-${id}.ts`)
+			mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 			// One fixed instant, written back after each edit, so both inspections read the same
 			// modification time to the millisecond. A sweep keyed on that time has nothing to
 			// invalidate at the second inspection and reports the stale pass; a sweep keyed on the
@@ -563,7 +563,7 @@ describe('runtime stage', () => {
 			const subject = {
 				files: [],
 				test: {
-					path: `tmp/probe/runtime-content-${id}.test.ts`,
+					path: `tmp/probes/runtime-content-${id}.test.ts`,
 					text: `import { SIGNAL } from './runtime-content-${id}.js'\nimport { expect, test } from 'vitest'\ntest('reads the dependency', () => expect(SIGNAL).toBe('before'))\n`,
 				},
 			}
@@ -594,16 +594,16 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('src/.keep', '')
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const check = await stage.inspect({
 					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 					test: {
-						path: `tmp/probe/text-only-${extension || 'extensionless'}.test.ts`,
+						path: `tmp/probes/text-only-${extension || 'extensionless'}.test.ts`,
 						text: `import { VALUE } from '../../src/value${extension}'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n`,
 					},
 				})
@@ -627,9 +627,9 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const check = await stage.inspect({
@@ -640,7 +640,7 @@ describe('runtime stage', () => {
 						},
 					],
 					test: {
-						path: 'tmp/probe/bare-package.test.ts',
+						path: 'tmp/probes/bare-package.test.ts',
 						text: "import { VALUE } from 'overlay-package'\nimport { expect, test } from 'vitest'\ntest('does not load the candidate', () => expect(VALUE).toBe('candidate'))\n",
 					},
 				})
@@ -664,14 +664,14 @@ describe('runtime stage', () => {
 	// claim declares where its test lives, and this stage writes its specification there.
 	it('creates the directory the declared test path names', { timeout: 60_000 }, async () => {
 		const marker = `runtime-directory-${randomUUID()}`
-		const directory = resolve(ROOT, 'tmp/probe', marker)
+		const directory = resolve(ROOT, 'tmp/probes', marker)
 		const stage = new RuntimeStage(ROOT)
 		try {
 			expect(existsSync(directory)).toBe(false)
 			const check = await stage.inspect({
 				files: [],
 				test: {
-					path: `tmp/probe/${marker}/deep/runtime.test.ts`,
+					path: `tmp/probes/${marker}/deep/runtime.test.ts`,
 					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
 				},
 			})
@@ -689,9 +689,9 @@ describe('runtime stage', () => {
 
 	it('reports a directory it cannot create as a workspace issue', { timeout: 60_000 }, async () => {
 		const marker = `runtime-blocked-${randomUUID()}`
-		const path = `tmp/probe/${marker}/deep/runtime.test.ts`
-		const blocker = resolve(ROOT, 'tmp/probe', marker)
-		mkdirSync(resolve(ROOT, 'tmp/probe'), { recursive: true })
+		const path = `tmp/probes/${marker}/deep/runtime.test.ts`
+		const blocker = resolve(ROOT, 'tmp/probes', marker)
+		mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 		// A file where the declared test's directory belongs. Creating the directory is what the
 		// caller's declaration implies, and a host that refuses it leaves the inspection with
 		// nowhere to write, so the stage reports that refusal rather than a clean check.
@@ -732,7 +732,7 @@ describe('runtime stage', () => {
 		"refuses a caller's unacceptable target path",
 		{ timeout: 60_000 },
 		async () => {
-			const path = `tmp/probe/${'x'.repeat(300)}.test.ts`
+			const path = `tmp/probes/${'x'.repeat(300)}.test.ts`
 			const stage = new RuntimeStage(ROOT)
 			try {
 				await expect(
@@ -764,24 +764,24 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('src/value.ts', disk)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			expect(scratch.read('src/value.ts')).toBe(disk)
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const candidate = await stage.inspect({
 					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 					test: {
-						path: 'tmp/probe/direct.test.ts',
+						path: 'tmp/probes/direct.test.ts',
 						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
 					},
 				})
 				const restored = await stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/restored.test.ts',
+						path: 'tmp/probes/restored.test.ts',
 						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads disk', () => expect(VALUE).toBe('disk'))\n",
 					},
 				})
@@ -804,16 +804,16 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nconst probe = () => ({ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } })\nexport default defineConfig({ test: { projects: [probe] } })\n",
+			"import { defineConfig } from 'vitest/config'\nconst probe = () => ({ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } })\nexport default defineConfig({ test: { projects: [probe] } })\n",
 		)
 		scratch.write('src/value.ts', disk)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			const check = await stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 				test: {
-					path: 'tmp/probe/function.test.ts',
+					path: 'tmp/probes/function.test.ts',
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
@@ -837,23 +837,23 @@ describe('runtime stage', () => {
 		)
 		scratch.write(
 			'vitest.probe.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } })\n",
 		)
 		scratch.write('src/value.ts', "export const VALUE = 'disk'\n")
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			const check = await stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 				test: {
-					path: 'tmp/probe/string.test.ts',
+					path: 'tmp/probes/string.test.ts',
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
 			expect(check.issues).toStrictEqual([
 				{
 					origin: 'workspace',
-					path: 'tmp/probe/string.test.ts',
+					path: 'tmp/probes/string.test.ts',
 					message:
 						'The runtime stage cannot instrument the string-declared Vitest project probe because its configuration carries no runtime overlay plugin',
 				},
@@ -876,16 +876,16 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('src/value.ts', disk)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const check = await stage.inspect({
 					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 					test: {
-						path: 'tmp/probe/query.test.ts',
+						path: 'tmp/probes/query.test.ts',
 						text: "import RAW from '../../src/value.ts?raw&source=candidate'\nimport { VALUE } from '../../src/value.ts?v=123'\nimport { expect, test } from 'vitest'\ntest('preserves query semantics', () => { expect(RAW).toBe(\"export const VALUE = 'candidate'\\n\"); expect(VALUE).toBe('candidate') })\n",
 					},
 				})
@@ -909,16 +909,16 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nconst disk = { name: 'workspace-disk-loader', enforce: 'pre', load(id) { if (id.endsWith('/src/value.ts')) return \"export const VALUE = 'disk'\\n\" } }\nexport default defineConfig({ test: { projects: [{ plugins: [disk], test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nconst disk = { name: 'workspace-disk-loader', enforce: 'pre', load(id) { if (id.endsWith('/src/value.ts')) return \"export const VALUE = 'disk'\\n\" } }\nexport default defineConfig({ test: { projects: [{ plugins: [disk], test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('src/value.ts', disk)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const stage = new RuntimeStage(scratch.path)
 			try {
 				const check = await stage.inspect({
 					files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 					test: {
-						path: 'tmp/probe/workspace-loader.test.ts',
+						path: 'tmp/probes/workspace-loader.test.ts',
 						text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads workspace bytes', () => expect(VALUE).toBe('disk'))\n",
 					},
 				})
@@ -946,18 +946,18 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 		)
 		scratch.write('src/value.ts', disk)
 		scratch.write('src/index.ts', "export { VALUE } from './value.js'\n")
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		expect(scratch.read('src/value.ts')).toBe(disk)
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			const check = await stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 				test: {
-					path: 'tmp/probe/barrel.test.ts',
+					path: 'tmp/probes/barrel.test.ts',
 					text: "import { VALUE } from '../../src/index.js'\nimport { expect, test } from 'vitest'\ntest('reads the candidate through the barrel', () => expect(VALUE).toBe('candidate'))\n",
 				},
 			})
@@ -978,24 +978,24 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 		)
 		scratch.write('src/value.ts', disk)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		expect(scratch.read('src/value.ts')).toBe(disk)
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			const first = await stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'first'\n" }],
 				test: {
-					path: 'tmp/probe/revision.test.ts',
+					path: 'tmp/probes/revision.test.ts',
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the first revision', () => expect(VALUE).toBe('first'))\n",
 				},
 			})
 			const second = await stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'second'\n" }],
 				test: {
-					path: 'tmp/probe/revision.test.ts',
+					path: 'tmp/probes/revision.test.ts',
 					text: "import { VALUE } from '../../src/value.js'\nimport { expect, test } from 'vitest'\ntest('reads the second revision', () => expect(VALUE).toBe('second'))\n",
 				},
 			})
@@ -1043,21 +1043,21 @@ describe('runtime stage', () => {
 			'vite.config.ts',
 			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'other', include: ['tests/**/*.test.ts'] } }] } })\n",
 		)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
 		try {
 			await expect(
 				stage.inspect({
 					files: [],
 					test: {
-						path: 'tmp/probe/missing-project.test.ts',
+						path: 'tmp/probes/missing-project.test.ts',
 						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
 					},
 				}),
 			).rejects.toMatchObject({
 				origin: 'claimant',
 				code: 'missing',
-				context: { stage: 'runtime', path: 'tmp/probe/missing-project.test.ts' },
+				context: { stage: 'runtime', path: 'tmp/probes/missing-project.test.ts' },
 			})
 		} finally {
 			const teardown = createTeardown()
@@ -1076,9 +1076,9 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const samples: Array<{ readonly unresolved: number; readonly files: number }> = []
 			try {
 				for (let generation = 1; generation <= 2; generation += 1) {
@@ -1104,7 +1104,7 @@ describe('runtime stage', () => {
 					)
 					const project = vitest.projects.find((candidate) => candidate.name === 'probe')
 					if (project === undefined) throw new Error('The probe project did not load')
-					const file = resolve(scratch.path, `tmp/probe/map-${generation}.test.ts`)
+					const file = resolve(scratch.path, `tmp/probes/map-${generation}.test.ts`)
 					writeFileSync(
 						file,
 						"import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1155,19 +1155,19 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 		)
-		scratch.write('tmp/probe/.keep', '')
+		scratch.write('tmp/probes/.keep', '')
 		const stage = new RuntimeStage(scratch.path)
-		const ready = resolve(scratch.path, 'tmp/probe/progress-ready')
-		const release = resolve(scratch.path, 'tmp/probe/progress-release')
+		const ready = resolve(scratch.path, 'tmp/probes/progress-ready')
+		const release = resolve(scratch.path, 'tmp/probes/progress-release')
 		const baseline = stage.progress
 		// The marker and the release both sit beside the generated specification, which the stage
 		// writes into the same directory as the test path the case declares.
 		const running = stage.inspect({
 			files: [],
 			test: {
-				path: 'tmp/probe/progress.test.ts',
+				path: 'tmp/probes/progress.test.ts',
 				text: "import { existsSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('parks until released', { timeout: 60_000 }, async () => { writeFileSync(new URL('progress-ready', import.meta.url), ''); const release = new URL('progress-release', import.meta.url); while (!existsSync(release)) await new Promise((settle) => setTimeout(settle, 10)) })\n",
 			},
 		})
@@ -1233,14 +1233,14 @@ describe('runtime stage', () => {
 			scratch.write('src/core/index.ts', 'export const READY = true\n')
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nconst project = { test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ cacheDir: '.probe-cache', test: { projects: [project] } })\n",
+				"import { defineConfig } from 'vitest/config'\nconst project = { test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ cacheDir: '.probe-cache', test: { projects: [project] } })\n",
 			)
 			const stage = new RuntimeStage(scratch.path)
 			let cache: string | undefined
 			const subject = {
 				files: [],
 				test: {
-					path: 'tmp/probe/progress.test.ts',
+					path: 'tmp/probes/progress.test.ts',
 					text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 				},
 			}
@@ -1304,11 +1304,11 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { appendFileSync, existsSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nif (existsSync(fileURLToPath(new URL('refuse-warm', import.meta.url)))) throw new Error('the workspace refuses this warm')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { appendFileSync, existsSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nif (existsSync(fileURLToPath(new URL('refuse-warm', import.meta.url)))) throw new Error('the workspace refuses this warm')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const id = randomUUID()
-			const path = `tmp/probe/runtime-retention-${id}.test.ts`
+			const path = `tmp/probes/runtime-retention-${id}.test.ts`
 			const marker = `runtime-retention-${id}`
 			const signals = {
 				SIGINT: process.listenerCount('SIGINT'),
@@ -1379,7 +1379,7 @@ describe('runtime stage', () => {
 				)
 				expect(retained).toStrictEqual([])
 				expect(
-					readdirSync(resolve(scratch.path, 'tmp/probe')).filter((file) => file.includes(marker)),
+					readdirSync(resolve(scratch.path, 'tmp/probes')).filter((file) => file.includes(marker)),
 				).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
@@ -1401,7 +1401,7 @@ describe('runtime stage', () => {
 				const check = await stage.inspect({
 					files: [],
 					test: {
-						path: `tmp/probe/${marker}.test.ts`,
+						path: `tmp/probes/${marker}.test.ts`,
 						text: "import { mkdirSync, rmSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('blocks deletion', () => { const file = fileURLToPath(import.meta.url); rmSync(file); mkdirSync(file) })\n",
 					},
 				})
@@ -1410,7 +1410,7 @@ describe('runtime stage', () => {
 				// The generated specification is the file that could not be deleted. The caller's
 				// own path names a file the caller wrote and this stage never touched.
 				expect(check.issues[0]?.path).toMatch(
-					new RegExp(`^tmp/probe/${marker}\\.test\\.probe-[0-9a-f-]+\\.ts$`),
+					new RegExp(`^tmp/probes/${marker}\\.test\\.probe-[0-9a-f-]+\\.ts$`),
 				)
 				expect(check.issues[0]?.message).toContain(
 					'The runtime stage could not delete the generated specification',
@@ -1418,9 +1418,9 @@ describe('runtime stage', () => {
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => {
-					// A fresh clone has no `tmp/probe`, and an unguarded read throws there and replaces
+					// A fresh clone has no `tmp/probes`, and an unguarded read throws there and replaces
 					// whatever the inspection actually reported.
-					const directory = resolve(ROOT, 'tmp/probe')
+					const directory = resolve(ROOT, 'tmp/probes')
 					if (existsSync(directory)) {
 						for (const file of readdirSync(directory)) {
 							if (file.includes(marker)) {
@@ -1445,7 +1445,7 @@ describe('runtime stage', () => {
 				const check = await stage.inspect({
 					files: [],
 					test: {
-						path: `tmp/probe/${marker}.test.ts`,
+						path: `tmp/probes/${marker}.test.ts`,
 						// The link's target is the directory holding it, written out in full: a junction
 						// stores an absolute path, so a relative target would name the writing process's
 						// working directory rather than a place this proof chose.
@@ -1463,7 +1463,7 @@ describe('runtime stage', () => {
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => {
-					const directory = resolve(ROOT, 'tmp/probe')
+					const directory = resolve(ROOT, 'tmp/probes')
 					if (existsSync(directory)) {
 						for (const file of readdirSync(directory)) {
 							if (file.includes(marker)) {
@@ -1483,7 +1483,7 @@ describe('runtime stage', () => {
 		const inspection = stage.inspect({
 			files: [],
 			test: {
-				path: 'tmp/probe/runtime-destroy.test.ts',
+				path: 'tmp/probes/runtime-destroy.test.ts',
 				text: "import { test } from 'vitest'\ntest('waits', () => {})\n",
 			},
 		})
@@ -1502,14 +1502,14 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
-			scratch.write('tmp/probe/.keep', '')
+			scratch.write('tmp/probes/.keep', '')
 			const stage = new RuntimeStage(scratch.path)
 			const inspection = stage.inspect({
 				files: [{ path: 'src/value.ts', text: "export const VALUE = 'candidate'\n" }],
 				test: {
-					path: 'tmp/probe/unlink.test.ts',
+					path: 'tmp/probes/unlink.test.ts',
 					text: "import { mkdirSync, rmSync, writeFileSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { test } from 'vitest'\ntest('blocks teardown', async () => { const file = fileURLToPath(import.meta.url); rmSync(file); mkdirSync(file); writeFileSync(new URL('unlink-ready', import.meta.url), ''); await new Promise(() => {}) })\n",
 				},
 			})
@@ -1517,10 +1517,10 @@ describe('runtime stage', () => {
 			try {
 				await waitForCondition(
 					'the generated specification to block its own unlink',
-					() => existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready')),
+					() => existsSync(resolve(scratch.path, 'tmp/probes/unlink-ready')),
 					{ budget: 5_000, interval: 10 },
 				)
-				expect(existsSync(resolve(scratch.path, 'tmp/probe/unlink-ready'))).toBe(true)
+				expect(existsSync(resolve(scratch.path, 'tmp/probes/unlink-ready'))).toBe(true)
 				await expect(stage.destroy()).resolves.toBeUndefined()
 			} finally {
 				await stage.destroy().catch(() => {})
@@ -1557,7 +1557,7 @@ describe('runtime stage', () => {
 				const subject = {
 					files: [],
 					test: {
-						path: `tmp/probe/${marker}.test.ts`,
+						path: `tmp/probes/${marker}.test.ts`,
 						text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 					},
 				}
@@ -1588,7 +1588,7 @@ describe('runtime stage', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write(
 			'vite.config.ts',
-			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probe/**/*.test.ts'] } }] } })\n",
+			"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 		)
 		// A real process that has already exited, so the identity in the orphan's name is dead on
 		// this host rather than assumed dead. A host killed mid-inspection leaves exactly this file,
@@ -1596,7 +1596,7 @@ describe('runtime stage', () => {
 		const departed = spawnSync(process.execPath, ['--version'])
 		expect(departed.status).toBe(0)
 		const orphanRevision = `${departed.pid}-${randomUUID()}`
-		const orphan = buildRevisionPath(scratch.path, 'tmp/probe/orphan.test.ts', orphanRevision)
+		const orphan = buildRevisionPath(scratch.path, 'tmp/probes/orphan.test.ts', orphanRevision)
 		const specification = "import { test } from 'vitest'\ntest('leaks', () => {})\n"
 		scratch.write(
 			relative(scratch.path, orphan),
@@ -1608,12 +1608,12 @@ describe('runtime stage', () => {
 		// file that happens to carry the same name shape is theirs rather than this package's.
 		const live = buildRevisionPath(
 			scratch.path,
-			'tmp/probe/live.test.ts',
+			'tmp/probes/live.test.ts',
 			`${process.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, live), specification)
-		scratch.write('tmp/probe/keeper.test.ts', specification)
-		scratch.write('tmp/probe/notes.probe-draft.ts', 'export const NOTE = 1\n')
+		scratch.write('tmp/probes/keeper.test.ts', specification)
+		scratch.write('tmp/probes/notes.probe-draft.ts', 'export const NOTE = 1\n')
 		// A developer's own file, named exactly as this package names its own and carrying a dead
 		// identity, in a directory this package writes to only when a claim declares a test there.
 		const authored = buildRevisionPath(
@@ -1626,7 +1626,7 @@ describe('runtime stage', () => {
 		// location the flagship claim happens to use.
 		const drafted = buildRevisionPath(
 			scratch.path,
-			'tmp/probe/draft.test.ts',
+			'tmp/probes/draft.test.ts',
 			`${departed.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, drafted), specification)
@@ -1635,7 +1635,7 @@ describe('runtime stage', () => {
 		// the sweep reads them the same way.
 		const arming = buildRevisionPath(
 			scratch.path,
-			'tmp/probe/arm-type.ts',
+			'tmp/probes/arm-type.ts',
 			`${departed.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, arming), 'export type Signal = string\n')
@@ -1643,7 +1643,7 @@ describe('runtime stage', () => {
 		const specificationRevision = `${departed.pid}-${randomUUID()}`
 		const boot = buildRevisionPath(
 			scratch.path,
-			`tmp/probe/arm-runtime.probe-${dependencyRevision}.test.ts`,
+			`tmp/probes/arm-runtime.probe-${dependencyRevision}.test.ts`,
 			specificationRevision,
 		)
 		scratch.write(
@@ -1653,7 +1653,7 @@ describe('runtime stage', () => {
 		const adjacentRevision = `${departed.pid}-${randomUUID()}`
 		const adjacent = buildRevisionPath(
 			scratch.path,
-			`tmp/probe/adjacent.probe-${dependencyRevision}.ts`,
+			`tmp/probes/adjacent.probe-${dependencyRevision}.ts`,
 			adjacentRevision,
 		)
 		scratch.write(
@@ -1662,7 +1662,7 @@ describe('runtime stage', () => {
 		)
 		const serving = buildRevisionPath(
 			scratch.path,
-			'tmp/probe/arm-runtime.ts',
+			'tmp/probes/arm-runtime.ts',
 			`${process.pid}-${randomUUID()}`,
 		)
 		scratch.write(relative(scratch.path, serving), "export const SIGNAL = 'before'\n")
@@ -1680,8 +1680,8 @@ describe('runtime stage', () => {
 			expect(existsSync(serving), "a live neighbour's boot dependency").toBe(true)
 			expect(existsSync(authored), "a developer's own file outside the workbench").toBe(true)
 			expect(existsSync(drafted), "a developer's own file inside the workbench").toBe(true)
-			expect(existsSync(resolve(scratch.path, 'tmp/probe/keeper.test.ts'))).toBe(true)
-			expect(existsSync(resolve(scratch.path, 'tmp/probe/notes.probe-draft.ts'))).toBe(true)
+			expect(existsSync(resolve(scratch.path, 'tmp/probes/keeper.test.ts'))).toBe(true)
+			expect(existsSync(resolve(scratch.path, 'tmp/probes/notes.probe-draft.ts'))).toBe(true)
 		} finally {
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
