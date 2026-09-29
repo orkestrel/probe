@@ -93,17 +93,17 @@
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.18",
-		"@orkestrel/emitter": "^0.0.10",
-		"@orkestrel/lsp": "^0.0.9",
-		"@orkestrel/mcp": "^0.0.32",
-		"@orkestrel/queue": "^0.0.14",
-		"@orkestrel/timeout": "^0.0.11",
-		"@orkestrel/tool": "^0.0.16"
+		"@orkestrel/emitter": "^0.0.11",
+		"@orkestrel/lsp": "^0.0.10",
+		"@orkestrel/mcp": "^0.0.33",
+		"@orkestrel/queue": "^0.0.15",
+		"@orkestrel/timeout": "^0.0.12",
+		"@orkestrel/tool": "^0.0.17"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.3",
-		"@orkestrel/guide": "^0.0.20",
-		"@orkestrel/scaffold": "^0.0.78",
+		"@orkestrel/guide": "^0.0.21",
+		"@orkestrel/scaffold": "^0.0.80",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.3",
 		"oxfmt": "^0.71.0",
