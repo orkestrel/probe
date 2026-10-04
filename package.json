@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/probe",
-	"version": "0.0.19",
+	"version": "0.0.20",
 	"description": "Prove a claim with type, lint, and runtime evidence from the workspace's own toolchain.",
 	"keywords": [
 		"agent",
