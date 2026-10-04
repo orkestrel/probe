@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
-import { srcBin } from '../../vite.config.ts'
+import { resolveExternal } from '../helpers.js'
+import { peers, srcBin } from '../../vite.config.ts'
 
 // The `scaffold` executable build — a single ESM lib file, no declarations (an
 // executable ships no types), with the `#!/usr/bin/env node` shebang re-emitted through
@@ -10,6 +11,8 @@ export default defineConfig(
 	srcBin({
 		build: {
 			rolldownOptions: {
+				external: (id: string) =>
+					id.startsWith('@src/') || resolveExternal(id, { peers, refused: [], siblings: [] }),
 				output: {
 					banner: '#!/usr/bin/env node',
 					paths: {
