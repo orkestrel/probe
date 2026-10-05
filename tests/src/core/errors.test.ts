@@ -28,9 +28,7 @@ const SOURCES: Record<string, unknown> = import.meta.glob('../../../src/**/*.ts'
 // One driven failure path: what to call, and the pair the raised value must carry.
 type Drive = readonly [subject: string, origin: Party, code: ProbeErrorCode, raise: () => unknown]
 
-// Removes the documentation blocks and line comments from one source file. A documented example
-// deliberately shows a plain `Error` as the control its guard refuses, and that is prose about the
-// code rather than a failure path in it.
+// Documentation examples are prose rather than failure paths.
 function stripComments(source: string): string {
 	return source
 		.replaceAll(/\/\*[\s\S]*?\*\//g, '')
@@ -40,9 +38,25 @@ function stripComments(source: string): string {
 }
 
 function findBareErrors(source: string, path: string): readonly string[] {
-	return [...stripComments(source).matchAll(/\bthrow new ([A-Za-z_][\w]*)\(/g)]
-		.filter((match) => match[1] !== 'ProbeError')
-		.map((match) => `${path} ${match[1] ?? ''}`)
+	const text = stripComments(source)
+	// The MCP handshake answers in the protocol's error type.
+	const factory =
+		path === '../../../src/server/errors.ts'
+			? /^export function createHandshakeError\(error: ProbeError\): MCPError \{\s*return (new\s+MCPError\s*\()/m.exec(
+					text,
+				)
+			: null
+	const sanctioned =
+		factory === null || factory[1] === undefined
+			? undefined
+			: factory.index + factory[0].length - factory[1].length
+	return [...text.matchAll(/\b(throw\s+)?new\s+([A-Za-z_][\w]*)\s*\(/g)]
+		.filter((match) =>
+			match[2] === 'MCPError'
+				? match.index !== sanctioned
+				: match[1] !== undefined && match[2] !== 'ProbeError',
+		)
+		.map((match) => `${path} ${match[2] ?? ''}`)
 }
 
 // Runs one failure path and hands back what it raised, so an assertion reads the value a consumer
@@ -169,6 +183,23 @@ describe('probe error', () => {
 // failure this package raises most often is not one it constructs — it is a dependency's own,
 // caught and translated — so these run the paths and read what came back.
 describe('failure adoption', () => {
+	it('sanctions MCPError construction only in createHandshakeError in server/errors.ts', () => {
+		const path = '../../../src/server/errors.ts'
+		const factory =
+			'export function createHandshakeError(error: ProbeError): MCPError { return new MCPError("failed") }'
+		expect(findBareErrors(factory, path)).toStrictEqual([])
+		expect(findBareErrors(factory, '../../../src/server/ProbeServer.ts')).toStrictEqual([
+			'../../../src/server/ProbeServer.ts MCPError',
+		])
+		expect(
+			findBareErrors(factory.replace('createHandshakeError', 'createOtherError'), path),
+		).toStrictEqual([`${path} MCPError`])
+		expect(findBareErrors('const error = new MCPError("failed"); throw error', path)).toStrictEqual(
+			[`${path} MCPError`],
+		)
+		expect(findBareErrors('throw new MCPError("failed")', path)).toStrictEqual([`${path} MCPError`])
+	})
+
 	it('classifies every failure path a test can drive without a resident tool', async () => {
 		const workspace = createScratch({ prefix: 'probe-adoption-workspace-' })
 		const outside = createScratch({ prefix: 'probe-adoption-outside-' })
@@ -309,6 +340,7 @@ describe('failure adoption', () => {
 	it('constructs no unclassified failure in any source module', () => {
 		const paths = Object.keys(SOURCES).sort()
 		expect(paths).toContain('../../../src/server/helpers.ts')
+		expect(paths).toContain('../../../src/server/errors.ts')
 		expect(findBareErrors("throw new Error('unclassified')", 'control.ts')).toStrictEqual([
 			'control.ts Error',
 		])

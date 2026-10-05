@@ -6,13 +6,7 @@ import { resolve } from 'node:path'
 import { addAbortListener } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { compileSchema, schemaToParameters } from '@orkestrel/contract'
-import {
-	createMCPLegacy,
-	createMCPServer,
-	isBoundedJSON,
-	JSONRPC_SERVER_ERROR,
-	MCPError,
-} from '@orkestrel/mcp'
+import { createMCPLegacy, createMCPServer, isBoundedJSON } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
@@ -28,6 +22,7 @@ import {
 } from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
 import { findRefusedPaths } from './helpers.js'
+import { createHandshakeError } from './errors.js'
 import { Probe } from './Probe.js'
 
 /**
@@ -158,12 +153,7 @@ export class ProbeServer implements ProbeServerInterface {
 			if (this.#closing !== undefined) throw createDestroyedError('probe server')
 		} catch (error) {
 			options.signal.throwIfAborted()
-			if (isProbeError(error))
-				throw new MCPError(
-					`[${error.origin}] ${error.code}: ${error.message}`,
-					JSONRPC_SERVER_ERROR,
-					{ origin: error.origin, code: error.code },
-				)
+			if (isProbeError(error)) throw createHandshakeError(error)
 			throw error
 		} finally {
 			listener[Symbol.dispose]()

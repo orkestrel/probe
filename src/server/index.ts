@@ -1,4 +1,5 @@
 export * from './types.js'
+export * from './errors.js'
 export * from './helpers.js'
 export * from './parsers.js'
 export * from './Overlay.js'
