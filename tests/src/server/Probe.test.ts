@@ -29,6 +29,7 @@ import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
 import {
+	LINT_TEARDOWN,
 	PROBE_DEADLINE,
 	PROBE_RESTARTS,
 	TYPE_MIRROR,
@@ -506,7 +507,9 @@ else if (process.argv.includes('--showConfig')) {
 	// The half-second coordinator deadline precedes LSP's own two-second initialize bound.
 	it(
 		'spends silent initializes through the coordinator deadline',
-		{ timeout: 10_000 },
+		// Each replacement follows a lint disposal, which LINT_TEARDOWN bounds rather than the 500 ms
+		// deadline; the case allows one disposal before the replacement and one at teardown.
+		{ timeout: LINT_TEARDOWN * 2 + 5_000 },
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -522,7 +525,7 @@ else if (process.argv.includes('--showConfig')) {
 							?.split(/\r\n|\n/u)
 							.filter(Boolean).length ?? 0) ===
 						PROBE_RESTARTS + 1,
-					{ budget: 3_000 },
+					{ budget: LINT_TEARDOWN },
 				)
 				expect(await refused).toMatchObject({
 					name: 'ProbeError',
