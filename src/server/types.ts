@@ -392,43 +392,44 @@ export interface WorkspaceManifest {
  *
  * @remarks
  * Construction snapshots the options and resolves the workspace against the current working
- * directory without loading its toolchain. Discovery can therefore answer before an admitted
- * `prove` call creates the real probe and starts arming. Invalid claims do not create it.
+ * directory without loading its toolchain. Starting creates the probe and awaits its full arm.
+ * Discovery answers during onset; legacy initialization waits for that onset's settlement.
  *
  * The server owns the process it runs in. `start` seizes standard input and standard output for
  * the transport and registers the termination handlers a harness signals, so a host that starts one
  * has already given the process to it. `destroy` reverses all of that and tears the probe down with
- * it when an admitted call created it. When teardown begins during admitted construction, it waits
- * for that construction and releases the resulting probe before it settles. Destruction before
- * admission loads no workspace tools, which is why there is no verb that stops serving and leaves
+ * it. When teardown begins during construction, it waits for that construction and releases the
+ * resulting probe before it settles. Destruction before starting loads no workspace tools,
+ * which is why there is no verb that stops serving and leaves
  * the stages standing: a probe nothing is reading from holds its tools and its mirror for nobody.
  *
  * @example
  * ```ts
  * const server = new ProbeServer({ workspace: process.cwd() })
- * server.start()
+ * await server.start()
  * await server.destroy()
  * ```
  */
 export interface ProbeServerInterface {
 	/**
-	 * Serves the probe over this process's standard input and output.
+	 * Begins serving and awaits the workspace probe's full arm.
 	 *
 	 * @remarks
 	 * Reads newline-delimited JSON requests from standard input, and answers a `SIGINT` or a
-	 * `SIGTERM` by destroying the server. Calling this on a server already serving does nothing.
-	 * Calling it after teardown begins throws a claimant-owned `destroyed` failure.
+	 * `SIGTERM` or input end by destroying the server. Repeated calls join the same setup promise.
+	 * A refused onset keeps discovery serving and permits a later tool call to retry the probe.
+	 * Teardown during setup is absorbed; calling after teardown rejects with `destroyed`.
 	 *
-	 * @returns Nothing
-	 * @throws When this call comes after teardown begins
+	 * @returns The shared setup promise
+	 * @throws A workspace onset refusal, or `destroyed` after teardown begins
 	 *
 	 * @example
 	 * ```ts
 	 * const server = new ProbeServer({ workspace: process.cwd() })
-	 * server.start()
+	 * await server.start()
 	 * ```
 	 */
-	start(): void
+	start(): Promise<void>
 	/**
 	 * Releases the transport, the process listeners, and the probe behind them.
 	 *

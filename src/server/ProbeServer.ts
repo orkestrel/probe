@@ -1,11 +1,18 @@
 import type { ProbeInterface, ProbeOptions, Verdict } from '@src/core'
-import type { MCPCallResult, MCPExecutionContext } from '@orkestrel/mcp'
+import type { MCPCallResult, MCPExecutionContext, MCPMethodOptions } from '@orkestrel/mcp'
 import type { ToolResult } from '@orkestrel/tool'
 import type { ProbeServerInterface } from './types.js'
 import { resolve } from 'node:path'
+import { addAbortListener } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { compileSchema, schemaToParameters } from '@orkestrel/contract'
-import { createMCPLegacy, createMCPServer, isBoundedJSON } from '@orkestrel/mcp'
+import {
+	createMCPLegacy,
+	createMCPServer,
+	isBoundedJSON,
+	JSONRPC_SERVER_ERROR,
+	MCPError,
+} from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
@@ -16,6 +23,7 @@ import {
 	formatReceipt,
 	formatVerdict,
 	isClaim,
+	isProbeError,
 	isVerdict,
 } from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
@@ -29,8 +37,8 @@ import { Probe } from './Probe.js'
  *
  * @remarks
  * Construction snapshots the probe options, publishes the `prove` tool, and binds the dual-era
- * dispatcher to the stdio transport. An admitted `prove` call creates the probe and begins
- * workspace arming, so discovery does not depend on the workspace toolchain. Construction is held
+ * dispatcher to the stdio transport. Starting creates the probe and awaits workspace arming.
+ * Discovery remains available while the legacy handshake awaits that onset. Construction is held
  * before it begins, so teardown entered through a construction callback waits for the resulting
  * probe and releases it. A constructor refusal clears that held operation for a later retry.
  *
@@ -40,7 +48,8 @@ import { Probe } from './Probe.js'
  * serving is still attached and still fires afterwards. The transport reads a stream this server
  * owns rather than this process's standard input, which is what makes that possible: the
  * transport's own listeners land on that stream, and the only listeners this server ever puts on
- * `process.stdin` are the `data`, `close`, and `error` forwarders into it. `destroy` pauses the
+ * `process.stdin` are the `data`, `close`, and `error` forwarders and the input-end teardown.
+ * `destroy` pauses the
  * stream only when this server is what set it flowing and nothing else is reading it, so a process
  * that outlives this server reads its own standard input again and receives its own signals.
  * Teardown removes the signal handlers first: it takes seconds when a boot is in flight, and a
@@ -49,7 +58,7 @@ import { Probe } from './Probe.js'
  * @example
  * ```ts
  * const server = new ProbeServer({ workspace: process.cwd() })
- * server.start()
+ * await server.start()
  * await server.destroy()
  * ```
  */
@@ -61,6 +70,8 @@ export class ProbeServer implements ProbeServerInterface {
 	readonly #close: () => void
 	readonly #error: (error: Error) => void
 	readonly #signal: () => void
+	readonly #end: () => void
+	#starting: Promise<void> | undefined
 	readonly #server: ReturnType<typeof createMCPServer>
 	#owns: boolean | undefined
 	#construction: Promise<ProbeInterface> | undefined
@@ -68,9 +79,9 @@ export class ProbeServer implements ProbeServerInterface {
 
 	/**
 	 * Snapshots the probe options this server will use and binds the published schema to this
-	 * process's stdio transport. An admitted `prove` call creates the probe.
+	 * process's stdio transport without warming the workspace.
 	 *
-	 * @param options - Workspace, deadline, and initial observation hooks for the deferred probe
+	 * @param options - Workspace, deadline, and initial observation hooks for the probe
 	 */
 	constructor(options?: ProbeOptions) {
 		const workspace = options?.workspace
@@ -100,35 +111,63 @@ export class ProbeServer implements ProbeServerInterface {
 		this.#close = this.#finish.bind(this)
 		this.#error = this.#fail.bind(this)
 		this.#signal = this.#release.bind(this)
+		this.#end = this.#release.bind(this)
 	}
 
-	start(): void {
-		// `#owns` records that this server is serving and `#closing` that teardown has begun. A second
-		// call while serving would attach another listener set and forget the first, while a call after
-		// teardown would write into a stream this server has already destroyed.
-		if (this.#closing !== undefined) throw createDestroyedError('probe server')
-		if (this.#owns !== undefined) return
-		// The stream's flow is what this server takes from the process beside the listener sets. Read
-		// it here, before anything attaches, because this is the only moment the
-		// answer exists. Read `readableFlowing` rather than `isPaused()`: a stream nobody has read
-		// reports `readableFlowing` as `null`, and `isPaused()` folds that into the same `false` an
-		// already-flowing stream reports, so only the flow itself separates a flow this server is
-		// about to start from one it found running.
-		this.#owns = process.stdin.readableFlowing !== true
-		// Arm the transport before the forwarders, so the stream it reads has its reader attached
-		// before the first chunk can arrive on it.
-		this.#transport.start()
-		process.stdin.on('data', this.#data)
-		process.stdin.on('close', this.#close)
-		process.stdin.on('error', this.#error)
-		process.on('SIGINT', this.#signal)
-		process.on('SIGTERM', this.#signal)
+	start(): Promise<void> {
+		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('probe server'))
+		this.#starting ??= this.#setup()
+		void this.#starting.catch(() => {})
+		return this.#starting
 	}
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#closing = this.#destroy()
 		return this.#closing
+	}
+
+	async #setup(): Promise<void> {
+		// Capture flow before attaching: an unread stream reports null while isPaused is false.
+		this.#owns = process.stdin.readableFlowing !== true
+		// Give the transport its reader before a forwarder can deliver the first chunk.
+		this.#transport.start()
+		process.stdin.on('data', this.#data)
+		process.stdin.on('close', this.#close)
+		process.stdin.on('error', this.#error)
+		process.stdin.on('end', this.#end)
+		process.on('SIGINT', this.#signal)
+		process.on('SIGTERM', this.#signal)
+		try {
+			const probe = await this.#resolveProbe()
+			if (this.#closing !== undefined) return
+			await probe.start()
+			if (this.#closing !== undefined) return
+		} catch (error) {
+			if (this.#closing !== undefined) return
+			throw error
+		}
+	}
+
+	async #handshake(options: MCPMethodOptions): Promise<void> {
+		options.signal.throwIfAborted()
+		const aborted = Promise.withResolvers<never>()
+		const listener = addAbortListener(options.signal, () => aborted.reject(options.signal.reason))
+		try {
+			await Promise.race([this.#starting, aborted.promise])
+			if (this.#closing !== undefined) throw createDestroyedError('probe server')
+		} catch (error) {
+			options.signal.throwIfAborted()
+			if (isProbeError(error))
+				throw new MCPError(
+					`[${error.origin}] ${error.code}: ${error.message}`,
+					JSONRPC_SERVER_ERROR,
+					{ origin: error.origin, code: error.code },
+				)
+			throw error
+		} finally {
+			listener[Symbol.dispose]()
+		}
 	}
 
 	async #destroy(): Promise<void> {
@@ -147,15 +186,19 @@ export class ProbeServer implements ProbeServerInterface {
 		process.stdin.removeListener('data', this.#data)
 		process.stdin.removeListener('close', this.#close)
 		process.stdin.removeListener('error', this.#error)
+		process.stdin.removeListener('end', this.#end)
 		if (this.#owns === true && process.stdin.listenerCount('data') === 0) process.stdin.pause()
 		this.#owns = undefined
 		// Safe only after the forwarders are off: a chunk arriving on a destroyed stream would raise
 		// a write-after-destroy error nothing is left to answer.
 		this.#stream.destroy()
 		const construction = this.#construction
-		if (construction === undefined) return
-		const probe = await construction.catch(() => undefined)
-		if (probe !== undefined) await probe.destroy()
+		try {
+			const probe = await construction?.catch(() => undefined)
+			if (probe !== undefined) await probe.destroy()
+		} finally {
+			await this.#starting?.catch(() => {})
+		}
 	}
 
 	// Forwards one chunk of this process's standard input into the stream the transport reads.
@@ -206,6 +249,7 @@ export class ProbeServer implements ProbeServerInterface {
 			tools,
 			limit: { keys: PROBE_KEYS },
 			execution: this.#execute.bind(this),
+			handshake: this.#handshake.bind(this),
 		})
 	}
 
@@ -227,7 +271,7 @@ export class ProbeServer implements ProbeServerInterface {
 		return probe.prove(input)
 	}
 
-	// Returns the admitted-call probe, constructing it only after validation. Store the construction
+	// Returns the probe shared by onset and admitted calls. Store the construction
 	// before it starts so a callback that enters `destroy` while `new Probe` is still returning joins
 	// that construction and releases its result. A refused constructor clears the stored promise, so
 	// a later admitted call retries instead of retaining the refusal.

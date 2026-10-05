@@ -54,7 +54,7 @@ export const PROBE_SERVER_PHASES = Object.freeze(['arming', 'active'] as const)
  */
 export function createProbeServerHost(): string {
 	return [
-		"import { readdirSync } from 'node:fs'",
+		"import { readdirSync, writeFileSync } from 'node:fs'",
 		"import { join } from 'node:path'",
 		"import { pathToFileURL } from 'node:url'",
 		'const workspace = process.argv[2]',
@@ -143,7 +143,7 @@ export function createProbeServerHost(): string {
 		'\t? { workspace, deadline: 120_000, on: { error: direct } }',
 		"\t: scenario === 'routed'",
 		'\t\t? { workspace, deadline: 120_000, on: { error: routed }, error: report }',
-		'\t\t: { workspace, deadline: 120_000 }',
+		"\t\t: { workspace, deadline: 120_000, on: { arm: () => { writeFileSync(join(workspace, '.armed'), ''); record('arm') } } }",
 		'server = new ProbeServer(options)',
 		"if (scenario === 'controlled') process.on('message', control)",
 		"record('server-created', { listeners: { baseline, current: readListeners() } })",

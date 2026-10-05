@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import {
-	captureError,
 	createRecorder,
 	createTeardown,
 	decodeJSONLines,
@@ -28,6 +27,8 @@ import {
 	createProbeServerRequest,
 	killChildTree,
 	readDirectoryNames,
+	writeProbeFixture,
+	readFixtureServer,
 	spawnProbeServerHost,
 	waitForProbeArmed,
 	waitForProbeArming,
@@ -391,11 +392,19 @@ describe('probe server', () => {
 			)
 			const output = Buffer.concat(host.output).toString('utf8')
 			const frames = decodeJSONLines(output)
-			expect(frames).toMatchObject([
-				{ id: 0, result: { serverInfo: { name: 'probe' } } },
-				{ id: 1, result: { isError: true } },
-				{ id: 2, result: { isError: true } },
-			])
+			expect(frames).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						id: 0,
+						error: expect.objectContaining({
+							code: -32000,
+							data: { origin: 'instrument', code: 'malformed' },
+						}),
+					}),
+					expect.objectContaining({ id: 1, result: expect.objectContaining({ isError: true }) }),
+					expect.objectContaining({ id: 2, result: expect.objectContaining({ isError: true }) }),
+				]),
+			)
 			expect(output).toContain('The workspace cannot load vitest/node')
 			host.child.send({ command: 'destroy' })
 			await waitForCondition(
@@ -459,7 +468,7 @@ describe('probe server', () => {
 			)
 			const frames = decodeJSONLines(Buffer.concat(host.output).toString('utf8'))
 			expect(frames).toMatchObject([
-				{ id: 0, result: { serverInfo: { name: 'probe' } } },
+				{ id: 0, error: { code: -32000, data: { origin: 'workspace', code: 'missing' } } },
 				{ id: 1, result: { isError: true } },
 				{
 					id: 2,
@@ -548,8 +557,7 @@ describe('probe server', () => {
 		try {
 			const server = new ProbeServer({ workspace: scratch.path, deadline: 120_000 })
 			await server.destroy()
-			const error = captureError(() => server.start())
-			expect(error).toMatchObject({
+			await expect(server.start()).rejects.toMatchObject({
 				name: 'ProbeError',
 				origin: 'claimant',
 				code: 'destroyed',
@@ -701,4 +709,77 @@ describe('probe server', () => {
 			},
 		})
 	})
+})
+
+describe('eager server onset', () => {
+	it(
+		'joins setup and absorbs teardown during its warm without an error event',
+		{ timeout: 8_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const errors = createRecorder<[unknown]>()
+			const server = new ProbeServer({ workspace: scratch.path, on: { error: errors.handler } })
+			try {
+				const starting = server.start()
+				expect(server.start()).toBe(starting)
+				// A real fixture spawn precedes the multi-second boot; close while setup owns it.
+				await waitForCondition('server setup lint spawn', () => scratch.has('server.pid'), {
+					budget: 3_000,
+				})
+				await server.destroy()
+				await expect(starting).resolves.toBeUndefined()
+				expect(errors.count).toBe(0)
+				await expect(server.start()).rejects.toMatchObject({ code: 'destroyed' })
+				expect(readDirectoryNames(resolve(scratch.path, 'tmp/type'))).toHaveLength(0)
+			} finally {
+				await server.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	it('returns the blocked workbench refusal from start while retaining its promise', async () => {
+		const scratch = createScratch()
+		writeProbeFixture(scratch, ROOT)
+		scratch.write('tmp/probes', 'blocked')
+		const server = new ProbeServer({ workspace: scratch.path })
+		try {
+			const starting = server.start()
+			await expect(starting).rejects.toMatchObject({
+				name: 'ProbeError',
+				origin: 'workspace',
+				message: expect.stringContaining('The probe could not create the boot workbench'),
+			})
+			expect(server.start()).toBe(starting)
+		} finally {
+			await server.destroy()
+			scratch.destroy()
+		}
+	})
+	// The child records arm on disk before the handshake can answer, with no cross-pipe ordering.
+	it(
+		'records arm before initialize answers without an admitted call',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+			try {
+				host.child.stdin.write(`${JSON.stringify(createProbeServerInitialize())}\n`)
+				await waitForCondition(
+					'the eager server initialize reply',
+					() => Buffer.concat(host.output).toString('utf8').includes('"id":0'),
+					{ budget: 15_000 },
+				)
+				expect(scratch.has('.armed')).toBe(true)
+				expect(() => process.kill(readFixtureServer(scratch), 0)).not.toThrow()
+				expect(decodeJSONLines(Buffer.concat(host.output).toString('utf8'))).toMatchObject([
+					{ id: 0, result: { serverInfo: { name: 'probe' } } },
+				])
+			} finally {
+				await killChildTree(host.child)
+				scratch.destroy()
+			}
+		},
+	)
 })

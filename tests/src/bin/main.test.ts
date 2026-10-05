@@ -22,6 +22,11 @@ import {
 	PROBE_SERVER_WORKSPACES,
 	describeEnding,
 	readDirectoryNames,
+	createProbeServerInitialize,
+	createProbeServerRequest,
+	writeProbeFixture,
+	readFixtureServer,
+	killChildTree,
 	readChildEnding,
 	readSignalEnding,
 	waitForProbeArmed,
@@ -197,7 +202,7 @@ describe('bin entry', () => {
 		expect(source).not.toContain('|\\r/')
 	})
 
-	it('retries an admitted arming refusal through the protocol without stderr', async () => {
+	it('refuses missing-toolchain initialize and retries construction on each admitted call', async () => {
 		const scratch = createScratch({ files: { 'package.json': '{}\n' } })
 		const child = spawn(process.execPath, [BUILT_ENTRY], {
 			cwd: scratch.path,
@@ -217,31 +222,46 @@ describe('bin entry', () => {
 			params: { name: 'prove', arguments: buildClaim('arming-refusal', BROKEN) },
 		}
 		try {
+			child.stdin.write(`${JSON.stringify(createProbeServerInitialize())}\n`)
 			child.stdin.write(JSON.stringify({ ...request, id: 1 }) + '\n')
 			await waitForCondition(
 				'the entry to report its missing toolchain',
-				() => frames.length === 1,
+				() => frames.length === 2,
 				{
 					budget: 10_000,
 					interval: 10,
 				},
 			)
-			const missing = readAnswer(frames[0] ?? '')
+			expect(JSON.parse(indexFrames(frames).get(0) ?? '{}')).toMatchObject({
+				error: {
+					code: -32000,
+					message: expect.stringContaining('typescript does not publish a readable manifest'),
+					data: { origin: 'workspace' },
+				},
+			})
+			const missing = readAnswer(indexFrames(frames).get(1) ?? '')
 			expect(missing).toMatchObject({ isError: true })
 			if (missing === undefined) return
 			expect(readText(missing)).toContain('typescript does not publish a readable manifest')
 
 			scratch.write('node_modules/typescript/package.json', '{"name":"typescript"}\n')
 			child.stdin.write(JSON.stringify({ ...request, id: 2 }) + '\n')
-			await waitForCondition('the entry to retry workspace arming', () => frames.length === 2, {
+			await waitForCondition('the entry to retry workspace arming', () => frames.length === 3, {
 				budget: 10_000,
 				interval: 10,
 			})
-			const malformed = readAnswer(frames[1] ?? '')
+			const malformed = readAnswer(indexFrames(frames).get(2) ?? '')
 			expect(malformed).toMatchObject({ isError: true })
 			if (malformed === undefined) return
 			expect(readText(malformed)).toContain('typescript publishes no readable version')
-			expect(Buffer.concat(errors).toString('utf8')).toBe('')
+			const lines = Buffer.concat(errors)
+				.toString('utf8')
+				.split(/\r\n|\n/u)
+				.filter(Boolean)
+			expect(lines).toHaveLength(1)
+			expect(lines[0]).toContain(
+				'[workspace] missing: typescript does not publish a readable manifest',
+			)
 			expect({ code: child.exitCode, signal: child.signalCode }).toStrictEqual({
 				code: null,
 				signal: null,
@@ -269,119 +289,126 @@ describe('bin entry', () => {
 		}
 	})
 
-	it('serves discovery before workspace arming', { timeout: 30_000 }, async () => {
-		const scratch = createScratch({
-			files: {
-				'package.json': '{}\n',
-				'node_modules/typescript/package.json': '{\n',
-			},
-		})
-		const requests = [
-			{
-				jsonrpc: '2.0',
-				id: 1,
-				method: 'initialize',
-				params: {
-					protocolVersion: '2025-06-18',
-					capabilities: {},
-					clientInfo: { name: 'probe-discovery-test', version: '1.0.0' },
+	it(
+		'keeps discovery serving after workspace onset refuses initialize',
+		{ timeout: 30_000 },
+		async () => {
+			const scratch = createScratch({
+				files: {
+					'package.json': '{}\n',
+					'node_modules/typescript/package.json': '{\n',
 				},
-			},
-			{ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-			{
-				jsonrpc: '2.0',
-				id: 3,
-				method: 'tools/call',
-				params: { name: 'prove', arguments: {} },
-			},
-			{
-				jsonrpc: '2.0',
-				id: 4,
-				method: 'tools/call',
-				params: { name: 'prove', arguments: buildClaim('discovery', BROKEN) },
-			},
-		]
-		const child = spawn(process.execPath, [BUILT_ENTRY], {
-			cwd: scratch.path,
-			stdio: ['pipe', 'pipe', 'pipe'],
-		})
-		const ended = readChildEnding(child)
-		const frames: string[] = []
-		const errors: Buffer[] = []
-		const input: Error[] = []
-		child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
-		child.stdin.on('error', (error: Error) => input.push(error))
-		const output = createInterface({ input: child.stdout })
-		output.on('line', (line) => {
-			if (line.trim() !== '') frames.push(line)
-		})
-		try {
-			child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
-			await waitForCondition(
-				'the entry to answer discovery or terminate',
-				() =>
-					frames.length === requests.length || child.exitCode !== null || child.signalCode !== null,
-				{ budget: 10_000, interval: 10 },
-			)
-			const evidence = {
-				frames,
-				stderr: Buffer.concat(errors).toString('utf8'),
-				input: input.map((error) => error.message),
-				code: child.exitCode,
-				signal: child.signalCode,
-			}
-			const answered = indexFrames(frames)
-			const initialized = answered.get(1)
-			expect({ ...evidence, initialized }).toMatchObject({ initialized: expect.any(String) })
-			if (initialized === undefined) return
-			expect(readAnswer(initialized)).toMatchObject({
-				protocolVersion: '2025-06-18',
-				serverInfo: { name: 'probe', version },
 			})
-			const listed = answered.get(2)
-			expect({ ...evidence, listed }).toMatchObject({ listed: expect.any(String) })
-			if (listed === undefined) return
-			expect(readAnswer(listed)).toMatchObject({
-				tools: [expect.objectContaining({ name: 'prove' })],
+			const requests = [
+				{
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'initialize',
+					params: {
+						protocolVersion: '2025-06-18',
+						capabilities: {},
+						clientInfo: { name: 'probe-discovery-test', version: '1.0.0' },
+					},
+				},
+				{ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+				{
+					jsonrpc: '2.0',
+					id: 3,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: {} },
+				},
+				{
+					jsonrpc: '2.0',
+					id: 4,
+					method: 'tools/call',
+					params: { name: 'prove', arguments: buildClaim('discovery', BROKEN) },
+				},
+			]
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: scratch.path,
+				stdio: ['pipe', 'pipe', 'pipe'],
 			})
-			const refused = answered.get(3)
-			expect({ ...evidence, refused }).toMatchObject({ refused: expect.any(String) })
-			if (refused === undefined) return
-			const refusedAnswer = readAnswer(refused)
-			expect(refusedAnswer).toMatchObject({ isError: true })
-			if (refusedAnswer === undefined) return
-			expect(readText(refusedAnswer)).toContain(
-				'The prove tool requires a claim matching the advertised schema',
-			)
-			const admitted = answered.get(4)
-			expect({ ...evidence, admitted }).toMatchObject({ admitted: expect.any(String) })
-			if (admitted === undefined) return
-			const admittedAnswer = readAnswer(admitted)
-			expect(admittedAnswer).toMatchObject({ isError: true })
-			if (admittedAnswer === undefined) return
-			expect(readText(admittedAnswer)).toContain('typescript does not publish a readable manifest')
-		} finally {
-			const teardown = createTeardown()
-			teardown.add(() => scratch.destroy())
-			teardown.add(async () => {
-				if (child.exitCode !== null || child.signalCode !== null) return
-				child.kill('SIGTERM')
-				try {
-					await waitForCondition(
-						'the discovery child to exit after teardown',
-						() => child.exitCode !== null || child.signalCode !== null,
-						{ budget: 10_000, interval: 10 },
-					)
-				} catch (error) {
-					child.kill('SIGKILL')
-					await ended
-					throw error
+			const ended = readChildEnding(child)
+			const frames: string[] = []
+			const errors: Buffer[] = []
+			const input: Error[] = []
+			child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+			child.stdin.on('error', (error: Error) => input.push(error))
+			const output = createInterface({ input: child.stdout })
+			output.on('line', (line) => {
+				if (line.trim() !== '') frames.push(line)
+			})
+			try {
+				child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
+				await waitForCondition(
+					'the entry to answer discovery or terminate',
+					() =>
+						frames.length === requests.length ||
+						child.exitCode !== null ||
+						child.signalCode !== null,
+					{ budget: 10_000, interval: 10 },
+				)
+				const evidence = {
+					frames,
+					stderr: Buffer.concat(errors).toString('utf8'),
+					input: input.map((error) => error.message),
+					code: child.exitCode,
+					signal: child.signalCode,
 				}
-			})
-			teardown.add(() => output.close())
-			await teardown.destroy()
-		}
-	})
+				const answered = indexFrames(frames)
+				const initialized = answered.get(1)
+				expect({ ...evidence, initialized }).toMatchObject({ initialized: expect.any(String) })
+				if (initialized === undefined) return
+				expect(JSON.parse(initialized)).toMatchObject({
+					error: { code: -32000, data: { origin: 'workspace', code: 'malformed' } },
+				})
+				const listed = answered.get(2)
+				expect({ ...evidence, listed }).toMatchObject({ listed: expect.any(String) })
+				if (listed === undefined) return
+				expect(readAnswer(listed)).toMatchObject({
+					tools: [expect.objectContaining({ name: 'prove' })],
+				})
+				const refused = answered.get(3)
+				expect({ ...evidence, refused }).toMatchObject({ refused: expect.any(String) })
+				if (refused === undefined) return
+				const refusedAnswer = readAnswer(refused)
+				expect(refusedAnswer).toMatchObject({ isError: true })
+				if (refusedAnswer === undefined) return
+				expect(readText(refusedAnswer)).toContain(
+					'The prove tool requires a claim matching the advertised schema',
+				)
+				const admitted = answered.get(4)
+				expect({ ...evidence, admitted }).toMatchObject({ admitted: expect.any(String) })
+				if (admitted === undefined) return
+				const admittedAnswer = readAnswer(admitted)
+				expect(admittedAnswer).toMatchObject({ isError: true })
+				if (admittedAnswer === undefined) return
+				expect(readText(admittedAnswer)).toContain(
+					'typescript does not publish a readable manifest',
+				)
+			} finally {
+				const teardown = createTeardown()
+				teardown.add(() => scratch.destroy())
+				teardown.add(async () => {
+					if (child.exitCode !== null || child.signalCode !== null) return
+					child.kill('SIGTERM')
+					try {
+						await waitForCondition(
+							'the discovery child to exit after teardown',
+							() => child.exitCode !== null || child.signalCode !== null,
+							{ budget: 10_000, interval: 10 },
+						)
+					} catch (error) {
+						child.kill('SIGKILL')
+						await ended
+						throw error
+					}
+				})
+				teardown.add(() => output.close())
+				await teardown.destroy()
+			}
+		},
+	)
 
 	it(
 		'snapshots default and relative workspaces, lifecycle options, and hooks for admitted calls',
@@ -1322,4 +1349,146 @@ describe('bin entry', () => {
 			},
 		)
 	}
+})
+
+describe('eager bin onset', () => {
+	// A fixture boot takes about 6 s; the remainder covers a native child close.
+	it(
+		'answers initialize with a live lint child and releases it at input end',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: scratch.path,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const ended = readChildEnding(child)
+			const frames: string[] = []
+			const errors: Buffer[] = []
+			child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+			const output = createInterface({ input: child.stdout })
+			output.on('line', (line) => frames.push(line))
+			try {
+				child.stdin.write(`${JSON.stringify(createProbeServerInitialize())}\n`)
+				await waitForCondition('eager initialize reply', () => frames.length > 0, {
+					budget: 15_000,
+				})
+				expect(readAnswer(frames[0] ?? '')).toMatchObject({ serverInfo: { name: 'probe' } })
+				const pid = readFixtureServer(scratch)
+				expect(() => process.kill(pid, 0)).not.toThrow()
+				child.stdin.end()
+				await waitForCondition('input-end teardown', () => child.exitCode !== null, {
+					budget: 3_000,
+				})
+				expect(await ended).toStrictEqual({ code: 0, signal: null })
+				expect(() => process.kill(pid, 0)).toThrow('kill ESRCH')
+				expect(Buffer.concat(errors).toString('utf8')).toBe('')
+			} finally {
+				output.close()
+				await killChildTree(child)
+				scratch.destroy()
+			}
+		},
+	)
+	// The refused onset is immediate; the repaired call pays one real boot and one proof.
+	it(
+		'refuses initialize, keeps discovery, repairs a blocked workbench, and preserves exit one',
+		{ timeout: 25_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			scratch.write('tmp/probes', 'blocked')
+			const child = spawn(process.execPath, [BUILT_ENTRY], {
+				cwd: scratch.path,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			const ended = readChildEnding(child)
+			const frames: string[] = []
+			const errors: Buffer[] = []
+			child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+			const output = createInterface({ input: child.stdout })
+			output.on('line', (line) => frames.push(line))
+			try {
+				const request = createProbeServerRequest(false)
+				for (const record of [
+					createProbeServerInitialize(),
+					{ jsonrpc: '2.0', id: 9, method: 'tools/list' },
+					request,
+				])
+					child.stdin.write(`${JSON.stringify(record)}\n`)
+				await waitForCondition('refusal and discovery replies', () => frames.length === 3, {
+					budget: 5_000,
+				})
+				const answered = indexFrames(frames)
+				expect(JSON.parse(answered.get(0) ?? '{}')).toMatchObject({
+					error: {
+						code: -32000,
+						message: expect.stringContaining('[workspace]'),
+						data: { origin: 'workspace', code: 'malformed' },
+					},
+				})
+				expect(answered.get(0)).not.toContain('pool ')
+				expect(readAnswer(answered.get(9) ?? '{}')).toMatchObject({
+					tools: [expect.objectContaining({ name: 'prove' })],
+				})
+				expect(readAnswer(answered.get(1) ?? '{}')).toMatchObject({ isError: true })
+				scratch.remove('tmp/probes')
+				child.stdin.write(`${JSON.stringify({ ...request, id: 2 })}\n`)
+				await waitForCondition('repaired workbench proof', () => indexFrames(frames).has(2), {
+					budget: 15_000,
+				})
+				expect(readAnswer(indexFrames(frames).get(2) ?? '{}')).toMatchObject({
+					structuredContent: { receipt: expect.any(String) },
+				})
+				child.stdin.end()
+				await waitForCondition('refused onset exit', () => child.exitCode !== null, {
+					budget: 3_000,
+				})
+				expect(await ended).toStrictEqual({ code: 1, signal: null })
+				const lines = Buffer.concat(errors)
+					.toString('utf8')
+					.split(/\r\n|\n/u)
+					.filter(Boolean)
+				expect(lines).toHaveLength(1)
+				expect(lines[0]).toContain(
+					'[workspace] malformed: The probe could not create the boot workbench',
+				)
+			} finally {
+				output.close()
+				await killChildTree(child)
+				scratch.destroy()
+			}
+		},
+	)
+	// The pid marker announces a warm in flight, before the full boot can complete.
+	it('closes input during setup without stderr and exits zero', { timeout: 8_000 }, async () => {
+		const scratch = createScratch()
+		writeProbeFixture(scratch, ROOT)
+		const child = spawn(process.execPath, [BUILT_ENTRY], {
+			cwd: scratch.path,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		})
+		const ended = readChildEnding(child)
+		const errors: Buffer[] = []
+		child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+		child.stdout.resume()
+		try {
+			await waitForCondition('eager lint spawn during setup', () => scratch.has('server.pid'), {
+				budget: 3_000,
+			})
+			const pid = readFixtureServer(scratch)
+			child.stdin.end()
+			await waitForCondition('setup input-end teardown', () => child.exitCode !== null, {
+				budget: 3_000,
+			})
+			expect(await ended).toStrictEqual({ code: 0, signal: null })
+			expect(() => process.kill(pid, 0)).toThrow('kill ESRCH')
+			expect(Buffer.concat(errors).toString('utf8')).toBe('')
+			expect(readDirectoryNames(resolve(scratch.path, 'tmp/type'))).toHaveLength(0)
+		} finally {
+			await killChildTree(child)
+			scratch.destroy()
+		}
+	})
 })
