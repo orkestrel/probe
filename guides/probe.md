@@ -75,6 +75,7 @@ A `Shape` cell holds the constant's declared type.
 | `TYPE_MIRROR`          | const | `string`                    | Names the workspace-relative directory the type stage keeps its workspace mirror under, `'tmp/type'`.                                                                                             |
 | `PROBE_RESTARTS`       | const | `number`                    | Bounds consecutive failed warms or idle losses before a stage's floor is spent.                                                                                                                   |
 | `PROBE_WARM`           | const | `number`                    | Bounds the default type warm at 90,000 ms, independently of active inspections.                                                                                                                   |
+| `LINT_TEARDOWN`        | const | `number`                    | Bounds lint teardown at 16,000 ms, including protocol exchanges and process termination.                                                                                                          |
 
 ### Errors
 
@@ -185,14 +186,14 @@ The classes, each exported from its own file, and the contract each one implemen
 [`RuntimeStage`](../src/server/stages/RuntimeStage.ts) implements `StageInterface`, and
 [`Overlay`](../src/server/Overlay.ts) implements `OverlayInterface`.
 
-| Name           | Kind  | Summary                                                                                                                                                                                                  |
-| -------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                                                                                                                               |
-| `ProbeServer`  | class | Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol stdio transport. |
-| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.                                                                                                           |
-| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                                                                                                                                  |
-| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                                                                                                                            |
-| `Overlay`      | class | Implements `OverlayInterface` over a private map from normalized absolute path to candidate text, minting at construction the `revision` a resident tool caches its answers against.                     |
+| Name           | Kind  | Summary                                                                                                                                                                                                                                                                                                                           |
+| -------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Probe`        | class | Answers claims through its type, lint, and runtime stages.                                                                                                                                                                                                                                                                        |
+| `ProbeServer`  | class | Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol stdio transport. Starting creates the probe and awaits its lint and runtime onset; type warming and the boot controls continue behind it. |
+| `TypeStage`    | class | Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.                                                                                                                                                                                                                                    |
+| `LintStage`    | class | Inspects virtual documents through one resident Oxlint language server.                                                                                                                                                                                                                                                           |
+| `RuntimeStage` | class | Inspects tests through one resident Vitest service from the target workspace.                                                                                                                                                                                                                                                     |
+| `Overlay`      | class | Implements `OverlayInterface` over a private map from normalized absolute path to candidate text, minting at construction the `revision` a resident tool caches its answers against.                                                                                                                                              |
 
 Each stage takes one optional `workspace` argument and defaults to the working directory. A stage
 serves one inspection at a time and admits none itself, so drive stages through `Probe` unless you
@@ -1071,7 +1072,8 @@ survivor rule are identified separately.
   for a later prove” in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
   A failed type warm reaches the next call with its original cause even if an automatic
   replacement has armed (tests: “retains a failed type warm for the next prove and recovers after
-  replacement” and “reports a failed type warm even when its automatic replacement has armed”
+  replacement”, “reports a failed type warm even when its automatic replacement has armed”, and
+  “consumes a failed type refill at the queued call and serves the next claim”
   in [Probe.test.ts](../tests/src/server/Probe.test.ts)).
 - **Admission.** Each stage has its own pool with one resident stage and exclusive leases, admitting
   inspections in arrival order; project resolution takes a type-stage lease in that same order
@@ -1131,7 +1133,15 @@ survivor rule are identified separately.
 after a lint child survives its kill: a rejected cleanup of an inserted record leaves that record
 in the pool, while rejected cleanup during a failed warm leaves a stage owned by Probe and blocks
 further lint creation. Both branches specify refusal until restart, even after the child later
-exits. No Probe test drives either surviving-child branch on this host; the U1–U3 run
+exits. Teardown re-reads each held survivor and reports it through its teardown result; it makes
+no second kill attempt because lint destruction retains its first settlement.
+Lint disposal uses the larger of the probe `deadline` and `LINT_TEARDOWN`, including protocol
+exchanges, transport grace, and kill escalation, so a short inspection deadline cannot abandon
+lint cleanup before its timeout reports a survivor. The silent-initialize fixture at
+`deadline: 500` reads the process table at each spawn and finds no overlapping Oxlint children
+(test: “spends silent initializes through the coordinator deadline” in
+[Probe.test.ts](../tests/src/server/Probe.test.ts)).
+No Probe test drives either surviving-child branch on this host; the U1–U3 run
 `eager-probe4-last.md` on LAPTOP-SBG38B5J, Windows, 2026-10-05 records that gap. The real pool/child
 instruments `eager-probe2-survivor.ts` and `eager-probe3-create-survivor.ts` establish the pool
 boundaries only. A fixture that survives the host kill and produces the transport's timeout is

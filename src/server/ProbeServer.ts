@@ -28,11 +28,12 @@ import { Probe } from './Probe.js'
 /**
  * Implements `ProbeServerInterface` over a `PassThrough` stream this server owns, binding the
  * published `prove` tool and the dual-era dispatcher to this process's Model Context Protocol
- * stdio transport.
+ * stdio transport. Starting creates the probe and awaits its lint and runtime onset; type warming
+ * and the boot controls continue behind it.
  *
  * @remarks
  * Construction snapshots the probe options, publishes the `prove` tool, and binds the dual-era
- * dispatcher to the stdio transport. Starting creates the probe and awaits workspace arming.
+ * dispatcher to the stdio transport.
  * Discovery remains available while the legacy handshake awaits that onset. Construction is held
  * before it begins, so teardown entered through a construction callback waits for the resulting
  * probe and releases it. A constructor refusal clears that held operation for a later retry.

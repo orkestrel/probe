@@ -18,7 +18,13 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
+import {
+	createRecorder,
+	createTeardown,
+	waitForCondition,
+	waitForDelay,
+	waitForEvent,
+} from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
@@ -305,6 +311,88 @@ require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 			}
 		},
 	)
+	// The scalar project keeps a healthy boot and recovery inside the existing lifecycle budget.
+	it(
+		'consumes a failed type refill at the queued call and serves the next claim',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
+			)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"controlled.cjs"}}',
+			)
+			scratch.write(
+				'node_modules/typescript/controlled.cjs',
+				`const fs = require('node:fs')
+const failed = ${JSON.stringify(resolve(scratch.path, 'fail-type'))}
+if (!fs.existsSync(failed)) require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
+else if (process.argv.includes('--showConfig')) {
+	process.stderr.write('type refill refused')
+	process.exit(1)
+} else {
+	fs.writeFileSync(${JSON.stringify(resolve(scratch.path, 'inspecting'))}, '')
+	setInterval(() => {}, 1000)
+}
+`,
+			)
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 3_000,
+			})
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/refill.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/refill.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
+			try {
+				const armed = waitForEvent(
+					(listener) => {
+						probe.emitter.on('arm', listener)
+						return () => probe.emitter.off('arm', listener)
+					},
+					'the healthy probe arm',
+					{ budget: 20_000 },
+				)
+				await Promise.all([probe.start(), armed])
+				scratch.write('fail-type', '')
+				const expired = probe.prove(claim).catch((error: unknown) => error)
+				await waitForCondition('the held type inspection', () => scratch.has('inspecting'), {
+					budget: 3_000,
+				})
+				const queued = probe.prove(claim).catch((error: unknown) => error)
+				expect(await expired).toMatchObject({ code: 'deadline', context: { stage: 'type' } })
+				expect(await queued).toMatchObject({
+					name: 'ProbeError',
+					message: 'The compiler printed no configuration',
+				})
+				scratch.remove('fail-type')
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
 	// One boot, two 15 s bounds (inspection and cleanup), and a replacement proof fit in 60 s.
 	it(
 		'serves a claim after abandoning a runtime cleanup blocked by a FIFO',
@@ -440,10 +528,21 @@ require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 					name: 'ProbeError',
 					cause: expect.objectContaining({ code: 'deadline' }),
 				})
+				expect(
+					scratch
+						.read('spawns')
+						?.split(/\r\n|\n/u)
+						.filter(Boolean),
+				).toHaveLength(PROBE_RESTARTS + 1)
+				expect(
+					scratch
+						.read('overlaps')
+						?.split(/\r\n|\n/u)
+						.filter(Boolean),
+				).toStrictEqual(Array.from({ length: PROBE_RESTARTS + 1 }, () => '1'))
 			} finally {
 				await probe.destroy()
-				// The coordinator abandons cleanup after 500 ms; await the fixture's own children
-				// before removing their working directory, inside LSP's lifecycle bound.
+				// Keep fixture cleanup safe even when the disposal-bound mutation is under test.
 				await waitForCondition(
 					'abandoned lint children to exit',
 					() =>
@@ -675,11 +774,6 @@ require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 			await expect(probe.start()).rejects.toMatchObject({ code: 'destroyed' })
 			expect(errors.count).toBe(0)
 			expect(scratch.names(TYPE_MIRROR)).toHaveLength(0)
-			expect(
-				scratch.has('tmp/probes')
-					? scratch.names('tmp/probes').filter((name) => name.startsWith('arm-'))
-					: [],
-			).toHaveLength(0)
 		} finally {
 			await probe.destroy()
 			scratch.destroy()
@@ -1977,6 +2071,12 @@ describe.sequential('probe', () => {
 						true,
 					)
 				}
+				await probe.destroy()
+				expect(
+					scratch.has('tmp/probes')
+						? scratch.names('tmp/probes').filter((name) => name.startsWith('arm-'))
+						: [],
+				).toHaveLength(0)
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())

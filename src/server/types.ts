@@ -392,7 +392,8 @@ export interface WorkspaceManifest {
  *
  * @remarks
  * Construction snapshots the options and resolves the workspace against the current working
- * directory without loading its toolchain. Starting creates the probe and awaits its full arm.
+ * directory without loading its toolchain. Starting creates the probe and awaits its lint and
+ * runtime onset; type warming and the boot controls continue behind it.
  * Discovery answers during onset; legacy initialization waits for that onset's settlement.
  *
  * The server owns the process it runs in. `start` seizes standard input and standard output for

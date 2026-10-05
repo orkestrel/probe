@@ -23,6 +23,7 @@ import { isLSPError } from '@orkestrel/lsp'
 import { addAbortListener } from 'node:events'
 import { createTimeout } from '@orkestrel/timeout'
 import {
+	LINT_TEARDOWN,
 	PROBE_DEADLINE,
 	PROBE_RESTARTS,
 	PROBE_WARM,
@@ -558,6 +559,11 @@ export class Probe implements ProbeInterface {
 		} catch (error) {
 			if (isPoolError(error)) {
 				if (error.code === 'destroyed') throw createDestroyedError('probe')
+				if (error.code === 'create' && pool === this.#type) {
+					const refusal = this.#refusal
+					this.#refusal = undefined
+					throw refusal === undefined ? error.cause : refusal.cause
+				}
 				if (error.code === 'create' || error.code === 'cleanup') throw error.cause
 			}
 			throw error
@@ -609,12 +615,14 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #dispose(stage: StageInterface): Promise<void> {
+		const bound = stage.stage === 'lint' ? Math.max(this.#deadline, LINT_TEARDOWN) : this.#deadline
 		try {
 			await this.#bound(
 				() => stage.destroy(),
-				`The ${stage.stage} stage teardown exceeded ${this.#deadline} ms`,
+				`The ${stage.stage} stage teardown exceeded ${bound} ms`,
 				stage,
 				stage.progress,
+				bound,
 			)
 		} catch (error) {
 			if (isProbeError(error) && this.#deadlines.has(error)) return

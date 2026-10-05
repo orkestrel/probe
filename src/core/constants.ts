@@ -127,9 +127,9 @@ export const PROBE_RESTARTS = 1
  *
  * @remarks
  * It does not reach the diagnostics an inspection waits for, which the caller's own signal bounds.
- * The transport's cooperative window is half of it, so a child that ignores its ending is
- * signalled and released inside the same bound rather than outliving the client's own wait for
- * the close. Measured 2026-08-27: the workspace `oxlint --lsp` answers `initialize` in 155 ms, so
+ * The transport's cooperative window is half of it; `LINT_TEARDOWN` also accounts for process
+ * termination and exit confirmation. Measured 2026-08-27: the workspace `oxlint --lsp` answers
+ * `initialize` in 155 ms, so
  * this bound is more than ten times that reply.
  *
  * @example
@@ -138,6 +138,22 @@ export const PROBE_RESTARTS = 1
  * ```
  */
 export const LINT_DEADLINE = 2_000
+
+/**
+ * Bounds lint teardown at 16,000 ms, including protocol exchanges and process termination.
+ *
+ * @remarks
+ * Shutdown and exit each have `LINT_DEADLINE`; transport grace and stream drain each have half
+ * that bound. The installed process transport permits 5,000 ms for Windows tree termination and
+ * another 5,000 ms for exit confirmation. This also covers POSIX escalation's shorter grace.
+ * The process confirmation constant is not exposed by the declared LSP dependency.
+ *
+ * @example
+ * ```ts
+ * LINT_TEARDOWN // 16_000
+ * ```
+ */
+export const LINT_TEARDOWN = LINT_DEADLINE * 3 + 5_000 * 2
 
 /**
  * Names the total enumerable key bound `ProbeServer` applies to inbound metadata and to produced
