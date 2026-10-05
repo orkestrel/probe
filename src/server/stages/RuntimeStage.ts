@@ -141,6 +141,12 @@ export class RuntimeStage implements StageInterface {
 		return this.#progress
 	}
 
+	/**
+	 * Begins the warm or joins the warm already begun.
+	 *
+	 * @returns A promise that resolves after the resident Vitest service is ready
+	 * @throws When warming fails or teardown has begun
+	 */
 	start(): Promise<void> {
 		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('runtime stage'))
 		this.#warming ??= guardStage(

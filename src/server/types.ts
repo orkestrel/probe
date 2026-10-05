@@ -412,7 +412,7 @@ export interface WorkspaceManifest {
  */
 export interface ProbeServerInterface {
 	/**
-	 * Begins serving and awaits the workspace probe's full arm.
+	 * Begins serving and awaits the workspace probe's lint and runtime onset.
 	 *
 	 * @remarks
 	 * Reads newline-delimited JSON requests from standard input, and answers a `SIGINT` or a
