@@ -351,6 +351,15 @@ await new GuideCommand({
 			expect(RECEIPT_PREFIX).toBe('probe')
 			expect(constants).toContain("`':'`")
 			expect(RECEIPT_SEPARATOR).toBe(':')
+			expect(core.PROBE_RESTARTS).toBe(1)
+			expect(core.PROBE_WARM).toBe(90_000)
+		})
+
+		it('returns the documented handshake code with the classified cause', () => {
+			const error = server.createHandshakeError(core.createDestroyedError('probe server'))
+			expect(error.code).toBe(-32000)
+			expect(error.context).toEqual({ origin: 'claimant', code: 'destroyed' })
+			expect(error.message).toBe('[claimant] destroyed: The probe server has been destroyed')
 		})
 
 		// The failure table is the guide's own copy of the ownership and condition axes, so it is read

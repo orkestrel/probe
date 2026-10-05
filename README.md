@@ -1,9 +1,7 @@
 # @orkestrel/probe
 
-> The claim prover for the `@orkestrel` line: an instrument that runs a claim's case and its
-> negative control through the workspace's own TypeScript, Oxlint, and Vitest, and returns a
-> `Verdict` carrying every issue — and a `receipt` when the case ran clean and the control broke
-> where it said it would.
+> A claim prover that checks a case and its negative control with the workspace’s TypeScript,
+> Oxlint, and Vitest, with eager lint and runtime onset and type warming before proof.
 
 A claim carries a `case` — the edit you believe is correct — and a `control`, the same edit
 deliberately broken, naming the stage it must fail at. The `receipt` a proven claim earns is a
@@ -23,6 +21,10 @@ The `typescript` and `vitest` packages are optional peers, and the `oxlint` pack
 range; probe resolves all three from the workspace it inspects.
 
 ## The `probe` binary
+
+Startup waits for lint and runtime while type warming continues before the first proof. For the
+Codex `required = true` setting and measured initialization times, see
+[Registering the server](guides/probe.md#registering-the-server).
 
 The package installs a `probe` binary that serves the `prove` Model Context Protocol tool over a
 newline-delimited JSON stdio transport. Register the resolved JavaScript entry rather than a global
