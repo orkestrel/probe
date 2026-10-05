@@ -395,8 +395,8 @@ export interface Verdict {
  * arriving before it awaits that step rather than starting a second one. An arming attempt that
  * rejects fires `error` instead, as it rejects, so a host waiting on `arm` reads the refusal rather
  * than waiting on a state no event describes. The rejected attempt is still retained for retry, and
- * the next `prove` runs the boot controls again, so a workspace that cannot arm surfaces one `error`
- * per attempt. `expire` fires when the coordinator's own deadline destroyed a stage and a
+ * the next `prove` runs the boot controls again. A type warm refusal stays retained for the next
+ * call even when its replacement warms. `expire` fires when the coordinator's own deadline destroyed a stage and a
  * replacement took its place, which is the only way a synchronous infinite loop is ever reported.
  *
  * @example
@@ -405,7 +405,7 @@ export interface Verdict {
  * ```
  */
 export type ProbeEventMap = {
-	/** Fires after `start()` completes the boot controls and the instrument can answer calls. */
+	/** Fires after the background boot controls complete and the instrument can answer calls. */
 	readonly arm: readonly [toolchain: Toolchain]
 	/** Fires when a claim is answered. */
 	readonly prove: readonly [verdict: Verdict]
@@ -448,6 +448,8 @@ export interface ProbeOptions {
 	 * Default: 30,000 ms.
 	 */
 	readonly deadline?: number
+	/** Holds the type warm's milliseconds bound, separate from inspection. Default: 90,000 ms. */
+	readonly warm?: number
 }
 
 /**
@@ -474,12 +476,12 @@ export interface ProbeInterface {
 	/** Names the tool versions resolved from the workspace at construction. */
 	readonly toolchain: Toolchain
 	/**
-	 * Fills every stage's floor and runs the boot controls.
+	 * Starts every stage's floor and waits for lint and runtime to warm.
 	 *
-	 * @remarks Joins an attempt in flight and begins one replacement after a refused boot.
-	 * A successful boot is retained while each call restores any spent stage floor.
-	 * @returns A promise that resolves when every stage can serve
-	 * @throws A `ProbeError` when arming fails, or coded `destroyed` after teardown begins
+	 * @remarks Type warming and boot controls continue behind this onset gate. Every call restores
+	 * spent floors. A type warm refusal is retained for the next `prove`, unwrapped.
+	 * @returns A promise that resolves when lint and runtime can serve
+	 * @throws A `ProbeError` when onset fails, or coded `destroyed` after teardown begins
 	 *
 	 * @example
 	 * ```ts
@@ -491,6 +493,9 @@ export interface ProbeInterface {
 	 * Answers one claim with every stage's evidence after calling `start()`.
 	 *
 	 * @remarks
+	 * Waits for type warming under `warm`, then for the boot controls, before inspecting under
+	 * `deadline`. A refused type warm reaches this call; a later call uses its replacement.
+	 *
 	 * A control carrying the case's files and the case's test byte for byte is refused at admission,
 	 * with `origin: 'claimant'` and `code: 'refused'`. No stage inspects such a claim: the refusal
 	 * answers before any stage is awaited, so it reads the same in every workspace state.

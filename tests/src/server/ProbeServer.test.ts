@@ -756,13 +756,22 @@ describe('eager server onset', () => {
 			scratch.destroy()
 		}
 	})
-	// The child records arm on disk before the handshake can answer, with no cross-pipe ordering.
+	// T1 revised on 2026-10-05: a held type warm cannot delay the lint/runtime onset gate.
 	it(
-		'records arm before initialize answers without an admitted call',
+		'answers initialize while the type warm is held open without an admitted call',
 		{ timeout: 20_000 },
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"held.cjs"}}',
+			)
+			scratch.write(
+				'node_modules/typescript/held.cjs',
+				"require('node:fs').writeFileSync('warming', ''); setInterval(() => {}, 1000)\n",
+			)
 			const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
 			try {
 				host.child.stdin.write(`${JSON.stringify(createProbeServerInitialize())}\n`)
@@ -771,7 +780,12 @@ describe('eager server onset', () => {
 					() => Buffer.concat(host.output).toString('utf8').includes('"id":0'),
 					{ budget: 15_000 },
 				)
-				expect(scratch.has('.armed')).toBe(true)
+				expect(scratch.has('.armed')).toBe(false)
+				expect(
+					readDirectoryNames(resolve(scratch.path, 'tmp/type')).some((name) =>
+						scratch.has(`tmp/type/${name}/warming`),
+					),
+				).toBe(true)
 				expect(() => process.kill(readFixtureServer(scratch), 0)).not.toThrow()
 				expect(decodeJSONLines(Buffer.concat(host.output).toString('utf8'))).toMatchObject([
 					{ id: 0, result: { serverInfo: { name: 'probe' } } },

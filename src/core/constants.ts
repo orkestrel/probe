@@ -98,6 +98,20 @@ export const RECEIPT_SEPARATOR = ':'
 export const PROBE_DEADLINE = 30_000
 
 /**
+ * Bounds the default type warm at 90,000 ms, independently of active inspections.
+ *
+ * @remarks
+ * `ProbeOptions.warm` overrides this value. Veneer's slowest measured warm on 2026-10-05 took
+ * 50,000 ms; this bound leaves 40,000 ms for host contention without changing inspection budgets.
+ *
+ * @example
+ * ```ts
+ * PROBE_WARM // 90_000
+ * ```
+ */
+export const PROBE_WARM = 90_000
+
+/**
  * Bounds consecutive failed warms or idle losses before a stage's floor is spent.
  *
  * @example

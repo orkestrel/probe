@@ -25,6 +25,7 @@ import { createTimeout } from '@orkestrel/timeout'
 import {
 	PROBE_DEADLINE,
 	PROBE_RESTARTS,
+	PROBE_WARM,
 	ProbeError,
 	computeReceipt,
 	createDestroyedError,
@@ -49,7 +50,8 @@ import { TypeStage } from './stages/TypeStage.js'
  * Answers claims through its type, lint, and runtime stages.
  *
  * @remarks
- * Construction resolves the target workspace's toolchain. Starting warms every stage. The boot
+ * Construction resolves the target workspace's toolchain. Starting warms every stage and waits
+ * for lint and runtime; type warming and the boot controls continue behind that gate. The boot
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
  * report their respective changes. One pool per stage admits inspections in arrival order, one at
  * a time, so a stage never serves two claims at once and the deadline covers active work rather
@@ -103,6 +105,7 @@ import { TypeStage } from './stages/TypeStage.js'
 export class Probe implements ProbeInterface {
 	readonly #workspace: string
 	readonly #deadline: number
+	readonly #warmth: number
 	readonly #emitter: Emitter<ProbeEventMap>
 	readonly #toolchain: Toolchain
 	readonly #type: PoolInterface<TypeStage>
@@ -113,6 +116,7 @@ export class Probe implements ProbeInterface {
 	readonly #survivors = new Map<StageInterface, unknown>()
 	readonly #abort = new AbortController()
 	#arming: Promise<void> | undefined
+	#refusal: { readonly cause: unknown } | undefined
 	#starting: Promise<void> | undefined
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before
 	// anything it starts can suspend, so every later read of `#closing !== undefined` answers the
@@ -122,11 +126,12 @@ export class Probe implements ProbeInterface {
 	/**
 	 * Resolves the target toolchain and constructs the stage pools without warming them.
 	 *
-	 * @param options - Workspace, deadline, and initial observation hooks
+	 * @param options - Workspace, inspection and warm bounds, and initial observation hooks
 	 */
 	constructor(options?: ProbeOptions) {
 		this.#workspace = options?.workspace ?? process.cwd()
 		this.#deadline = createTimeout({ ms: options?.deadline ?? PROBE_DEADLINE }).ms
+		this.#warmth = createTimeout({ ms: options?.warm ?? PROBE_WARM }).ms
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
@@ -173,6 +178,15 @@ export class Probe implements ProbeInterface {
 			this.#support()
 			this.#admit(claim)
 			await this.start()
+			const arming = this.#arming
+			try {
+				await arming
+			} catch (error) {
+				if (this.#arming === arming) this.#arming = undefined
+				const refusal = this.#refusal
+				this.#refusal = undefined
+				throw refusal === undefined ? error : refusal.cause
+			}
 			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			const started = performance.now()
 			const id = randomUUID()
@@ -217,10 +231,12 @@ export class Probe implements ProbeInterface {
 
 	start(): Promise<void> {
 		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('probe'))
-		const filling = Promise.all([this.#type.start(), this.#lint.start(), this.#runtime.start()])
+		const warming = this.#type.start()
+		void warming.catch(() => {})
+		const filling = Promise.all([this.#lint.start(), this.#runtime.start()])
 		void filling.catch(() => {})
 		if (this.#starting !== undefined) return this.#starting
-		this.#starting = this.#start(filling)
+		this.#starting = this.#start(filling, warming)
 		void this.#starting.then(
 			() => {
 				this.#starting = undefined
@@ -232,28 +248,11 @@ export class Probe implements ProbeInterface {
 		return this.#starting
 	}
 
-	async #start(filling: Promise<readonly void[]>): Promise<void> {
-		if (this.#arming === undefined) {
-			this.#arming = this.#arm(filling)
-			void this.#arming.catch(() => {
-				this.#arming = undefined
-			})
-		} else {
-			try {
-				await filling
-			} catch (error) {
-				throw this.#refuseArm(error)
-			}
-		}
-		await this.#arming
-		if (this.#closing !== undefined) throw createDestroyedError('probe')
-	}
-
-	async #arm(filling: Promise<readonly void[]>): Promise<void> {
-		let created: boolean
+	async #start(filling: Promise<readonly void[]>, warming: Promise<void>): Promise<void> {
+		let created = false
 		try {
 			this.#support()
-			created = this.#workbench()
+			if (this.#arming === undefined) created = this.#workbench()
 		} catch (error) {
 			// The workbench refusal names the boot in its own message and reports the target tree's
 			// fault, so it surfaces and rejects unchanged. Rewrapping it here would report a
@@ -263,6 +262,28 @@ export class Probe implements ProbeInterface {
 		}
 		try {
 			await filling
+			if (this.#closing !== undefined) throw createDestroyedError('probe')
+		} catch (error) {
+			throw this.#refuseArm(error)
+		}
+		if (this.#arming === undefined) {
+			this.#arming = this.#arm(warming, created)
+			void this.#arming.catch(() => {
+				if (this.#refusal === undefined) this.#arming = undefined
+			})
+		}
+	}
+
+	async #arm(warming: Promise<void>, created: boolean): Promise<void> {
+		try {
+			await warming
+		} catch (error) {
+			if (this.#closing !== undefined) throw createDestroyedError('probe')
+			const cause = this.#refusal?.cause ?? (isPoolError(error) ? error.cause : error)
+			this.#surface(cause)
+			throw cause
+		}
+		try {
 			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			await this.#boot(created)
 		} catch (error) {
@@ -497,8 +518,9 @@ export class Probe implements ProbeInterface {
 		message: string,
 		stage: StageInterface,
 		progress: number,
+		ms = this.#deadline,
 	): Promise<T> {
-		const timeout = createTimeout({ ms: this.#deadline })
+		const timeout = createTimeout({ ms })
 		timeout.start()
 		const expiry = this.#expiry(timeout, message, stage, progress)
 		const refusal = expiry.catch((error: unknown) => error)
@@ -514,6 +536,13 @@ export class Probe implements ProbeInterface {
 
 	async #resolve(claim: Claim): Promise<Project> {
 		const token = await this.#lease(this.#type)
+		// A replacement can fail while acquisition waits, even after the original boot completed.
+		if (this.#refusal !== undefined) {
+			const refusal = this.#refusal
+			this.#refusal = undefined
+			token.release()
+			throw refusal.cause
+		}
 		const stage = token.value
 		return this.#inspectStage(
 			token,
@@ -546,6 +575,7 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #warm<T extends StageInterface>(stage: T): Promise<T> {
+		const bound = stage.stage === 'type' ? this.#warmth : this.#deadline
 		const aborted = Promise.withResolvers<never>()
 		// A create admitted before teardown can refuse before entering the race.
 		void aborted.promise.catch(() => {})
@@ -556,12 +586,14 @@ export class Probe implements ProbeInterface {
 			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			await this.#bound(
 				() => Promise.race([stage.start(), aborted.promise]),
-				`The ${stage.stage} stage warm exceeded ${this.#deadline} ms`,
+				`The ${stage.stage} stage warm exceeded ${bound} ms`,
 				stage,
 				stage.progress,
+				bound,
 			)
 			return stage
 		} catch (error) {
+			if (stage.stage === 'type' && this.#closing === undefined) this.#refusal ??= { cause: error }
 			try {
 				await this.#dispose(stage)
 			} catch (failure) {
@@ -626,7 +658,7 @@ export class Probe implements ProbeInterface {
 					const error = new ProbeError(message, {
 						origin: stage.progress > progress ? 'claimant' : 'instrument',
 						code: 'deadline',
-						context: { stage: stage.stage, deadline: this.#deadline },
+						context: { stage: stage.stage, deadline: timeout.ms },
 					})
 					this.#deadlines.add(error)
 					reject(error)

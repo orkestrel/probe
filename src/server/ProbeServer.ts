@@ -81,11 +81,13 @@ export class ProbeServer implements ProbeServerInterface {
 	constructor(options?: ProbeOptions) {
 		const workspace = options?.workspace
 		const deadline = options?.deadline
+		const warm = options?.warm
 		const on = options?.on
 		const error = options?.error
 		this.#options = Object.freeze({
 			workspace: resolve(workspace ?? process.cwd()),
 			...(deadline === undefined ? {} : { deadline }),
+			...(warm === undefined ? {} : { warm }),
 			...(on === undefined ? {} : { on: Object.freeze({ ...on }) }),
 			...(error === undefined ? {} : { error }),
 		})

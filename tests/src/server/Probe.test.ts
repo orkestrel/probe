@@ -1,4 +1,5 @@
 import type { Check, Claim, Draft, ProbeEventMap, Toolchain, Verdict } from '@src/core'
+import type { Socket } from 'node:net'
 import {
 	closeSync,
 	constants,
@@ -14,6 +15,7 @@ import {
 } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -39,6 +41,270 @@ import { WORKSPACE_ROOT } from '../../setup.js'
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 describe.sequential('stage pools', () => {
+	it('validates the type warm bound like the inspection deadline', () => {
+		expect(() => new Probe({ workspace: ROOT, warm: -1 })).toThrow(/ms/u)
+		expect(() => new Probe({ workspace: ROOT, warm: NaN })).toThrow(/ms/u)
+		expect(() => new Probe({ workspace: ROOT, warm: Infinity })).toThrow(/ms/u)
+	})
+	it(
+		'waits for a type warm beyond the inspection deadline and then proves',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			// These lifecycle claims need scalar types; library declaration checking is unrelated work.
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
+			)
+			const connected = Promise.withResolvers<Socket>()
+			const gate = createServer((socket) => {
+				socket.on('error', () => {})
+				connected.resolve(socket)
+			})
+			await new Promise<void>((ready) => gate.listen(0, '127.0.0.1', ready))
+			const address = gate.address()
+			if (address === null || typeof address === 'string') throw new Error('Missing gate port')
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"held.cjs"}}',
+			)
+			scratch.write(
+				'node_modules/typescript/held.cjs',
+				`const fs = require('node:fs')
+const released = ${JSON.stringify(resolve(scratch.path, 'released'))}
+if (fs.existsSync(released)) require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
+else {
+	const socket = require('node:net').connect(${address.port}, '127.0.0.1')
+	socket.once('data', () => {
+		fs.writeFileSync(released, '')
+		socket.end()
+		require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
+	})
+}
+`,
+			)
+			const probe = new Probe({ workspace: scratch.path, deadline: 3_000, warm: 12_000 })
+			const settled = createRecorder<[unknown]>()
+			try {
+				await probe.start()
+				const socket = await connected.promise
+				const proof = probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probes/warm.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probes/warm.test.ts',
+							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						},
+						stage: 'runtime',
+						reason: 'the control throws',
+					},
+				})
+				void proof.then(settled.handler, settled.handler)
+				await waitForDelay(3_200)
+				expect(settled.count).toBe(0)
+				socket.write('release')
+				expect(await proof).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				await new Promise<void>((closed) => gate.close(() => closed()))
+				scratch.destroy()
+			}
+		},
+	)
+	it(
+		'retains a failed type warm for the next prove and recovers after replacement',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			// These lifecycle claims need scalar types; library declaration checking is unrelated work.
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
+			)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"absent.cjs"}}',
+			)
+			const failed = Promise.withResolvers<unknown>()
+			const probe = new Probe({ workspace: scratch.path, on: { error: failed.resolve } })
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
+			try {
+				await probe.start()
+				const refusal = await failed.promise
+				scratch.remove('node_modules/typescript')
+				scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+				await expect(probe.prove(claim)).rejects.toBe(refusal)
+				expect(refusal).toMatchObject({ name: 'ProbeError' })
+				expect(String(refusal)).not.toContain('pool ')
+				expect(String(refusal)).not.toContain('could not arm')
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	it(
+		'bounds a type warm, spends replacements, and recovers for a later prove',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			// These lifecycle claims need scalar types; library declaration checking is unrelated work.
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
+			)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"held.cjs"}}',
+			)
+			scratch.write(
+				'node_modules/typescript/held.cjs',
+				`require('node:fs').appendFileSync(${JSON.stringify(resolve(scratch.path, 'warms'))}, 'warm\\n'); setInterval(() => {}, 1000)\n`,
+			)
+			const failed = Promise.withResolvers<unknown>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				warm: 3_000,
+				on: { error: failed.resolve },
+			})
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
+			try {
+				await probe.start()
+				const refusal = await Promise.race([failed.promise, waitForDelay(8_000)])
+				expect(
+					scratch
+						.read('warms')
+						?.split(/\r\n|\n/u)
+						.filter(Boolean),
+				).toHaveLength(PROBE_RESTARTS + 1)
+				expect(refusal).toMatchObject({
+					code: 'deadline',
+					context: { stage: 'type', deadline: 3_000 },
+				})
+				scratch.remove('node_modules/typescript')
+				scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
+				await expect(probe.prove(claim)).rejects.toBe(refusal)
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	it(
+		'reports a failed type warm even when its automatic replacement has armed',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			// These lifecycle claims need scalar types; library declaration checking is unrelated work.
+			scratch.write(
+				'tsconfig.json',
+				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
+			)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"first.cjs"}}',
+			)
+			scratch.write(
+				'node_modules/typescript/first.cjs',
+				`const fs = require('node:fs')
+const failed = ${JSON.stringify(resolve(scratch.path, 'failed'))}
+if (!fs.existsSync(failed)) {
+	fs.writeFileSync(failed, '')
+	process.stderr.write('type warm refused')
+	process.exit(1)
+}
+require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
+`,
+			)
+			const armed = Promise.withResolvers<void>()
+			const probe = new Probe({ workspace: scratch.path, on: { arm: () => armed.resolve() } })
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/replacement.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
+			try {
+				await probe.start()
+				await armed.promise
+				await expect(probe.prove(claim)).rejects.toMatchObject({
+					name: 'ProbeError',
+					message: 'The compiler printed no configuration',
+				})
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
 	// One boot, two 15 s bounds (inspection and cleanup), and a replacement proof fit in 60 s.
 	it(
 		'serves a claim after abandoning a runtime cleanup blocked by a FIFO',
@@ -121,7 +387,16 @@ describe.sequential('stage pools', () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
 			const arms = createRecorder<[Toolchain]>()
-			const probe = new Probe({ workspace: scratch.path, on: { arm: arms.handler } })
+			const armed = Promise.withResolvers<void>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				on: {
+					arm: (toolchain) => {
+						arms.handler(toolchain)
+						armed.resolve()
+					},
+				},
+			})
 			try {
 				await waitForDelay()
 				expect(scratch.has('server.pid')).toBe(false)
@@ -129,6 +404,8 @@ describe.sequential('stage pools', () => {
 				const starting = probe.start()
 				expect(probe.start()).toBe(starting)
 				await starting
+				// T1 separates the onset gate from the full boot's arm event.
+				await armed.promise
 				expect(arms.count).toBe(1)
 				await probe.destroy()
 				await expect(probe.start()).rejects.toMatchObject({ code: 'destroyed' })
@@ -257,6 +534,7 @@ describe.sequential('stage pools', () => {
 			})
 			try {
 				await probe.start()
+				await new Promise<void>((armed) => probe.emitter.on('arm', () => armed()))
 				// Boot used and released this lint record. A warm failure adds the second strike only
 				// when the prior idle loss strikes too, distinguishing pool 0.0.15 from 0.0.16.
 				scratch.write('unanswered-initialize', '')
@@ -382,7 +660,7 @@ describe.sequential('stage pools', () => {
 		const errors = createRecorder<[unknown]>()
 		const probe = new Probe({ workspace: scratch.path, on: { error: errors.handler } })
 		try {
-			const starting = probe.start().catch((error: unknown) => error)
+			await probe.start()
 			await waitForCondition(
 				'type warm child',
 				() =>
@@ -394,7 +672,7 @@ describe.sequential('stage pools', () => {
 			await probe.destroy()
 			// Native tree termination and Vitest close took under 2 s in U1, well inside 30 s.
 			expect(performance.now() - began).toBeLessThan(5_000)
-			expect(await starting).toMatchObject({ code: 'destroyed' })
+			await expect(probe.start()).rejects.toMatchObject({ code: 'destroyed' })
 			expect(errors.count).toBe(0)
 			expect(scratch.names(TYPE_MIRROR)).toHaveLength(0)
 			expect(
