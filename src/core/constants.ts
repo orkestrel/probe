@@ -98,6 +98,16 @@ export const RECEIPT_SEPARATOR = ':'
 export const PROBE_DEADLINE = 30_000
 
 /**
+ * Bounds consecutive failed warms or idle losses before a stage's floor is spent.
+ *
+ * @example
+ * ```ts
+ * PROBE_RESTARTS // 1
+ * ```
+ */
+export const PROBE_RESTARTS = 1
+
+/**
  * Names the 2,000 ms bound the lint stage holds over the lifecycle exchanges the protocol leaves
  * to the server: the `initialize` reply warming waits for and the `shutdown` reply ending waits for.
  *

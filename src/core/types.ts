@@ -405,15 +405,15 @@ export interface Verdict {
  * ```
  */
 export type ProbeEventMap = {
-	/** Fires when the boot control has reported red and the instrument has begun answering calls. */
+	/** Fires after `start()` completes the boot controls and the instrument can answer calls. */
 	readonly arm: readonly [toolchain: Toolchain]
 	/** Fires when a claim is answered. */
 	readonly prove: readonly [verdict: Verdict]
-	/** Fires after the coordinator's deadline fired at one stage and that stage was replaced. */
+	/** Fires after an expired stage's lease is destroyed; its pool restores the floor. */
 	readonly expire: readonly [claim: Claim]
 	/**
 	 * Fires when a fault surfaces for observation, once per fault, including a rejected arming
-	 * attempt.
+	 * attempt or a lint loss the pool observed.
 	 */
 	readonly error: readonly [error: unknown]
 }
@@ -454,8 +454,7 @@ export interface ProbeOptions {
  * Answers a claim with type, lint, and runtime evidence in one call.
  *
  * @remarks
- * Warming begins at construction and `prove` awaits it, so there is no `start`: the harness owns
- * the process and a restart is a new process rather than a second lifecycle.
+ * Warming begins at `start()`, which `prove` calls before inspecting its claim.
  *
  * `prove` re-reads the target workspace before it answers, so a file edited since the last call is
  * judged as it stands on disk rather than as a warm service remembers it. Each stage keys that
@@ -475,7 +474,21 @@ export interface ProbeInterface {
 	/** Names the tool versions resolved from the workspace at construction. */
 	readonly toolchain: Toolchain
 	/**
-	 * Answers one claim with every stage's evidence.
+	 * Fills every stage's floor and runs the boot controls.
+	 *
+	 * @remarks Joins an attempt in flight and begins one replacement after a refused boot.
+	 * A successful boot is retained while each call restores any spent stage floor.
+	 * @returns A promise that resolves when every stage can serve
+	 * @throws A `ProbeError` when arming fails, or coded `destroyed` after teardown begins
+	 *
+	 * @example
+	 * ```ts
+	 * await probe.start()
+	 * ```
+	 */
+	start(): Promise<void>
+	/**
+	 * Answers one claim with every stage's evidence after calling `start()`.
 	 *
 	 * @remarks
 	 * A control carrying the case's files and the case's test byte for byte is refused at admission,

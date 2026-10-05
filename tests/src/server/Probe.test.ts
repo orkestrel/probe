@@ -20,12 +20,394 @@ import { createRecorder, createTeardown, waitForCondition, waitForDelay } from '
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
-import { PROBE_DEADLINE, matchesSpecification } from '@src/core'
+import {
+	PROBE_DEADLINE,
+	PROBE_RESTARTS,
+	TYPE_MIRROR,
+	isProbeError,
+	matchesSpecification,
+} from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createLintFixture } from '../../setupServer.js'
+import {
+	createLintFixture,
+	killFixtureServer,
+	readFixtureServer,
+	writeProbeFixture,
+} from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
+
+describe.sequential('stage pools', () => {
+	// One boot, two 15 s bounds (inspection and cleanup), and a replacement proof fit in 60 s.
+	it(
+		'serves a claim after abandoning a runtime cleanup blocked by a FIFO',
+		{ timeout: 60_000 },
+		async (context) => {
+			const scratch = createScratch()
+			let probe: Probe | undefined
+			let proof: Promise<unknown> | undefined
+			const gate = resolve(scratch.path, 'runtime-gate')
+			try {
+				const fifo = spawnSync('mkfifo', [gate])
+				context.skip(
+					fifo.status !== 0 || !existsSync(gate) || !lstatSync(gate).isFIFO(),
+					'this host cannot create the POSIX FIFO needed to hold vitest.close beyond the deadline',
+				)
+				writeProbeFixture(scratch, ROOT)
+				scratch.link('node_modules/@types', resolve(ROOT, 'node_modules/@types'))
+				scratch.write(
+					'tsconfig.json',
+					'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["node"]}}\n',
+				)
+				probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
+				await probe.start()
+				const claim: Claim = {
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probes/after-expiry.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probes/after-expiry.test.ts',
+							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						},
+						stage: 'runtime',
+						reason: 'the control throws',
+					},
+				}
+				proof = probe
+					.prove({
+						...claim,
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probes/expiry.test.ts',
+								text: "import { readFileSync, writeFileSync } from 'node:fs'\nimport { test } from 'vitest'\ntest('blocks', { timeout: 60_000 }, () => { writeFileSync('runtime-ready', ''); readFileSync('runtime-gate') })\n",
+							},
+						},
+					})
+					.catch((error: unknown) => error)
+				await waitForCondition('runtime FIFO inspection', () => scratch.has('runtime-ready'), {
+					budget: 5_000,
+				})
+				expect(await proof).toMatchObject({ code: 'deadline', context: { stage: 'runtime' } })
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				let descriptor: number | undefined
+				try {
+					descriptor = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK)
+					writeSync(descriptor, 'release')
+				} catch {
+				} finally {
+					if (descriptor !== undefined) closeSync(descriptor)
+				}
+				await proof
+				await probe?.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	// U1's fixture boot took about 6 s; this case includes its teardown.
+	it(
+		'defers construction, joins onset, and refuses start after teardown',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const arms = createRecorder<[Toolchain]>()
+			const probe = new Probe({ workspace: scratch.path, on: { arm: arms.handler } })
+			try {
+				await waitForDelay()
+				expect(scratch.has('server.pid')).toBe(false)
+				expect(scratch.has(TYPE_MIRROR)).toBe(false)
+				const starting = probe.start()
+				expect(probe.start()).toBe(starting)
+				await starting
+				expect(arms.count).toBe(1)
+				await probe.destroy()
+				await expect(probe.start()).rejects.toMatchObject({ code: 'destroyed' })
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	// The half-second coordinator deadline precedes LSP's own two-second initialize bound.
+	it(
+		'spends silent initializes through the coordinator deadline',
+		{ timeout: 10_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			scratch.write('silent-initialize', '')
+			const probe = new Probe({ workspace: scratch.path, deadline: 500 })
+			try {
+				const refused = probe.start().catch((error: unknown) => error)
+				await waitForCondition(
+					'the bounded lint warm replacement',
+					() =>
+						(scratch
+							.read('spawns')
+							?.split(/\r\n|\n/u)
+							.filter(Boolean).length ?? 0) ===
+						PROBE_RESTARTS + 1,
+					{ budget: 3_000 },
+				)
+				expect(await refused).toMatchObject({
+					name: 'ProbeError',
+					cause: expect.objectContaining({ code: 'deadline' }),
+				})
+			} finally {
+				await probe.destroy()
+				// The coordinator abandons cleanup after 500 ms; await the fixture's own children
+				// before removing their working directory, inside LSP's lifecycle bound.
+				await waitForCondition(
+					'abandoned lint children to exit',
+					() =>
+						(
+							scratch
+								.read('spawns')
+								?.split(/\r\n|\n/u)
+								.filter(Boolean) ?? []
+						).every((pid) => {
+							try {
+								process.kill(Number(pid), 0)
+								return false
+							} catch {
+								return true
+							}
+						}),
+					{ budget: 3_000 },
+				)
+				scratch.destroy()
+			}
+		},
+	)
+	// The boot and subsequent real compiler/runtime inspections each carry their measured cost.
+	it(
+		'recovers an idle lint exit and serves after an exit during a claim',
+		{ timeout: 30_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const errors = createRecorder<[unknown]>()
+			const probe = new Probe({ workspace: scratch.path, on: { error: errors.handler } })
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/recovery.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/recovery.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
+			try {
+				await probe.start()
+				const first = readFixtureServer(scratch)
+				killFixtureServer(scratch)
+				// A fixture launch is under 250 ms in U1; this window also clears host kill delivery.
+				await waitForCondition(
+					'idle lint replacement',
+					() => readFixtureServer(scratch) !== first,
+					{ budget: 3_000 },
+				)
+				expect(errors.count).toBe(1)
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+				scratch.write('frail', '')
+				await expect(probe.prove(claim)).rejects.toMatchObject({
+					origin: 'instrument',
+					message: 'The Oxlint language server exited with code 7',
+				})
+				scratch.remove('frail')
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	// One boot, an exit, and a replacement warm fit inside this case's bound.
+	it(
+		'spends the floor on used idle loss and restores it through start without a failed claim',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			const errors = createRecorder<[unknown]>()
+			const arms = createRecorder<[Toolchain]>()
+			const probe = new Probe({
+				workspace: scratch.path,
+				on: { error: errors.handler, arm: arms.handler },
+			})
+			try {
+				await probe.start()
+				// Boot used and released this lint record. A warm failure adds the second strike only
+				// when the prior idle loss strikes too, distinguishing pool 0.0.15 from 0.0.16.
+				scratch.write('unanswered-initialize', '')
+				killFixtureServer(scratch)
+				await waitForCondition('failed replacement initialize', () => scratch.has('initialized'), {
+					budget: 3_000,
+				})
+				const failed = readFixtureServer(scratch)
+				await waitForCondition(
+					'failed replacement exit',
+					() => {
+						try {
+							process.kill(failed, 0)
+							return false
+						} catch {
+							return true
+						}
+					},
+					{ budget: 3_000 },
+				)
+				// The refusal settles at the child's exit; one host turn delivers it to the pool.
+				await waitForDelay(50)
+				expect(
+					scratch
+						.read('spawns')
+						?.split(/\r\n|\n/u)
+						.filter(Boolean),
+				).toHaveLength(PROBE_RESTARTS + 1)
+				scratch.remove('unanswered-initialize')
+				await probe.start()
+				expect(readFixtureServer(scratch)).not.toBe(failed)
+				expect(arms.count).toBe(1)
+				expect(
+					await probe.prove({
+						project: 'tsconfig.json',
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probes/restored.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+						},
+						control: {
+							files: [],
+							test: {
+								path: 'tmp/probes/restored.test.ts',
+								text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+							},
+							stage: 'runtime',
+							reason: 'the control throws',
+						},
+					}),
+				).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	// The failed initializes precede one complete real boot after the repair.
+	it(
+		'spends failed warms, unwraps their refusal, and rearms after repair',
+		{ timeout: 20_000 },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			scratch.write('unanswered-initialize', '')
+			const probe = new Probe({ workspace: scratch.path })
+			try {
+				const refusal = await probe.start().catch((error: unknown) => error)
+				expect(isProbeError(refusal)).toBe(true)
+				if (!isProbeError(refusal)) throw new Error('Expected the probe refusal')
+				expect(refusal.message).toContain('The probe could not arm:')
+				expect(refusal.message).not.toContain('pool ')
+				expect(isProbeError(refusal.cause)).toBe(true)
+				expect(
+					scratch
+						.read('spawns')
+						?.split(/\r\n|\n/u)
+						.filter(Boolean),
+				).toHaveLength(PROBE_RESTARTS + 1)
+				scratch.remove('unanswered-initialize')
+				expect(
+					await probe.prove({
+						project: 'tsconfig.json',
+						case: {
+							files: [],
+							test: {
+								path: 'tmp/probes/rearmed.test.ts',
+								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+							},
+						},
+						control: {
+							files: [],
+							test: {
+								path: 'tmp/probes/rearmed.test.ts',
+								text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+							},
+							stage: 'runtime',
+							reason: 'the control throws',
+						},
+					}),
+				).toHaveProperty('receipt')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+	it('cuts a warm on teardown without surfacing an arm refusal', async () => {
+		const scratch = createScratch()
+		writeProbeFixture(scratch, ROOT)
+		// A real compiler entry that announces its blocked warm; teardown must terminate it.
+		scratch.remove('node_modules/typescript')
+		scratch.write(
+			'node_modules/typescript/package.json',
+			'{"name":"typescript","version":"6.0.3","bin":{"tsc":"held.cjs"}}',
+		)
+		scratch.write(
+			'node_modules/typescript/held.cjs',
+			"require('node:fs').writeFileSync('warming', ''); setInterval(() => {}, 1000)\n",
+		)
+		const errors = createRecorder<[unknown]>()
+		const probe = new Probe({ workspace: scratch.path, on: { error: errors.handler } })
+		try {
+			const starting = probe.start().catch((error: unknown) => error)
+			await waitForCondition(
+				'type warm child',
+				() =>
+					scratch.has(TYPE_MIRROR) &&
+					scratch.names(TYPE_MIRROR).some((name) => scratch.has(`${TYPE_MIRROR}/${name}/warming`)),
+				{ budget: 3_000 },
+			)
+			const began = performance.now()
+			await probe.destroy()
+			// Native tree termination and Vitest close took under 2 s in U1, well inside 30 s.
+			expect(performance.now() - began).toBeLessThan(5_000)
+			expect(await starting).toMatchObject({ code: 'destroyed' })
+			expect(errors.count).toBe(0)
+			expect(scratch.names(TYPE_MIRROR)).toHaveLength(0)
+			expect(
+				scratch.has('tmp/probes')
+					? scratch.names('tmp/probes').filter((name) => name.startsWith('arm-'))
+					: [],
+			).toHaveLength(0)
+		} finally {
+			await probe.destroy()
+			scratch.destroy()
+		}
+	})
+})
 
 // The Oxlint language server every claim here is answered by. Its own exit budget sits above the
 // longest row's timeout, so a row reads the ending it drove rather than the server leaving on its
@@ -92,6 +474,7 @@ describe.sequential('probe', () => {
 		{ timeout: 120_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			const test = {
 				path: 'tmp/probes/probe-receipt.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n",
@@ -239,6 +622,7 @@ describe.sequential('probe', () => {
 				message: expect.stringContaining('The probe could not arm'),
 			}
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			try {
 				await expect(
 					probe.prove({
@@ -333,6 +717,7 @@ describe.sequential('probe', () => {
 		{ timeout: 60_000 },
 		async () => {
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			const test = {
 				path: 'tmp/probes/probe-elapsed.test.ts',
 				text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
@@ -380,6 +765,7 @@ describe.sequential('probe', () => {
 
 	it('carries the installed toolchain on every verdict', { timeout: 60_000 }, async () => {
 		const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+		void probe.start().catch(() => {})
 		try {
 			const verdict = await probe.prove({
 				project: 'configs/src/tsconfig.core.json',
@@ -433,6 +819,7 @@ describe.sequential('probe', () => {
 			// with nowhere to write.
 			writeFileSync(blocker, '', 'utf8')
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			try {
 				const verdict = await probe.prove({
 					project: 'configs/src/tsconfig.core.json',
@@ -504,6 +891,7 @@ describe.sequential('probe', () => {
 			scratch.write('tmp/probes', '')
 			const failures = createRecorder<[unknown]>()
 			const probe = new Probe({ workspace: scratch.path, on: { error: failures.handler } })
+			void probe.start().catch(() => {})
 			try {
 				// The workbench runs before the boot controls and rejects the arming attempt on its own,
 				// so this refusal reaches a host only if it takes the same surfacing path a boot expiry
@@ -588,6 +976,7 @@ describe.sequential('probe', () => {
 		)
 		scratch.write('node_modules/vitest/node.js', 'export const createVitest = undefined\n')
 		const probe = new Probe({ workspace: scratch.path })
+		void probe.start().catch(() => {})
 		try {
 			await expect(
 				probe.prove({
@@ -631,6 +1020,7 @@ describe.sequential('probe', () => {
 			const inherited = process.exitCode
 			process.exitCode = undefined
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			const claim: Claim = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
@@ -687,6 +1077,7 @@ describe.sequential('probe', () => {
 				deadline: PROBE_DEADLINE,
 				on: { expire: expirations.handler, error: failures.handler },
 			})
+			void probe.start().catch(() => {})
 			const hanging: Claim = {
 				project: 'configs/src/tsconfig.core.json',
 				case: {
@@ -775,6 +1166,7 @@ describe.sequential('probe', () => {
 			deadline: 20_000,
 			on: { expire: expirations.handler },
 		})
+		void probe.start().catch(() => {})
 		const test = {
 			path: 'tmp/probes/heavy-type.test.ts',
 			text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -858,6 +1250,7 @@ describe.sequential('probe', () => {
 				deadline: 15_000,
 				on: { expire: expirations.handler },
 			})
+			void probe.start().catch(() => {})
 			const test = {
 				path: 'tmp/probes/project-deadline.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -979,6 +1372,7 @@ describe.sequential('probe', () => {
 			scratch.write(projectA, project)
 			scratch.write(projectB, '{"compilerOptions" {"strict":true}}\n')
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			const test = {
 				path: 'tmp/probes/project-serialization.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1073,6 +1467,7 @@ describe.sequential('probe', () => {
 		// 15_000 ms clears the stalled lint stage's expiry on a contended host, which a saturated
 		// host on 2026-09-06 showed 6_000 ms did not.
 		const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
+		void probe.start().catch(() => {})
 		try {
 			// Boot runs its own lint control, and a boot timeout carries the identical message a
 			// stage timeout carries. Waiting for `arm` is what stops this proof accepting a
@@ -1194,6 +1589,7 @@ describe.sequential('probe', () => {
 				deadline: 15_000,
 				on: { arm: armings.handler },
 			})
+			void probe.start().catch(() => {})
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
@@ -1277,6 +1673,7 @@ describe.sequential('probe', () => {
 			)
 			const directory = resolve(scratch.path, 'tmp/probes')
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			let observed: readonly string[] = []
 			try {
 				await waitForCondition(
@@ -1366,6 +1763,7 @@ describe.sequential('probe', () => {
 				},
 			}
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			try {
 				const verdict = await probe.prove(claim)
 				expect(verdict.case.flatMap((check) => check.issues)).toEqual([
@@ -1403,6 +1801,7 @@ describe.sequential('probe', () => {
 				deadline: 60_000,
 				on: { error: failures.handler },
 			})
+			void probe.start().catch(() => {})
 			try {
 				// The constructor's attempt rejects with no claim in flight and no `arm` event to
 				// come. A host that waits for `arm` waits forever unless the rejection reaches the
@@ -1477,6 +1876,7 @@ describe.sequential('probe', () => {
 			deadline: 60_000,
 			on: { error: failures.handler },
 		})
+		void probe.start().catch(() => {})
 		try {
 			await expect(
 				probe.prove({
@@ -1522,6 +1922,7 @@ describe.sequential('probe', () => {
 				deadline: 60_000,
 				on: { error: failures.handler },
 			})
+			void probe.start().catch(() => {})
 			await Promise.all([probe.destroy(), probe.destroy()])
 			// The reading taken here is this row's own control: it is what a later reading is compared
 			// against, so a listener that fired before teardown cannot pass for one teardown released.
@@ -1593,6 +1994,7 @@ describe.sequential('probe', () => {
 			// 15_000 ms clears the parked FIFO teardown's warm on a contended host, which a saturated
 			// host on 2026-09-06 showed 6_000 ms did not.
 			const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
+			void probe.start().catch(() => {})
 			let closing: Promise<void> | undefined
 			const claim: Claim = {
 				project: 'tsconfig.json',
@@ -1689,6 +2091,7 @@ describe.sequential('probe', () => {
 					error: failures.handler,
 				},
 			})
+			void probe.start().catch(() => {})
 			const passing = {
 				path: 'tmp/probes/order.test.ts',
 				text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
@@ -1810,6 +2213,7 @@ describe.sequential('probe', () => {
 				},
 			}
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			try {
 				const honest = await probe.prove(claim)
 				const chosen = await probe.prove({ ...claim, project: lax })
@@ -1883,6 +2287,7 @@ describe.sequential('probe', () => {
 				},
 			}
 			const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+			void probe.start().catch(() => {})
 			try {
 				const forged = await probe.prove(claim)
 				const workspace = await probe.prove({
@@ -1935,6 +2340,7 @@ describe.sequential('probe', () => {
 			},
 		})
 		const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+		void probe.start().catch(() => {})
 		try {
 			const first = await probe.prove(
 				claim("export function value(): string {\n\treturn 'first'\n}\n"),
@@ -2019,6 +2425,7 @@ describe.sequential('probe', () => {
 			'utf8',
 		)
 		const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
+		void probe.start().catch(() => {})
 		try {
 			const local = await probe.prove(claim)
 			const child = spawnSync(

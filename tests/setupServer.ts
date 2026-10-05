@@ -471,6 +471,7 @@ export function createLintFixture(options?: LintFixtureOptions): LintFixture {
 		'let deferred',
 		'let open = 0',
 		"writeFileSync('server.pid', String(process.pid))",
+		"appendFileSync('spawns', String(process.pid) + '\\n')",
 		`setTimeout(() => process.exit(0), ${options?.budget ?? 60_000})`,
 		'function send(message) {',
 		'\tconst content = JSON.stringify(message)',
@@ -582,6 +583,29 @@ export function readFixtureServer(scratch: ScratchInterface): number {
 	const announced = scratch.read('server.pid')
 	if (announced === undefined) throw new Error('The fixture server never announced its process id')
 	return Number.parseInt(announced, 10)
+}
+
+/**
+ * Writes a probe workspace with a protocol fixture and real compiler and runtime installations.
+ *
+ * @param scratch - The owned workspace
+ * @param root - The checkout carrying the real toolchain
+ * @returns Nothing
+ */
+export function writeProbeFixture(scratch: ScratchInterface, root: string): void {
+	for (const [path, text] of Object.entries(createLintFixture({ budget: 60_000 }).files)) {
+		scratch.write(path, text)
+	}
+	scratch.link('node_modules/typescript', resolve(root, 'node_modules/typescript'))
+	scratch.link('node_modules/vitest', resolve(root, 'node_modules/vitest'))
+	scratch.write(
+		'tsconfig.json',
+		'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[]}}\n',
+	)
+	scratch.write(
+		'vite.config.ts',
+		"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
+	)
 }
 
 /**

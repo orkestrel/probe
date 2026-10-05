@@ -10,7 +10,7 @@ import type {
 	Verdict,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { QueueInterface } from '@orkestrel/queue'
+import type { PoolInterface, PoolToken } from '@orkestrel/pool'
 import type { TimeoutInterface } from '@orkestrel/timeout'
 import type { Inspection, StageInterface } from './types.js'
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -18,10 +18,13 @@ import { randomUUID } from 'node:crypto'
 import { basename, relative } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
 import { isString } from '@orkestrel/contract'
-import { createQueue } from '@orkestrel/queue'
+import { createPool, isPoolError } from '@orkestrel/pool'
+import { isLSPError } from '@orkestrel/lsp'
+import { addAbortListener } from 'node:events'
 import { createTimeout } from '@orkestrel/timeout'
 import {
 	PROBE_DEADLINE,
+	PROBE_RESTARTS,
 	ProbeError,
 	computeReceipt,
 	createDestroyedError,
@@ -46,9 +49,9 @@ import { TypeStage } from './stages/TypeStage.js'
  * Answers claims through its type, lint, and runtime stages.
  *
  * @remarks
- * Construction resolves the target workspace's toolchain and begins warming every stage. The boot
+ * Construction resolves the target workspace's toolchain. Starting warms every stage. The boot
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
- * report their respective changes. One queue per stage admits inspections in arrival order, one at
+ * report their respective changes. One pool per stage admits inspections in arrival order, one at
  * a time, so a stage never serves two claims at once and the deadline covers active work rather
  * than queue wait. Each active stage inspection has a coordinator-owned deadline. An expiry at any
  * stage abandons that stage and replaces it before the next queued inspection begins, so one slow
@@ -102,23 +105,22 @@ export class Probe implements ProbeInterface {
 	readonly #deadline: number
 	readonly #emitter: Emitter<ProbeEventMap>
 	readonly #toolchain: Toolchain
-	#type: TypeStage
-	#lint: LintStage
-	#runtime: RuntimeStage
-	readonly #typeQueue: QueueInterface<Inspection, Check>
-	readonly #lintQueue: QueueInterface<Inspection, Check>
-	readonly #runtimeQueue: QueueInterface<Inspection, Check>
+	readonly #type: PoolInterface<TypeStage>
+	readonly #lint: PoolInterface<LintStage>
+	readonly #runtime: PoolInterface<RuntimeStage>
 	readonly #deadlines = new WeakSet<ProbeError>()
 	readonly #surfaced = new WeakSet<ProbeError>()
-	#typeTail = Promise.resolve()
-	#arming: Promise<void>
+	readonly #survivors = new Map<StageInterface, unknown>()
+	readonly #abort = new AbortController()
+	#arming: Promise<void> | undefined
+	#starting: Promise<void> | undefined
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before
 	// anything it starts can suspend, so every later read of `#closing !== undefined` answers the
 	// question a second flag would have answered, and no second write can drift from this one.
 	#closing: Promise<void> | undefined
 
 	/**
-	 * Resolves the target toolchain and starts warming every stage.
+	 * Resolves the target toolchain and constructs the stage pools without warming them.
 	 *
 	 * @param options - Workspace, deadline, and initial observation hooks
 	 */
@@ -134,33 +136,28 @@ export class Probe implements ProbeInterface {
 			oxlint: this.#version('oxlint'),
 			vitest: this.#version('vitest'),
 		})
-		this.#type = new TypeStage(this.#workspace)
-		this.#lint = new LintStage(this.#workspace)
-		this.#runtime = new RuntimeStage(this.#workspace)
-		// One queue per stage, strictly ordered and one deep, is the only place this coordinator
-		// serializes: a stage admits nothing itself. `retries: 0` keeps the queue from re-running an
-		// inspection, because a stage that exceeded its deadline is recycled rather than retried, and
-		// that recovery runs inside the handler so it finishes before the next claim is admitted.
-		this.#typeQueue = createQueue<Inspection, Check>({
-			concurrency: 1,
-			retries: 0,
-			handler: this.#inspectType.bind(this),
+		this.#type = createPool({
+			create: () => this.#warm(new TypeStage(this.#workspace)),
+			destroy: this.#dispose.bind(this),
+			error: this.#surface.bind(this),
+			min: 1,
+			restarts: PROBE_RESTARTS,
 		})
-		this.#lintQueue = createQueue<Inspection, Check>({
-			concurrency: 1,
-			retries: 0,
-			handler: this.#inspectLint.bind(this),
+		this.#lint = createPool({
+			create: this.#createLint.bind(this),
+			destroy: this.#dispose.bind(this),
+			watch: (stage) => stage.exit,
+			error: this.#surface.bind(this),
+			min: 1,
+			restarts: PROBE_RESTARTS,
 		})
-		this.#runtimeQueue = createQueue<Inspection, Check>({
-			concurrency: 1,
-			retries: 0,
-			handler: this.#inspectRuntime.bind(this),
+		this.#runtime = createPool({
+			create: () => this.#warm(new RuntimeStage(this.#workspace)),
+			destroy: this.#dispose.bind(this),
+			error: this.#surface.bind(this),
+			min: 1,
+			restarts: PROBE_RESTARTS,
 		})
-		this.#arming = this.#arm()
-		// Observe the stored promise here. Nothing else reads it until `prove` or `destroy`, and a
-		// host that calls neither takes an unhandled rejection that ends the process. The stored
-		// promise keeps rejecting, so `prove` still reports the arming failure to its caller.
-		void this.#arming.catch(() => {})
 	}
 
 	get emitter(): EmitterInterface<ProbeEventMap> {
@@ -175,7 +172,7 @@ export class Probe implements ProbeInterface {
 		try {
 			this.#support()
 			this.#admit(claim)
-			await this.#ready()
+			await this.start()
 			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			const started = performance.now()
 			const id = randomUUID()
@@ -214,36 +211,48 @@ export class Probe implements ProbeInterface {
 
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
-		this.#closing = this.#destroy()
+		this.#closing = Promise.resolve().then(this.#destroy.bind(this))
 		return this.#closing
 	}
 
-	// Awaits the arming attempt in flight and starts one replacement for an attempt that failed.
-	// Arming runs the boot controls through the same stages a claim uses, so the failure that ends
-	// it is usually the workspace's — a stage that outran the deadline, a project that had no
-	// Vitest environment yet — and those are repaired while this process keeps running. One
-	// replacement per call bounds the cost: a workspace that still cannot arm pays one boot and
-	// reports it, rather than looping. A caller that already started the replacement is joined
-	// rather than replaced, so several callers waiting on one failed boot start one boot between
-	// them.
-	async #ready(): Promise<void> {
-		const attempt = this.#arming
-		try {
-			await attempt
-			return
-		} catch (error) {
-			if (this.#closing !== undefined) throw error
-		}
-		if (this.#arming === attempt) {
-			this.#arming = this.#arm()
-			void this.#arming.catch(() => {})
-		}
-		await this.#arming
+	start(): Promise<void> {
+		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('probe'))
+		const filling = Promise.all([this.#type.start(), this.#lint.start(), this.#runtime.start()])
+		void filling.catch(() => {})
+		if (this.#starting !== undefined) return this.#starting
+		this.#starting = this.#start(filling)
+		void this.#starting.then(
+			() => {
+				this.#starting = undefined
+			},
+			() => {
+				this.#starting = undefined
+			},
+		)
+		return this.#starting
 	}
 
-	async #arm(): Promise<void> {
+	async #start(filling: Promise<readonly void[]>): Promise<void> {
+		if (this.#arming === undefined) {
+			this.#arming = this.#arm(filling)
+			void this.#arming.catch(() => {
+				this.#arming = undefined
+			})
+		} else {
+			try {
+				await filling
+			} catch (error) {
+				throw this.#refuseArm(error)
+			}
+		}
+		await this.#arming
+		if (this.#closing !== undefined) throw createDestroyedError('probe')
+	}
+
+	async #arm(filling: Promise<readonly void[]>): Promise<void> {
 		let created: boolean
 		try {
+			this.#support()
 			created = this.#workbench()
 		} catch (error) {
 			// The workbench refusal names the boot in its own message and reports the target tree's
@@ -253,18 +262,11 @@ export class Probe implements ProbeInterface {
 			throw error
 		}
 		try {
+			await filling
+			if (this.#closing !== undefined) throw createDestroyedError('probe')
 			await this.#boot(created)
 		} catch (error) {
-			// A boot failure and a claim's own stage failure are otherwise one message: the controls
-			// run through the same stages under the same deadline, so `The lint stage exceeded 6000
-			// ms` reads as evidence about the candidate when it is the instrument refusing to serve.
-			const failure = new ProbeError(`The probe could not arm: ${describeUnknown(error)}`, {
-				origin: 'instrument',
-				code: 'malformed',
-				cause: error,
-			})
-			this.#surface(failure)
-			throw failure
+			throw this.#refuseArm(error)
 		}
 		// The boot control's own files are gone before this line, so a listener is told the
 		// instrument serves only after the workspace holds nothing the control wrote.
@@ -277,6 +279,7 @@ export class Probe implements ProbeInterface {
 	// keeps `prove` from reporting one refusal a second time when the same attempt reaches it.
 	// Observation only: the retry, its timing, and what the next caller reads are unchanged.
 	#surface(error: unknown): void {
+		if (this.#closing !== undefined) return
 		if (isProbeError(error)) this.#surfaced.add(error)
 		this.#emitter.emit('error', error)
 	}
@@ -435,77 +438,60 @@ export class Probe implements ProbeInterface {
 
 	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
 		const inspection: Inspection = { subject, claim }
-		const admitted = [
-			this.#typeQueue.enqueue(inspection),
-			this.#lintQueue.enqueue(inspection),
-			this.#runtimeQueue.enqueue(inspection),
-		]
-		// `Promise.all` reports the first rejection and stops observing the rest, and an unobserved
-		// rejection ends the host process. Observe each one here; the caller still reads the first.
-		for (const pending of admitted) void pending.catch(() => {})
-		return Promise.all(admitted)
+		return Promise.all([
+			this.#inspectType(inspection),
+			this.#inspectLint(inspection),
+			this.#inspectRuntime(inspection),
+		])
 	}
 
 	async #inspectType(inspection: Inspection): Promise<Check> {
-		const release = await this.#admitType()
-		try {
-			const stage = this.#type
-			return await this.#inspectStage(
-				stage,
-				stage.progress,
-				() => stage.inspect(inspection.subject, inspection.claim.project),
-				inspection.claim,
-			)
-		} finally {
-			release()
-		}
-	}
-
-	#inspectLint(inspection: Inspection): Promise<Check> {
-		const stage = this.#lint
-		// The lint stage waits on a foreign language server's silence and reads this bound's signal to
-		// end that wait. The other stages take no signal and are abandoned and replaced instead.
+		const token = await this.#lease(this.#type)
 		return this.#inspectStage(
-			stage,
-			stage.progress,
-			(signal) => stage.inspect(inspection.subject, { signal }),
+			token,
+			() => token.value.inspect(inspection.subject, inspection.claim.project),
 			inspection.claim,
 		)
 	}
 
-	#inspectRuntime(inspection: Inspection): Promise<Check> {
-		const stage = this.#runtime
+	async #inspectLint(inspection: Inspection): Promise<Check> {
+		const token = await this.#lease(this.#lint)
 		return this.#inspectStage(
-			stage,
-			stage.progress,
-			() => stage.inspect(inspection.subject),
+			token,
+			(signal) => token.value.inspect(inspection.subject, { signal }),
 			inspection.claim,
 		)
 	}
 
-	async #inspectStage(
-		stage: StageInterface,
-		progress: number,
-		operation: (signal: AbortSignal) => Promise<Check>,
+	async #inspectRuntime(inspection: Inspection): Promise<Check> {
+		const token = await this.#lease(this.#runtime)
+		return this.#inspectStage(
+			token,
+			() => token.value.inspect(inspection.subject),
+			inspection.claim,
+		)
+	}
+
+	async #inspectStage<T>(
+		token: PoolToken<StageInterface>,
+		operation: (signal: AbortSignal) => Promise<T>,
 		claim: Claim,
-	): Promise<Check> {
+		message = `The ${token.value.stage} stage exceeded ${this.#deadline} ms`,
+	): Promise<T> {
+		const stage = token.value
 		try {
-			return await this.#bound(
-				operation,
-				`The ${stage.stage} stage exceeded ${this.#deadline} ms`,
-				stage,
-				progress,
-			)
+			return await this.#bound(operation, message, stage, stage.progress)
 		} catch (error) {
-			this.#emitExpiry(stage, claim)
+			if (isProbeError(error) && this.#deadlines.has(error)) {
+				await token.destroy().catch(() => {})
+				if (this.#closing === undefined) this.#emitter.emit('expire', claim)
+			}
 			throw error
+		} finally {
+			token.release()
 		}
 	}
 
-	// Arms the deadline before the operation begins and hands the operation this deadline's signal.
-	// A stage that can cut its own wait short is then bounded by the deadline that reports the
-	// overrun rather than by a second bound of its own, and a stage that reads no signal is abandoned
-	// and replaced exactly as before.
 	async #bound<T>(
 		operation: (signal: AbortSignal) => Promise<T>,
 		message: string,
@@ -515,99 +501,113 @@ export class Probe implements ProbeInterface {
 		const timeout = createTimeout({ ms: this.#deadline })
 		timeout.start()
 		const expiry = this.#expiry(timeout, message, stage, progress)
-		// The refusal is held as well as raced. An operation this signal aborts rejects with its own
-		// tool's cancellation, that rejection can settle the race first, and it names the tool rather
-		// than the stage that overran — so an expired deadline answers with this refusal either way.
 		const refusal = expiry.catch((error: unknown) => error)
 		try {
 			return await Promise.race([operation(timeout.signal), expiry])
 		} catch (error) {
-			if (!timeout.expired) throw error
-			await this.#recycle(stage)
-			throw await refusal
+			if (timeout.expired) throw await refusal
+			throw error
 		} finally {
 			timeout.clear()
 		}
-	}
-
-	// Replaces the stage one expired deadline destroyed, so a single slow claim costs that claim
-	// rather than the process. A resident server whose type, lint, or runtime stage stays destroyed
-	// answers every later claim with the destruction of a stage that caller never asked about.
-	async #recycle(stage: StageInterface): Promise<boolean> {
-		if (this.#closing !== undefined) return false
-		const timeout = createTimeout({ ms: this.#deadline })
-		timeout.start()
-		try {
-			// Teardown of a hung stage can reject or outlive its own deadline, and the replacement
-			// must be installed either way: the field otherwise stays destroyed for the life of the
-			// process and every later claim reports that instead of its own evidence.
-			await Promise.race([
-				stage.destroy(),
-				this.#expiry(
-					timeout,
-					`The ${stage.stage} stage recovery exceeded ${this.#deadline} ms`,
-					stage,
-					stage.progress,
-				),
-			])
-		} catch {
-			// The failure belongs to the stage being replaced, and the replacement that follows is
-			// the recovery the caller is owed.
-		} finally {
-			timeout.clear()
-		}
-		if (this.#closing !== undefined) return false
-		// Identity, not kind: a second expiry racing this one names the stage this call already
-		// replaced, and rebuilding on that report would discard a live stage the queues are using.
-		if (stage === this.#type) {
-			this.#type = new TypeStage(this.#workspace)
-			return true
-		}
-		if (stage === this.#lint) {
-			this.#lint = new LintStage(this.#workspace)
-			return true
-		}
-		if (stage === this.#runtime) {
-			this.#runtime = new RuntimeStage(this.#workspace)
-			return true
-		}
-		return false
-	}
-
-	// Holds every caller-selected project resolution and type inspection on one promise chain. A
-	// resolve that recycled the shared caller-named service during an inspection would change the
-	// service that inspection resumes with after its next cooperative yield.
-	async #admitType(): Promise<() => void> {
-		const previous = this.#typeTail
-		const turn = Promise.withResolvers<void>()
-		this.#typeTail = turn.promise
-		await previous
-		return turn.resolve
 	}
 
 	async #resolve(claim: Claim): Promise<Project> {
-		const release = await this.#admitType()
+		const token = await this.#lease(this.#type)
+		const stage = token.value
+		return this.#inspectStage(
+			token,
+			() => stage.resolve(claim.project),
+			claim,
+			`The type stage project resolution exceeded ${this.#deadline} ms`,
+		)
+	}
+
+	async #lease<T>(pool: PoolInterface<T>): Promise<PoolToken<T>> {
 		try {
-			const stage = this.#type
-			try {
-				return await this.#bound(
-					() => stage.resolve(claim.project),
-					`The type stage project resolution exceeded ${this.#deadline} ms`,
-					stage,
-					stage.progress,
-				)
-			} catch (error) {
-				this.#emitExpiry(stage, claim)
-				throw error
+			return await pool.acquire()
+		} catch (error) {
+			if (isPoolError(error)) {
+				if (error.code === 'destroyed') throw createDestroyedError('probe')
+				if (error.code === 'create' || error.code === 'cleanup') throw error.cause
 			}
-		} finally {
-			release()
+			throw error
 		}
 	}
 
-	#emitExpiry(stage: StageInterface, claim: Claim): void {
-		if (stage === this.#type || stage === this.#lint || stage === this.#runtime) return
-		this.#emitter.emit('expire', claim)
+	#createLint(): Promise<LintStage> {
+		for (const cause of this.#survivors.values()) {
+			throw new ProbeError(
+				'The Oxlint language server survived cleanup; restart the probe server',
+				{ origin: 'instrument', code: 'malformed', context: { stage: 'lint' }, cause },
+			)
+		}
+		return this.#warm(new LintStage(this.#workspace))
+	}
+
+	async #warm<T extends StageInterface>(stage: T): Promise<T> {
+		const aborted = Promise.withResolvers<never>()
+		// A create admitted before teardown can refuse before entering the race.
+		void aborted.promise.catch(() => {})
+		const subscription = addAbortListener(this.#abort.signal, () =>
+			aborted.reject(createDestroyedError('probe')),
+		)
+		try {
+			if (this.#closing !== undefined) throw createDestroyedError('probe')
+			await this.#bound(
+				() => Promise.race([stage.start(), aborted.promise]),
+				`The ${stage.stage} stage warm exceeded ${this.#deadline} ms`,
+				stage,
+				stage.progress,
+			)
+			return stage
+		} catch (error) {
+			try {
+				await this.#dispose(stage)
+			} catch (failure) {
+				// Outside teardown only a lint timeout rejects disposal. Retain any rejected cleanup
+				// here so teardown also reports a resource whose failed warm prevented insertion.
+				this.#survivors.set(stage, failure)
+				throw failure
+			}
+			throw error
+		} finally {
+			subscription[Symbol.dispose]()
+		}
+	}
+
+	async #dispose(stage: StageInterface): Promise<void> {
+		try {
+			await this.#bound(
+				() => stage.destroy(),
+				`The ${stage.stage} stage teardown exceeded ${this.#deadline} ms`,
+				stage,
+				stage.progress,
+			)
+		} catch (error) {
+			if (isProbeError(error) && this.#deadlines.has(error)) return
+			if (
+				this.#closing !== undefined ||
+				(stage.stage === 'lint' &&
+					isProbeError(error) &&
+					isLSPError(error.cause) &&
+					error.cause.code === 'timeout')
+			)
+				throw error
+			this.#surface(error)
+		}
+	}
+
+	#refuseArm(error: unknown): ProbeError {
+		if (this.#closing !== undefined) return createDestroyedError('probe')
+		const cause = isPoolError(error) ? error.cause : error
+		const failure = new ProbeError(`The probe could not arm: ${describeUnknown(cause)}`, {
+			origin: 'instrument',
+			code: 'malformed',
+			cause,
+		})
+		this.#surface(failure)
+		return failure
 	}
 
 	// Rejects when the deadline fires, so a race against it settles even when the operation it
@@ -637,40 +637,26 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #destroy(): Promise<void> {
+		this.#abort.abort()
+		const barriers = Promise.allSettled([
+			this.#type.destroy(),
+			this.#lint.destroy(),
+			this.#runtime.destroy(),
+		])
 		try {
-			try {
-				await this.#arming
-			} catch {}
-			// Tear the stages down and leave the queues running. A queue holds no host resource — no
-			// timer, no listener, no store — and stage teardown settles every entry still admitted, so
-			// each caller reads the stage's own refusal. Destroying a queue instead abandons those
-			// entries, and a stage rejecting after its queue stopped observing ends the host process.
-			await Promise.all([
-				this.#destroyStage(this.#type),
-				this.#destroyStage(this.#lint),
-				this.#destroyStage(this.#runtime),
-			])
-		} finally {
-			// Release the listener graph last, and release it on the teardown that failed as well:
-			// a stage whose teardown rejects is the moment a host most needs its listeners gone, and
-			// a plain trailing statement is the one skipped on exactly that path. `destroy` is
-			// idempotent, so no guard stands in front of it.
-			this.#emitter.destroy()
-		}
-	}
-
-	async #destroyStage(stage: StageInterface): Promise<void> {
-		try {
-			await this.#bound(
-				() => stage.destroy(),
-				`The ${stage.stage} stage teardown exceeded ${this.#deadline} ms`,
-				stage,
-				stage.progress,
+			await this.#starting?.catch(() => {})
+			await this.#arming?.catch(() => {})
+			const results = await barriers
+			const survivors = await Promise.allSettled(
+				[...this.#survivors.keys()].map((stage) => this.#dispose(stage)),
 			)
-		} catch (error) {
-			// A teardown overrun cannot replace the destroyed stage, and every sibling still receives
-			// its own bound. A teardown that fails before the deadline keeps its original rejection.
-			if (!isProbeError(error) || !this.#deadlines.has(error)) throw error
+			this.#survivors.clear()
+			for (const result of [...results, ...survivors]) {
+				if (result.status === 'rejected')
+					throw isPoolError(result.reason) ? result.reason.cause : result.reason
+			}
+		} finally {
+			this.#emitter.destroy()
 		}
 	}
 
@@ -689,8 +675,8 @@ export class Probe implements ProbeInterface {
 
 	// Refuses a control that is the case again. No stage inspects such a claim: the refusal answers
 	// before any stage is asked for an inspection and before the instrument is awaited, so it reads
-	// the same in every workspace state — construction has already begun arming and running the boot
-	// controls by the time this is reached, and neither touches this claim. Such a control can only
+	// the same in every workspace state. Admission precedes this call's onset, and the boot controls
+	// never touch this claim. Such a control can only
 	// break by nondeterminism, and the receipt it would earn that way attests a falsification that
 	// never happened — the worst answer this package can return. Identity covers the whole case, the
 	// candidate drafts and the test, and it is decided on the bytes rather than on the digest a
