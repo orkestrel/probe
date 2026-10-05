@@ -52,7 +52,7 @@ import { Overlay } from '../Overlay.js'
  * Inspects tests through one resident Vitest service from the target workspace.
  *
  * @remarks
- * Construction starts Vitest with the threads pool and instruments each inline or function-declared
+ * Starting launches Vitest with the threads pool and instruments each inline or function-declared
  * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
  * string-declared project reports a workspace issue because its configuration carries no runtime
  * overlay plugin. Every inspection writes one fresh sibling specification, invalidates each
@@ -111,6 +111,7 @@ import { Overlay } from '../Overlay.js'
 export class RuntimeStage implements StageInterface {
 	readonly #workspace: string
 	#vitest: Promise<Vitest> | undefined
+	#warming: Promise<void> | undefined
 	#overlay: OverlayInterface = new Overlay()
 	readonly #loads = new Set<string>()
 	readonly #reads = new Set<string>()
@@ -124,16 +125,12 @@ export class RuntimeStage implements StageInterface {
 	#progress = 0
 
 	/**
-	 * Starts warming the target workspace's Vitest service.
-	 *
-	 * @remarks Loading starts during this call. A loader refusal rejects the owned warm operation
-	 * rather than construction, so `inspect` reports it and `destroy` remains available.
+	 * Records the target workspace without loading its Vitest service.
 	 *
 	 * @param workspace - The target workspace root. Default: the current working directory
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		this.#store(this.#warm())
 	}
 
 	get stage(): Stage {
@@ -142,6 +139,18 @@ export class RuntimeStage implements StageInterface {
 
 	get progress(): number {
 		return this.#progress
+	}
+
+	start(): Promise<void> {
+		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('runtime stage'))
+		this.#warming ??= guardStage(
+			this.stage,
+			this.#store(this.#warm()).then(() => {}),
+		)
+		void this.#warming.catch(() => {
+			this.#warming = undefined
+		})
+		return this.#warming
 	}
 
 	/**
@@ -177,6 +186,7 @@ export class RuntimeStage implements StageInterface {
 	async #inspect(subject: Case): Promise<Check> {
 		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
 		const started = performance.now()
+		await this.start()
 		// Vitest reports a failed run by setting `process.exitCode` on this host, and a stage that
 		// runs a claim's negative control fails a run deliberately. Restore whatever the host had,
 		// rather than assigning zero over a code the host set for itself.

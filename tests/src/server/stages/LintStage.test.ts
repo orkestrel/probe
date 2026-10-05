@@ -37,6 +37,76 @@ const FIXTURE = createLintFixture().files
 
 const PASSING = "import { test } from 'vitest'\ntest('passes', () => {})\n"
 
+describe('explicit lint onset', () => {
+	it('destroys without spawning before start', async () => {
+		const scratch = createScratch({ files: FIXTURE })
+		const stage = new LintStage(scratch.path)
+		try {
+			await stage.destroy()
+			expect(scratch.has('server.pid')).toBe(false)
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+	it('joins initialize and leaves exit pending after teardown', async () => {
+		const scratch = createScratch({ files: FIXTURE })
+		const stage = new LintStage(scratch.path)
+		try {
+			const starting = stage.start()
+			expect(stage.start()).toBe(starting)
+			await starting
+			expect(scratch.has('server.pid')).toBe(true)
+			await stage.destroy()
+			expect(await Promise.race([stage.exit, Promise.resolve('pending')])).toBe('pending')
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+	it('reports the warm refusal from start', async () => {
+		const scratch = createScratch()
+		const stage = new LintStage(scratch.path)
+		try {
+			await expect(stage.start()).rejects.toMatchObject({
+				origin: 'workspace',
+				code: 'missing',
+				context: { name: 'oxlint' },
+			})
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+	it('keeps the exit diagnosis when its observer destroys during inspection', async () => {
+		const scratch = createScratch({ files: { ...FIXTURE, frail: '' } })
+		const stage = new LintStage(scratch.path)
+		try {
+			await stage.start()
+			const ending = stage.exit.catch(async (error: unknown) => {
+				await stage.destroy()
+				return error
+			})
+			await expect(
+				stage.inspect(
+					{ files: [], test: { path: 'tmp/probes/exit.test.ts', text: PASSING } },
+					{ signal: UNBOUNDED },
+				),
+			).rejects.toThrow('The Oxlint language server exited with code 7')
+			expect(await ending).toMatchObject({
+				name: 'ProbeError',
+				message: 'The Oxlint language server exited with code 7',
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: 'lint' },
+			})
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+})
+
 // A resident host that drives the real stage outside Vitest, so an unhandled rejection ends a
 // process whose exit code a test can read. Node stops at the `.js` specifiers the source compiles
 // against, so the host registers the one resolution rule that maps them onto the TypeScript files
@@ -976,6 +1046,7 @@ describe('lint stage', () => {
 				// No inspection runs here: warming is what never returns, so the stage is torn down
 				// while it is still waiting for the answer the server owes it.
 				const silent = new LintStage(scratch.path)
+				void silent.start().catch(() => {})
 				const owned = await waitForFixtureServer(scratch)
 				expect(isRunning(owned)).toBe(true)
 				const asked = performance.now()

@@ -1545,6 +1545,7 @@ describe('runtime stage', () => {
 			}
 			const marker = `runtime-listeners-${randomUUID()}`
 			const first = new RuntimeStage(ROOT)
+			const starting = first.start()
 			// Read synchronously, before anything is awaited. Vitest registers its handlers before
 			// its own first await, so a strip that waits for the warm to settle leaves the whole
 			// boot exposed — which is the window a harness signals a starting process in.
@@ -1554,6 +1555,7 @@ describe('runtime stage', () => {
 			}).toStrictEqual(before)
 			const second = new RuntimeStage(ROOT)
 			try {
+				await starting
 				const subject = {
 					files: [],
 					test: {
@@ -1582,7 +1584,7 @@ describe('runtime stage', () => {
 		},
 	)
 
-	it('removes the files a dead host left behind, at construction', async () => {
+	it('defers removal of dead-owner files until start', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
@@ -1668,6 +1670,8 @@ describe('runtime stage', () => {
 		scratch.write(relative(scratch.path, serving), "export const SIGNAL = 'before'\n")
 		const stage = new RuntimeStage(scratch.path)
 		try {
+			expect(existsSync(orphan), 'construction leaves the dead-owner file').toBe(true)
+			await stage.start()
 			expect(existsSync(orphan), 'a marked specification whose writer is gone').toBe(false)
 			expect(existsSync(live), "a live neighbour's specification").toBe(true)
 			expect(existsSync(arming), "a caller's unmarked file at a boot path").toBe(true)

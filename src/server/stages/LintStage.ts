@@ -19,7 +19,7 @@ import {
  * Inspects virtual documents through one resident Oxlint language server.
  *
  * @remarks
- * Construction starts the target workspace's Oxlint binary with its Language Server Protocol mode
+ * Starting launches the target workspace's Oxlint binary with its Language Server Protocol mode
  * and hands the conversation to `@orkestrel/lsp`: `createStdioClientTransport` owns the child
  * process and its bytes, and `createLSPClient` owns the framing, the request correlation, the
  * capabilities this stage advertises, and the choice between pulled and pushed diagnostics. This
@@ -55,10 +55,12 @@ import {
 export class LintStage implements LintStageInterface {
 	readonly #workspace: string
 	readonly #documents = new Set<string>()
-	readonly #warmth: Promise<LSPClientInterface>
+	#warming: Promise<void> | undefined
+	readonly #exited = Promise.withResolvers<never>()
 	// Teardown reads the constructed client rather than the warming result, because a warming that
 	// failed or that is still waiting for its answer still leaves a client and a child to release.
 	#client: LSPClientInterface | undefined
+	#transport: ReturnType<typeof createStdioClientTransport> | undefined
 	#ending: string | undefined
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
 	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
@@ -71,17 +73,13 @@ export class LintStage implements LintStageInterface {
 	#revision = 0
 
 	/**
-	 * Starts warming the target workspace's Oxlint language server.
+	 * Records the target workspace without starting its language server.
 	 *
 	 * @param workspace - The target workspace root. Default: the current working directory
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		this.#warmth = this.#warm()
-		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
-		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
-		// rejecting, so an inspection still reports the warming failure.
-		void this.#warmth.catch(() => {})
+		void this.#exited.promise.catch(() => {})
 	}
 
 	get stage(): Stage {
@@ -90,6 +88,17 @@ export class LintStage implements LintStageInterface {
 
 	get progress(): number {
 		return this.#progress
+	}
+
+	get exit(): Promise<never> {
+		return this.#exited.promise
+	}
+
+	start(): Promise<void> {
+		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('lint stage'))
+		this.#warming ??= guardStage(this.stage, this.#warm())
+		void this.#warming.catch(() => {})
+		return this.#warming
 	}
 
 	inspect(subject: Case, options?: InspectionOptions): Promise<Check> {
@@ -115,8 +124,10 @@ export class LintStage implements LintStageInterface {
 			})
 		}
 		const started = performance.now()
-		const client = await this.#warmed()
+		await this.start()
 		if (this.#closing !== undefined) throw createDestroyedError('lint stage')
+		const client = this.#client
+		if (client === undefined) throw this.#fault('The Oxlint language server did not initialize')
 		const issues: Issue[] = []
 		for (const draft of [...subject.files, subject.test]) {
 			issues.push(...(await this.#document(client, draft, options.signal)))
@@ -134,34 +145,33 @@ export class LintStage implements LintStageInterface {
 	// neither its ending nor its signal is released rather than deadlocking this call.
 	async #destroy(): Promise<void> {
 		await this.#client?.destroy()
+		// The client emits close failures and resolves. The transport's own settlement retains a
+		// timeout refusal while its child survives, which the coordinator needs before replacement.
+		await this.#transport?.close()
 	}
 
 	// Builds the conversation and warms it. Everything before the first await runs while the
-	// constructor is still on the stack, so teardown finds the client whatever the warming does
+	// start call is still on the stack, so teardown finds the client whatever the warming does
 	// next; a workspace that publishes no Oxlint binary rejects here instead, and leaves none.
-	async #warm(): Promise<LSPClientInterface> {
+	async #warm(): Promise<void> {
 		const binary = resolveWorkspaceBinary(this.#workspace, 'oxlint')
+		const transport = createStdioClientTransport({
+			server: {
+				command: [process.execPath, binary, '--lsp'],
+				directory: this.#workspace,
+			},
+			grace: LINT_DEADLINE / 2,
+		})
+		this.#transport = transport
 		const client = createLSPClient({
-			transport: createStdioClientTransport({
-				server: {
-					command: [process.execPath, binary, '--lsp'],
-					directory: this.#workspace,
-				},
-				grace: LINT_DEADLINE / 2,
-			}),
+			transport,
 			workspace: pathToFileURL(this.#workspace).href,
 			timeout: LINT_DEADLINE,
 		})
 		this.#client = client
 		client.emitter.on('exit', (exit) => this.#retire(exit))
-		await client.start()
-		return client
-	}
-
-	// Reads the warmed client, phrasing a warming failure the way this stage reports one.
-	async #warmed(): Promise<LSPClientInterface> {
 		try {
-			return await this.#warmth
+			await client.start()
 		} catch (error) {
 			throw this.#translate(error)
 		}
@@ -171,7 +181,9 @@ export class LintStage implements LintStageInterface {
 	// and the client reports the signalled death and the code exit through the same event, so a
 	// later inspection can say which one the server took.
 	#retire(exit: LSPExit): void {
+		if (this.#closing !== undefined) return
 		this.#ending = exit.signal === null ? `code ${exit.code}` : `signal ${exit.signal}`
+		this.#exited.reject(this.#fault(`The Oxlint language server exited with ${this.#ending}`))
 	}
 
 	// Opens one candidate at the path it was declared. Oxlint keys its overrides on globs, so any
@@ -240,11 +252,11 @@ export class LintStage implements LintStageInterface {
 	// terms, a server that ended is named by the ending it took, and everything else is the
 	// client's own coded failure, which `guardStage` carries to the caller as this stage's fault.
 	#translate(error: unknown, path?: string): Error {
-		if (this.#closing !== undefined) return createDestroyedError('lint stage')
 		const ending = this.#ending
 		if (ending !== undefined) {
 			return this.#fault(`The Oxlint language server exited with ${ending}`, error, path)
 		}
+		if (this.#closing !== undefined) return createDestroyedError('lint stage')
 		if (isError(error)) return error
 		return this.#fault(describeUnknown(error), error, path)
 	}

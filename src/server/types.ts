@@ -213,10 +213,10 @@ export interface OverlayInterface {
  * Inspects one case with the workspace's own tool.
  *
  * @remarks
- * Warming begins at construction. The `inspect` method awaits that one warm operation, which
+ * Warming begins at `start()`. The `inspect` method calls it and awaits the warm operation, which
  * builds the resident tool or the mirror it reuses across calls. A stage serves one inspection at
  * a time and admits none itself. Await an inspection before starting the next one, or admit
- * through one queue per stage the way `Probe` does: a second concurrent call reaches the same
+ * through the coordinator's admission: a second concurrent call reaches the same
  * resident tool or mirror and the same overlay, document, and specification state the first is
  * still using. A stage never holds a later inspection behind an earlier one, so a caller that
  * abandons an inspection at its own deadline can still use the stage. The `destroy` method
@@ -243,6 +243,13 @@ export interface StageInterface {
 	 * instrument rather than to the claimant.
 	 */
 	readonly progress: number
+	/**
+	 * Begins the warm or joins the warm already begun.
+	 *
+	 * @returns A promise that resolves after the resident tool or mirror is ready
+	 * @throws When warming fails or teardown has begun
+	 */
+	start(): Promise<void>
 	/**
 	 * Inspects one case.
 	 *
@@ -307,6 +314,7 @@ export interface TypeStageInterface extends StageInterface {
 	inspect(subject: Case, project?: string): Promise<Check>
 	/**
 	 * Resolves one project to the path and digest the stage applies for it.
+	 * Calls `start()` before reading the project.
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
@@ -342,6 +350,8 @@ export interface TypeStageInterface extends StageInterface {
  * ```
  */
 export interface LintStageInterface extends StageInterface {
+	/** Rejects with the instrument fault on an exit before teardown; never fulfills. */
+	readonly exit: Promise<never>
 	/**
 	 * Inspects one case, under the bound the caller supplies.
 	 *

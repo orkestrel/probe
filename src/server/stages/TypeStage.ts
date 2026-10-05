@@ -44,7 +44,7 @@ import { parseProjectConfig, parseRevisionOwner } from '../parsers.js'
  *
  * @remarks
  * The compiler is a process this stage spawns rather than a module it loads, so nothing here holds
- * a resident program and the host's event loop is free for the whole check. Construction sweeps a
+ * a resident program and the host's event loop is free for the whole check. Starting sweeps a
  * mirror an earlier host left behind, copies the workspace into a fresh one under
  * {@link TYPE_MIRROR}, and builds each declared project's incremental state there, so the first
  * inspection is warm.
@@ -76,14 +76,14 @@ import { parseProjectConfig, parseRevisionOwner } from '../parsers.js'
  */
 export class TypeStage implements TypeStageInterface {
 	readonly #workspace: string
-	readonly #compiler: string
+	#compiler: string | undefined
 	readonly #revision = `${process.pid}-${randomUUID()}`
 	readonly #mirror: string
 	readonly #configs = new Map<string, ProjectConfig>()
 	readonly #mirrored = new Map<string, string>()
 	readonly #drafts = new Set<string>()
 	readonly #children = new Set<ChildProcess>()
-	readonly #warming: Promise<void>
+	#warming: Promise<void> | undefined
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
 	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
 	// question a second flag would have answered, and no second write can drift from this one.
@@ -91,19 +91,13 @@ export class TypeStage implements TypeStageInterface {
 	#progress = 0
 
 	/**
-	 * Resolves the target workspace's compiler and starts warming its mirror.
+	 * Records the workspace and the mirror path without starting its compiler.
 	 *
 	 * @param workspace - The target workspace root. Default: the current working directory
 	 */
 	constructor(workspace: string = process.cwd()) {
 		this.#workspace = workspace
-		this.#compiler = resolveWorkspaceBinary(workspace, 'typescript', 'tsc')
-		this.#mirror = resolveWorkspaceFile(workspace, `${TYPE_MIRROR}/${this.#revision}`)
-		this.#warming = this.#warm()
-		// Observe the stored promise here. Nothing reads it until an inspection or a teardown
-		// arrives, and an unobserved rejection ends the host process. The stored promise keeps
-		// rejecting, so an inspection still reports the warming failure.
-		void this.#warming.catch(() => {})
+		this.#mirror = resolve(workspace, TYPE_MIRROR, this.#revision)
 	}
 
 	get stage(): Stage {
@@ -112,6 +106,13 @@ export class TypeStage implements TypeStageInterface {
 
 	get progress(): number {
 		return this.#progress
+	}
+
+	start(): Promise<void> {
+		if (this.#closing !== undefined) return Promise.reject(createDestroyedError('type stage'))
+		this.#warming ??= guardStage(this.stage, this.#warm())
+		void this.#warming.catch(() => {})
+		return this.#warming
 	}
 
 	/**
@@ -160,7 +161,7 @@ export class TypeStage implements TypeStageInterface {
 	async #inspect(subject: Case, project?: string): Promise<Check> {
 		this.#refuseDestroyed()
 		const started = performance.now()
-		await this.#warming
+		await this.start()
 		this.#refuseDestroyed()
 		// Every declared path is resolved before anything is written, so a draft that escapes the
 		// workspace refuses the whole inspection rather than leaving earlier drafts in the mirror.
@@ -210,6 +211,8 @@ export class TypeStage implements TypeStageInterface {
 
 	async #resolve(project: string): Promise<Project> {
 		this.#refuseDestroyed()
+		await this.start()
+		this.#refuseDestroyed()
 		const contained = this.#contain(project)
 		this.#progress += 1
 		const config = await this.#configure(contained)
@@ -224,7 +227,7 @@ export class TypeStage implements TypeStageInterface {
 		const children = [...this.#children]
 		this.#children.clear()
 		for (const child of children) this.#terminate(child)
-		await this.#warming.catch(() => undefined)
+		await this.#warming?.catch(() => undefined)
 		try {
 			rmSync(this.#mirror, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 		} catch {}
@@ -237,6 +240,7 @@ export class TypeStage implements TypeStageInterface {
 	// independent — each reads the mirror and writes its own state file — so they run together and
 	// the warm costs the slowest project rather than the sum of them all.
 	async #warm(): Promise<void> {
+		this.#compiler = resolveWorkspaceBinary(this.#workspace, 'typescript', 'tsc')
 		this.#sweep()
 		this.#createMirror()
 		this.#refresh()
@@ -560,8 +564,10 @@ export class TypeStage implements TypeStageInterface {
 
 	#spawn(args: readonly string[], cwd: string): Promise<Execution> {
 		this.#refuseDestroyed()
+		const compiler = this.#compiler
+		if (compiler === undefined) throw createDestroyedError('type stage')
 		return new Promise<Execution>((settle, refuse) => {
-			const child = spawn(process.execPath, [this.#compiler, ...args], {
+			const child = spawn(process.execPath, [compiler, ...args], {
 				cwd,
 				stdio: ['ignore', 'pipe', 'pipe'],
 			})
@@ -595,7 +601,7 @@ export class TypeStage implements TypeStageInterface {
 					new ProbeError('The workspace compiler could not be started', {
 						origin: 'workspace',
 						code: 'malformed',
-						context: { stage: this.stage, path: this.#compiler },
+						context: { stage: this.stage, path: compiler },
 						cause: error,
 					}),
 				)

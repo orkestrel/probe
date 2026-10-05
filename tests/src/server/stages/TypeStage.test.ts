@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { captureError, createTeardown, waitForCondition } from '@orkestrel/test'
+import { createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { TypeStage } from '@src/server'
 import { TYPE_MIRROR, formatIssue, formatSpecification, isProbeError } from '@src/core'
@@ -39,18 +39,38 @@ const LINKS = (() => {
 })()
 
 describe('type stage', () => {
-	it('reports a missing workspace compiler during construction', () => {
+	it('defers the mirror until start and marks a fresh resolve', async () => {
+		const scratch = createScratch()
+		scratch.write('package.json', '{"type":"module"}\n')
+		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
+		scratch.write('tsconfig.json', STRICT)
+		scratch.write('src/value.ts', 'export const VALUE = 1\n')
+		const stage = new TypeStage(scratch.path)
+		try {
+			expect(scratch.has(TYPE_MIRROR)).toBe(false)
+			await stage.resolve('tsconfig.json')
+			const mirrors = scratch.names(TYPE_MIRROR)
+			expect(mirrors).toHaveLength(1)
+			for (const mirror of mirrors)
+				expect(scratch.has(`${TYPE_MIRROR}/${mirror}/.probe/mirror.txt`)).toBe(true)
+			await stage.start()
+		} finally {
+			await stage.destroy()
+			scratch.destroy()
+		}
+	})
+	it('reports a missing workspace compiler from start', async () => {
 		const scratch = createScratch({ prefix: 'probe-type-resolution-' })
 		try {
 			scratch.write('package.json', '{"name":"probe-type-resolution","private":true}\n')
-			const error = captureError(() => new TypeStage(scratch.path))
-			expect(isProbeError(error)).toBe(true)
-			expect(error).toMatchObject({
+			const stage = new TypeStage(scratch.path)
+			await expect(stage.start()).rejects.toMatchObject({
 				origin: 'workspace',
 				code: 'missing',
 				context: { name: 'typescript' },
 				cause: expect.any(Error),
 			})
+			await stage.destroy()
 		} finally {
 			scratch.destroy()
 		}
@@ -656,6 +676,7 @@ describe('type stage', () => {
 		mkdirSync(resolve(scratch.path, TYPE_MIRROR, foreign), { recursive: true })
 		const stage = new TypeStage(scratch.path)
 		try {
+			await stage.start()
 			await waitForCondition(
 				'the stage to sweep the mirror its dead host left',
 				() => !existsSync(resolve(scratch.path, TYPE_MIRROR, dead)),
