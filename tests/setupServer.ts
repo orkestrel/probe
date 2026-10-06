@@ -444,8 +444,8 @@ export interface LintFixture {
  * the number of documents open at that moment, and one line per `didClose`, so a coordinator that
  * admits two inspections at once or admits them out of order is read off that record. Every admitted
  * document appends its version to `versions`.
- * A silent-initialize spawn records the number of announced fixture pids still present in the
- * host process table in `overlaps`, so replacement cannot hide a child it left alive.
+ * A silent-initialize spawn records its pid and the number of earlier recorded children still
+ * alive in one `spawns` line, before protocol setup, so a kill cannot separate the observations.
  *
  * Marker files in the workspace select how it ends: `frail` exits with a code on the first document,
  * `unanswered-shutdown` exits without replying to `shutdown`, `unanswered-initialize` records
@@ -469,19 +469,25 @@ export interface LintFixture {
 export function createLintFixture(options?: LintFixtureOptions): LintFixture {
 	const program = [
 		"import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs'",
-		"import { spawnSync } from 'node:child_process'",
+		"if (existsSync('silent-initialize')) {",
+		"\tconst pids = existsSync('spawns') ? readFileSync('spawns', 'utf8').split(/\\r\\n|\\n/).filter(Boolean).map((line) => Number(line.split(' ')[0])) : []",
+		'\tconst live = pids.filter((pid) => {',
+		'\t\ttry {',
+		'\t\t\tprocess.kill(pid, 0)',
+		'\t\t\treturn true',
+		'\t\t} catch (error) {',
+		"\t\t\tif (error.code !== 'ESRCH') throw error",
+		'\t\t\treturn false',
+		'\t\t}',
+		'\t})',
+		"\tappendFileSync('spawns', process.pid + ' ' + live.length + '\\n')",
+		'} else {',
+		"\tappendFileSync('spawns', String(process.pid) + '\\n')",
+		'}',
 		'let buffer = Buffer.alloc(0)',
 		'let deferred',
 		'let open = 0',
 		"writeFileSync('server.pid', String(process.pid))",
-		"appendFileSync('spawns', String(process.pid) + '\\n')",
-		"if (existsSync('silent-initialize')) {",
-		"\tconst table = process.platform === 'win32' ? spawnSync('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' }) : spawnSync('ps', ['-A', '-o', 'pid='], { encoding: 'utf8' })",
-		"\tif (table.status !== 0) throw new Error('Could not read the fixture process table: ' + table.stderr)",
-		"\tconst live = new Set(table.stdout.split(/\\r\\n|\\n/).map((line) => Number(process.platform === 'win32' ? line.split('\",\"')[1] : line.trim())))",
-		"\tconst pids = readFileSync('spawns', 'utf8').split(/\\r\\n|\\n/).filter(Boolean).map(Number)",
-		"\tappendFileSync('overlaps', String(pids.filter((pid) => live.has(pid)).length) + '\\n')",
-		'}',
 		`setTimeout(() => process.exit(0), ${options?.budget ?? 60_000})`,
 		'function send(message) {',
 		'\tconst content = JSON.stringify(message)',

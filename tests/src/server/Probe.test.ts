@@ -539,10 +539,11 @@ else if (process.argv.includes('--showConfig')) {
 				).toHaveLength(PROBE_RESTARTS + 1)
 				expect(
 					scratch
-						.read('overlaps')
+						.read('spawns')
 						?.split(/\r\n|\n/u)
-						.filter(Boolean),
-				).toStrictEqual(Array.from({ length: PROBE_RESTARTS + 1 }, () => '1'))
+						.filter(Boolean)
+						.map((line) => line.split(' ')[1]),
+				).toStrictEqual(Array.from({ length: PROBE_RESTARTS + 1 }, () => '0'))
 			} finally {
 				await probe.destroy()
 				// Keep fixture cleanup safe even when the disposal-bound mutation is under test.
@@ -556,7 +557,7 @@ else if (process.argv.includes('--showConfig')) {
 								.filter(Boolean) ?? []
 						).every((pid) => {
 							try {
-								process.kill(Number(pid), 0)
+								process.kill(Number(pid.split(' ')[0]), 0)
 								return false
 							} catch {
 								return true
