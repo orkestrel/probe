@@ -1,4 +1,5 @@
 import type { JSONValue } from '@orkestrel/contract'
+import type { ProbeInterface } from '@src/core'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { ChildProcess, ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
@@ -8,8 +9,57 @@ import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
 import { locateComment, unwrapComment } from '@orkestrel/guide'
 import { isJSONObject } from '@orkestrel/mcp'
-import { waitForCondition } from '@orkestrel/test'
+import { waitForCondition, waitForEvent } from '@orkestrel/test'
+import { LINT_TEARDOWN, PROBE_DEADLINE, PROBE_RESTARTS, PROBE_WARM } from '@src/core'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
+
+/** Bounds concurrent stage disposal by the lint floor and the coordinator deadline. */
+export const PROBE_FIXTURE_DISPOSAL = Math.max(PROBE_DEADLINE, LINT_TEARDOWN)
+
+/** Bounds project resolution and the sequential case/control inspections, whose stages run concurrently. */
+export const PROBE_FIXTURE_PROOF = 3 * PROBE_DEADLINE
+
+/**
+ * Sizes a fixture boot from concurrent warms, one replacement per stage, and four sequential controls.
+ *
+ * @param warm - Type warm bound
+ * @param deadline - Inspection and other stage warm bound
+ * @returns The warm/disposal attempts plus four inspection deadlines in milliseconds.
+ */
+export function computeProbeBootBudget(warm = PROBE_WARM, deadline = PROBE_DEADLINE): number {
+	return (
+		(PROBE_RESTARTS + 1) * Math.max(warm + deadline, deadline + Math.max(deadline, LINT_TEARDOWN)) +
+		4 * deadline
+	)
+}
+
+/**
+ * Waits for a fixture's full boot, surfacing a product refusal before the event guard expires.
+ *
+ * @param probe - The real fixture probe
+ * @param description - The boot named on a missing event
+ * @param budget - The warm and boot-control budget in milliseconds
+ * @returns A promise settled by the arm or rejected with its original fault.
+ */
+export async function waitForProbeBoot(
+	probe: ProbeInterface,
+	description: string,
+	budget: number,
+): Promise<void> {
+	const [outcome] = await waitForEvent<[unknown]>(
+		(listener) => {
+			probe.emitter.on('arm', listener)
+			probe.emitter.on('error', listener)
+			return () => {
+				probe.emitter.off('arm', listener)
+				probe.emitter.off('error', listener)
+			}
+		},
+		description,
+		{ budget },
+	)
+	if (outcome !== probe.toolchain) throw outcome
+}
 
 /** Holds the exit code and ending signal a host reported for a child. */
 export interface Ending {

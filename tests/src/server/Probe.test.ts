@@ -29,18 +29,24 @@ import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
 import { Probe, readWorkspaceManifest } from '@src/server'
 import {
+	LINT_DEADLINE,
 	LINT_TEARDOWN,
 	PROBE_DEADLINE,
 	PROBE_RESTARTS,
+	PROBE_WARM,
 	TYPE_MIRROR,
 	isProbeError,
 	matchesSpecification,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
+	PROBE_FIXTURE_DISPOSAL,
+	PROBE_FIXTURE_PROOF,
+	computeProbeBootBudget,
 	createLintFixture,
 	killFixtureServer,
 	readFixtureServer,
+	waitForProbeBoot,
 	writeProbeFixture,
 } from '../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../setup.js'
@@ -48,6 +54,11 @@ import { WORKSPACE_ROOT } from '../../setup.js'
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
 describe.sequential('stage pools', () => {
+	// Inspection and lint/runtime warms use the product deadline; the held type warm outlasts it.
+	const inspectionDeadline = PROBE_DEADLINE
+	const warmHold = inspectionDeadline + 200
+	const warmDeadline = PROBE_WARM + warmHold
+	const failedWarm = 3_000
 	it('validates the type warm bound like the inspection deadline', () => {
 		expect(() => new Probe({ workspace: ROOT, warm: -1 })).toThrow(/ms/u)
 		expect(() => new Probe({ workspace: ROOT, warm: NaN })).toThrow(/ms/u)
@@ -55,7 +66,13 @@ describe.sequential('stage pools', () => {
 	})
 	it(
 		'waits for a type warm beyond the inspection deadline and then proves',
-		{ timeout: 20_000 },
+		// Concurrent held warms and replacements + four boot inspections + resolution/case/control + disposal.
+		{
+			timeout:
+				computeProbeBootBudget(warmDeadline, inspectionDeadline) +
+				PROBE_FIXTURE_PROOF +
+				PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -64,10 +81,8 @@ describe.sequential('stage pools', () => {
 				'tsconfig.json',
 				'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","lib":["ES5"],"skipLibCheck":true,"types":[]}}\n',
 			)
-			const connected = Promise.withResolvers<Socket>()
 			const gate = createServer((socket) => {
 				socket.on('error', () => {})
-				connected.resolve(socket)
 			})
 			await new Promise<void>((ready) => gate.listen(0, '127.0.0.1', ready))
 			const address = gate.address()
@@ -92,11 +107,23 @@ else {
 }
 `,
 			)
-			const probe = new Probe({ workspace: scratch.path, deadline: 3_000, warm: 12_000 })
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: inspectionDeadline,
+				warm: warmDeadline,
+			})
 			const settled = createRecorder<[unknown]>()
 			try {
-				await probe.start()
-				const socket = await connected.promise
+				const connected = waitForEvent<[Socket]>(
+					(listener) => {
+						gate.on('connection', listener)
+						return () => gate.off('connection', listener)
+					},
+					'the held type warm connection',
+					// The type warm must connect before its own product deadline.
+					{ budget: warmDeadline },
+				)
+				const [, [socket]] = await Promise.all([probe.start(), connected])
 				const proof = probe.prove({
 					project: 'tsconfig.json',
 					case: {
@@ -117,7 +144,7 @@ else {
 					},
 				})
 				void proof.then(settled.handler, settled.handler)
-				await waitForDelay(3_200)
+				await waitForDelay(warmHold)
 				expect(settled.count).toBe(0)
 				socket.write('release')
 				expect(await proof).toHaveProperty('receipt')
@@ -130,7 +157,14 @@ else {
 	)
 	it(
 		'retains a failed type warm for the next prove and recovers after replacement',
-		{ timeout: 20_000 },
+		// Failed warm attempts + replacement boot + resolution/case/control + disposal.
+		{
+			timeout:
+				(PROBE_RESTARTS + 1) * (PROBE_WARM + PROBE_DEADLINE) +
+				computeProbeBootBudget() +
+				PROBE_FIXTURE_PROOF +
+				PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -144,8 +178,7 @@ else {
 				'node_modules/typescript/package.json',
 				'{"name":"typescript","version":"6.0.3","bin":{"tsc":"absent.cjs"}}',
 			)
-			const failed = Promise.withResolvers<unknown>()
-			const probe = new Probe({ workspace: scratch.path, on: { error: failed.resolve } })
+			const probe = new Probe({ workspace: scratch.path })
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
@@ -166,8 +199,16 @@ else {
 				},
 			}
 			try {
-				await probe.start()
-				const refusal = await failed.promise
+				const failed = waitForEvent<[unknown]>(
+					(listener) => {
+						probe.emitter.on('error', listener)
+						return () => probe.emitter.off('error', listener)
+					},
+					'the type warm refusal after replacement attempts settle',
+					// Each failed type warm includes deadline-bounded disposal before replacement.
+					{ budget: computeProbeBootBudget() },
+				)
+				const [, [refusal]] = await Promise.all([probe.start(), failed])
 				scratch.remove('node_modules/typescript')
 				scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
 				await expect(probe.prove(claim)).rejects.toBe(refusal)
@@ -183,7 +224,14 @@ else {
 	)
 	it(
 		'bounds a type warm, spends replacements, and recovers for a later prove',
-		{ timeout: 20_000 },
+		// Failed warm/disposal attempts + repaired boot at the same warm option + proof + disposal.
+		{
+			timeout:
+				(PROBE_RESTARTS + 1) * (failedWarm + PROBE_DEADLINE) +
+				computeProbeBootBudget(failedWarm) +
+				PROBE_FIXTURE_PROOF +
+				PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -201,12 +249,7 @@ else {
 				'node_modules/typescript/held.cjs',
 				`require('node:fs').appendFileSync(${JSON.stringify(resolve(scratch.path, 'warms'))}, 'warm\\n'); setInterval(() => {}, 1000)\n`,
 			)
-			const failed = Promise.withResolvers<unknown>()
-			const probe = new Probe({
-				workspace: scratch.path,
-				warm: 3_000,
-				on: { error: failed.resolve },
-			})
+			const probe = new Probe({ workspace: scratch.path, warm: failedWarm })
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
@@ -227,8 +270,16 @@ else {
 				},
 			}
 			try {
-				await probe.start()
-				const refusal = await Promise.race([failed.promise, waitForDelay(8_000)])
+				const failed = waitForEvent<[unknown]>(
+					(listener) => {
+						probe.emitter.on('error', listener)
+						return () => probe.emitter.off('error', listener)
+					},
+					'the type warm refusal after replacement attempts settle',
+					// Each failed type warm includes deadline-bounded disposal before replacement.
+					{ budget: (PROBE_RESTARTS + 1) * (failedWarm + PROBE_DEADLINE) },
+				)
+				const [, [refusal]] = await Promise.all([probe.start(), failed])
 				expect(
 					scratch
 						.read('warms')
@@ -237,7 +288,7 @@ else {
 				).toHaveLength(PROBE_RESTARTS + 1)
 				expect(refusal).toMatchObject({
 					code: 'deadline',
-					context: { stage: 'type', deadline: 3_000 },
+					context: { stage: 'type', deadline: failedWarm },
 				})
 				scratch.remove('node_modules/typescript')
 				scratch.link('node_modules/typescript', resolve(ROOT, 'node_modules/typescript'))
@@ -251,7 +302,8 @@ else {
 	)
 	it(
 		'reports a failed type warm even when its automatic replacement has armed',
-		{ timeout: 20_000 },
+		// Concurrent warms and replacements + four boot inspections + resolution/case/control + disposal.
+		{ timeout: computeProbeBootBudget() + PROBE_FIXTURE_PROOF + PROBE_FIXTURE_DISPOSAL },
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -277,8 +329,7 @@ if (!fs.existsSync(failed)) {
 require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 `,
 			)
-			const armed = Promise.withResolvers<void>()
-			const probe = new Probe({ workspace: scratch.path, on: { arm: () => armed.resolve() } })
+			const probe = new Probe({ workspace: scratch.path })
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
@@ -299,8 +350,12 @@ require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 				},
 			}
 			try {
-				await probe.start()
-				await armed.promise
+				const armed = waitForProbeBoot(
+					probe,
+					'the automatic type replacement arm',
+					computeProbeBootBudget(),
+				)
+				await Promise.all([probe.start(), armed])
 				await expect(probe.prove(claim)).rejects.toMatchObject({
 					name: 'ProbeError',
 					message: 'The compiler printed no configuration',
@@ -312,10 +367,16 @@ require(${JSON.stringify(resolve(ROOT, 'node_modules/typescript/bin/tsc'))})
 			}
 		},
 	)
-	// The scalar project keeps a healthy boot and recovery inside the existing lifecycle budget.
 	it(
 		'consumes a failed type refill at the queued call and serves the next claim',
-		{ timeout: 20_000 },
+		// Boot + expired claim/disposal + failed refill attempts and healthy warm + recovery proof + disposal.
+		{
+			timeout:
+				computeProbeBootBudget() +
+				(PROBE_RESTARTS + 2) * (PROBE_WARM + inspectionDeadline) +
+				2 * PROBE_FIXTURE_PROOF +
+				2 * PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -344,7 +405,7 @@ else if (process.argv.includes('--showConfig')) {
 			)
 			const probe = new Probe({
 				workspace: scratch.path,
-				deadline: 3_000,
+				deadline: inspectionDeadline,
 			})
 			const claim: Claim = {
 				project: 'tsconfig.json',
@@ -366,19 +427,13 @@ else if (process.argv.includes('--showConfig')) {
 				},
 			}
 			try {
-				const armed = waitForEvent(
-					(listener) => {
-						probe.emitter.on('arm', listener)
-						return () => probe.emitter.off('arm', listener)
-					},
-					'the healthy probe arm',
-					{ budget: 20_000 },
-				)
+				const armed = waitForProbeBoot(probe, 'the healthy probe arm', computeProbeBootBudget())
 				await Promise.all([probe.start(), armed])
 				scratch.write('fail-type', '')
 				const expired = probe.prove(claim).catch((error: unknown) => error)
 				await waitForCondition('the held type inspection', () => scratch.has('inspecting'), {
-					budget: 3_000,
+					// Project resolution precedes the deliberately held inspection.
+					budget: 2 * inspectionDeadline,
 				})
 				const queued = probe.prove(claim).catch((error: unknown) => error)
 				expect(await expired).toMatchObject({ code: 'deadline', context: { stage: 'type' } })
@@ -468,33 +523,27 @@ else if (process.argv.includes('--showConfig')) {
 			}
 		},
 	)
-	// U1's fixture boot took about 6 s; this case includes its teardown.
 	it(
 		'defers construction, joins onset, and refuses start after teardown',
-		{ timeout: 20_000 },
+		// Concurrent warms and replacements + four boot inspections + max(deadline, LINT_TEARDOWN) disposal.
+		{ timeout: computeProbeBootBudget() + PROBE_FIXTURE_DISPOSAL },
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
 			const arms = createRecorder<[Toolchain]>()
-			const armed = Promise.withResolvers<void>()
-			const probe = new Probe({
-				workspace: scratch.path,
-				on: {
-					arm: (toolchain) => {
-						arms.handler(toolchain)
-						armed.resolve()
-					},
-				},
-			})
+			const probe = new Probe({ workspace: scratch.path, on: { arm: arms.handler } })
 			try {
 				await waitForDelay()
 				expect(scratch.has('server.pid')).toBe(false)
 				expect(scratch.has(TYPE_MIRROR)).toBe(false)
+				const armed = waitForProbeBoot(
+					probe,
+					'the deferred construction arm',
+					computeProbeBootBudget(),
+				)
 				const starting = probe.start()
 				expect(probe.start()).toBe(starting)
-				await starting
-				// T1 separates the onset gate from the full boot's arm event.
-				await armed.promise
+				await Promise.all([starting, armed])
 				expect(arms.count).toBe(1)
 				await probe.destroy()
 				await expect(probe.start()).rejects.toMatchObject({ code: 'destroyed' })
@@ -569,10 +618,16 @@ else if (process.argv.includes('--showConfig')) {
 			}
 		},
 	)
-	// The boot and subsequent real compiler/runtime inspections each carry their measured cost.
 	it(
 		'recovers an idle lint exit and serves after an exit during a claim',
-		{ timeout: 30_000 },
+		// Boot + idle/active lint replacements and disposal + three proofs + final disposal.
+		{
+			timeout:
+				computeProbeBootBudget() +
+				2 * (PROBE_DEADLINE + PROBE_FIXTURE_DISPOSAL) +
+				3 * PROBE_FIXTURE_PROOF +
+				PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -601,11 +656,11 @@ else if (process.argv.includes('--showConfig')) {
 				await probe.start()
 				const first = readFixtureServer(scratch)
 				killFixtureServer(scratch)
-				// A fixture launch is under 250 ms in U1; this window also clears host kill delivery.
+				// Idle disposal precedes the replacement coordinator warm deadline.
 				await waitForCondition(
 					'idle lint replacement',
 					() => readFixtureServer(scratch) !== first,
-					{ budget: 3_000 },
+					{ budget: PROBE_FIXTURE_DISPOSAL + PROBE_DEADLINE },
 				)
 				expect(errors.count).toBe(1)
 				expect(await probe.prove(claim)).toHaveProperty('receipt')
@@ -622,10 +677,17 @@ else if (process.argv.includes('--showConfig')) {
 			}
 		},
 	)
-	// One boot, an exit, and a replacement warm fit inside this case's bound.
+	// Boot + idle disposal + failed lint warm/disposal + restored warm + proof + final disposal.
 	it(
-		'spends the floor on used idle loss and restores it through start without a failed claim',
-		{ timeout: 20_000 },
+		'spends the floor on used idle loss, refuses a waiting claim, and restores it through start',
+		{
+			timeout:
+				computeProbeBootBudget() +
+				3 * PROBE_FIXTURE_DISPOSAL +
+				LINT_DEADLINE +
+				PROBE_DEADLINE +
+				PROBE_FIXTURE_PROOF,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -635,31 +697,52 @@ else if (process.argv.includes('--showConfig')) {
 				workspace: scratch.path,
 				on: { error: errors.handler, arm: arms.handler },
 			})
+			const claim: Claim = {
+				project: 'tsconfig.json',
+				case: {
+					files: [],
+					test: {
+						path: 'tmp/probes/restored.test.ts',
+						text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+					},
+				},
+				control: {
+					files: [],
+					test: {
+						path: 'tmp/probes/restored.test.ts',
+						text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+					},
+					stage: 'runtime',
+					reason: 'the control throws',
+				},
+			}
 			try {
-				await probe.start()
-				await new Promise<void>((armed) => probe.emitter.on('arm', () => armed()))
+				const armed = waitForProbeBoot(probe, 'the used lint floor boot', computeProbeBootBudget())
+				await Promise.all([probe.start(), armed])
 				// Boot used and released this lint record. A warm failure adds the second strike only
 				// when the prior idle loss strikes too, distinguishing pool 0.0.15 from 0.0.16.
 				scratch.write('unanswered-initialize', '')
 				killFixtureServer(scratch)
 				await waitForCondition('failed replacement initialize', () => scratch.has('initialized'), {
-					budget: 3_000,
+					// Idle disposal precedes the replacement's coordinator-bounded warm.
+					budget: PROBE_FIXTURE_DISPOSAL + PROBE_DEADLINE,
 				})
 				const failed = readFixtureServer(scratch)
-				await waitForCondition(
-					'failed replacement exit',
-					() => {
-						try {
-							process.kill(failed, 0)
-							return false
-						} catch {
-							return true
-						}
+				const refused = waitForEvent<[unknown]>(
+					(listener) => {
+						probe.emitter.on('error', listener)
+						return () => probe.emitter.off('error', listener)
 					},
-					{ budget: 3_000 },
+					'the waiting claim refusal after the failed lint refill settles',
+					// Initialize refusal and max(deadline, LINT_TEARDOWN) disposal settle the refill.
+					{ budget: LINT_DEADLINE + PROBE_FIXTURE_DISPOSAL },
 				)
-				// The refusal settles at the child's exit; one host turn delivers it to the pool.
-				await waitForDelay(50)
+				const [refusal] = await Promise.all([
+					probe.prove(claim).catch((error: unknown) => error),
+					refused,
+				])
+				expect(refusal).toMatchObject({ name: 'ProbeError', cause: { context: { stage: 'lint' } } })
+				expect(() => process.kill(failed, 0)).toThrow('kill ESRCH')
 				expect(
 					scratch
 						.read('spawns')
@@ -670,37 +753,23 @@ else if (process.argv.includes('--showConfig')) {
 				await probe.start()
 				expect(readFixtureServer(scratch)).not.toBe(failed)
 				expect(arms.count).toBe(1)
-				expect(
-					await probe.prove({
-						project: 'tsconfig.json',
-						case: {
-							files: [],
-							test: {
-								path: 'tmp/probes/restored.test.ts',
-								text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
-							},
-						},
-						control: {
-							files: [],
-							test: {
-								path: 'tmp/probes/restored.test.ts',
-								text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
-							},
-							stage: 'runtime',
-							reason: 'the control throws',
-						},
-					}),
-				).toHaveProperty('receipt')
+				expect(await probe.prove(claim)).toHaveProperty('receipt')
 			} finally {
 				await probe.destroy()
 				scratch.destroy()
 			}
 		},
 	)
-	// The failed initializes precede one complete real boot after the repair.
 	it(
 		'spends failed warms, unwraps their refusal, and rearms after repair',
-		{ timeout: 20_000 },
+		// Silent initialize/disposal attempts + repaired boot + resolution/case/control + final disposal.
+		{
+			timeout:
+				(PROBE_RESTARTS + 1) * (LINT_DEADLINE + PROBE_FIXTURE_DISPOSAL) +
+				computeProbeBootBudget() +
+				PROBE_FIXTURE_PROOF +
+				PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)

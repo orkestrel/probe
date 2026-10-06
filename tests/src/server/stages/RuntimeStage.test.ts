@@ -1297,7 +1297,8 @@ describe('runtime stage', () => {
 
 	it(
 		"recycles the resident runner after 64 written specifications, evicts disk caches, and strips the replacement warm's termination listeners",
-		{ timeout: 60_000 },
+		// 2026-10-06: full source suite + 14 busy workers/16 CPUs measured 64836 ms; twice the rounded seconds.
+		{ timeout: 130_000 },
 		async () => {
 			const scratch = createScratch()
 			scratch.write('package.json', '{"type":"module"}\n')

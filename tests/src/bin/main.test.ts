@@ -20,6 +20,9 @@ import { formatVerdict, isVerdict } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	PROBE_SERVER_WORKSPACES,
+	PROBE_FIXTURE_DISPOSAL,
+	PROBE_FIXTURE_PROOF,
+	computeProbeBootBudget,
 	describeEnding,
 	readDirectoryNames,
 	createProbeServerInitialize,
@@ -1398,10 +1401,12 @@ describe('eager bin onset', () => {
 			}
 		},
 	)
-	// The refused onset is immediate; the repaired call pays one real boot and one proof.
+	// Refusal/discovery guard + concurrent warm attempts and boot controls + proof + final disposal.
 	it(
 		'refuses initialize, keeps discovery, repairs a blocked workbench, and preserves exit one',
-		{ timeout: 25_000 },
+		{
+			timeout: 5_000 + computeProbeBootBudget() + PROBE_FIXTURE_PROOF + 2 * PROBE_FIXTURE_DISPOSAL,
+		},
 		async () => {
 			const scratch = createScratch()
 			writeProbeFixture(scratch, ROOT)
@@ -1443,14 +1448,20 @@ describe('eager bin onset', () => {
 				scratch.remove('tmp/probes')
 				child.stdin.write(`${JSON.stringify({ ...request, id: 2 })}\n`)
 				await waitForCondition('repaired workbench proof', () => indexFrames(frames).has(2), {
-					budget: 15_000,
+					// Concurrent warm/replacement attempts + four boot rounds + resolution/case/control.
+					budget: computeProbeBootBudget() + PROBE_FIXTURE_PROOF + PROBE_FIXTURE_DISPOSAL,
 				})
-				expect(readAnswer(indexFrames(frames).get(2) ?? '{}')).toMatchObject({
+				const repaired = indexFrames(frames).get(2) ?? '{}'
+				expect(
+					readAnswer(repaired),
+					`${repaired}\n${Buffer.concat(errors).toString('utf8')}`,
+				).toMatchObject({
 					structuredContent: { receipt: expect.any(String) },
 				})
 				child.stdin.end()
 				await waitForCondition('refused onset exit', () => child.exitCode !== null, {
-					budget: 3_000,
+					// Every stage closes concurrently under max(deadline, LINT_TEARDOWN).
+					budget: PROBE_FIXTURE_DISPOSAL,
 				})
 				expect(await ended).toStrictEqual({ code: 1, signal: null })
 				const lines = Buffer.concat(errors)
