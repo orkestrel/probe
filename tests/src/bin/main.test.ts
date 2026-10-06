@@ -777,13 +777,20 @@ describe('bin entry', () => {
 			try {
 				child.stdin.write(requests.map((request) => JSON.stringify(request)).join('\n') + '\n')
 				const frames = await readFrames(output, requests.length)
-				expect(Buffer.concat(errors).toString('utf8')).not.toContain('Error')
+				const answered = indexFrames(frames)
+				const handshake = answered.get(1)
+				const stderr = Buffer.concat(errors).toString('utf8')
 				// The handshake first, so a failure there is not read as a failure of the two calls.
-				expect(readAnswer(frames[0] ?? '')).toMatchObject({
+				expect(
+					readAnswer(handshake ?? '{}'),
+					`initialize: ${handshake}\nstderr: ${stderr}`,
+				).toMatchObject({
 					protocolVersion: '2025-06-18',
 					serverInfo: { name: 'probe', version },
 				})
-				for (const frame of frames.slice(1)) {
+				expect(stderr).not.toContain('Error')
+				for (const id of [2, 3]) {
+					const frame = answered.get(id) ?? '{}'
 					const answer = readAnswer(frame)
 					expect(answer, `no result on ${frame}`).toBeDefined()
 					if (answer === undefined) continue
