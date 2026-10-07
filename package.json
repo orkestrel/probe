@@ -95,7 +95,7 @@
 		"@orkestrel/contract": "^0.0.19",
 		"@orkestrel/emitter": "^0.0.11",
 		"@orkestrel/lsp": "^0.0.10",
-		"@orkestrel/mcp": "^0.0.36",
+		"@orkestrel/mcp": "^0.0.37",
 		"@orkestrel/pool": "^0.0.16",
 		"@orkestrel/timeout": "^0.0.12",
 		"@orkestrel/tool": "^0.0.18"
@@ -103,13 +103,13 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.4",
 		"@orkestrel/guide": "^0.0.24",
-		"@orkestrel/scaffold": "^0.0.92",
+		"@orkestrel/scaffold": "^0.0.94",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.4",
 		"oxfmt": "^0.72.0",
 		"oxlint": "^1.87.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.2",
+		"vite": "^8.3.3",
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
