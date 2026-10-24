@@ -24,6 +24,7 @@ import {
 	compileGuard,
 	isArray,
 	isError,
+	isFunction,
 	isNumber,
 	isObject,
 	isRecord,
@@ -1016,7 +1017,7 @@ export function captureListeners(
 export function releaseListeners(emitter: EventEmitter, capture: ListenerCapture): void {
 	for (const [event, captured] of capture) {
 		for (const listener of emitter.listeners(event)) {
-			if (captured.includes(listener)) continue
+			if (captured.includes(listener) || !isFunction(listener)) continue
 			emitter.removeListener(event, listener)
 		}
 	}
