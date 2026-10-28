@@ -27,7 +27,7 @@ import {
 } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { peerDependencies } from '../../../package.json' with { type: 'json' }
-import { Probe, readWorkspaceManifest } from '@src/server'
+import { Probe, readWorkspaceManifest, resolveWorkspaceBinary } from '@src/server'
 import {
 	LINT_DEADLINE,
 	LINT_TEARDOWN,
@@ -53,7 +53,7 @@ import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
-describe.sequential('stage pools', () => {
+describe('stage pools', { concurrent: false }, () => {
 	// Inspection and lint/runtime warms use the product deadline; the held type warm outlasts it.
 	const inspectionDeadline = PROBE_DEADLINE
 	const warmHold = inspectionDeadline + 200
@@ -867,11 +867,7 @@ const STALLING = createLintFixture({ budget: 300_000 })
 // transposed.
 const ORDERED = createLintFixture({ budget: 300_000, delay: 100 })
 
-// Builds one candidate draft whose type check costs about a second: 100 exclusions applied one
-// after another to a 10,000-member template-literal union, measured at 12.8 ms per exclusion in this
-// workspace. Volume is what makes the cost predictable, because the compiler pays per exclusion, so
-// a claim carrying enough of these outruns a deadline by a margin no host's speed closes. The
-// candidate is clean: the work is the point, and a diagnostic would report something else.
+// Builds repeated conditional-type work for the elapsed-time assertions.
 function createHeavyDraft(index: number): Draft {
 	const rows = [
 		'type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9',
@@ -911,7 +907,7 @@ function varyDraft(draft: Draft): Draft {
 	return { path: draft.path, text: `${draft.text}// the control, one comment apart\n` }
 }
 
-describe.sequential('probe', () => {
+describe('probe', { concurrent: false }, () => {
 	it(
 		'mints receipts only when every stage executes cleanly, including for a control that shares no path with its case, and returns admitted path issues',
 		// 120_000 ms clears the flagship's boot plus its proves on a contended host, which a
@@ -1400,6 +1396,55 @@ describe.sequential('probe', () => {
 		},
 	)
 
+	it(
+		'accepts a TypeScript 7 manifest without a compiler API or binary subpath export',
+		{ timeout: computeProbeBootBudget() + PROBE_FIXTURE_PROOF + PROBE_FIXTURE_DISPOSAL },
+		async () => {
+			const scratch = createScratch()
+			writeProbeFixture(scratch, ROOT)
+			scratch.remove('node_modules/typescript')
+			scratch.write(
+				'node_modules/typescript/package.json',
+				JSON.stringify({
+					name: 'typescript',
+					version: '7.0.2',
+					type: 'module',
+					bin: { tsc: resolveWorkspaceBinary(ROOT, 'typescript', 'tsc') },
+					exports: { '.': './index.js', './package.json': './package.json' },
+				}),
+			)
+			scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
+			const probe = new Probe({ workspace: scratch.path })
+			try {
+				await probe.start()
+				const verdict = await probe.prove({
+					project: 'tsconfig.json',
+					case: {
+						files: [],
+						test: {
+							path: 'tmp/probes/supported.test.ts',
+							text: "import { test } from 'vitest'\ntest('passes', () => {})\n",
+						},
+					},
+					control: {
+						files: [],
+						test: {
+							path: 'tmp/probes/supported.test.ts',
+							text: "import { test } from 'vitest'\ntest('fails', () => { throw new Error('control') })\n",
+						},
+						stage: 'runtime',
+						reason: 'the test throws',
+					},
+				})
+				expect(verdict.toolchain.typescript).toBe('7.0.2')
+				expect(verdict.receipt).toBeTypeOf('string')
+			} finally {
+				await probe.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('names an unsupported TypeScript installation before entering the compiler', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')
@@ -1407,9 +1452,9 @@ describe.sequential('probe', () => {
 		// manifest names never has to answer; it is here because the stage resolves it at construction.
 		scratch.write(
 			'node_modules/typescript/package.json',
-			'{"name":"typescript","version":"7.0.2","type":"module","bin":{"tsc":"./bin/tsc.js"},"exports":{".":"./index.js","./package.json":"./package.json"}}\n',
+			'{"name":"typescript","version":"8.0.2","type":"module","bin":{"tsc":"./bin/tsc.js"},"exports":{".":"./index.js","./package.json":"./package.json"}}\n',
 		)
-		scratch.write('node_modules/typescript/index.js', "export const version = '7.0.2'\n")
+		scratch.write('node_modules/typescript/index.js', "export const version = '8.0.2'\n")
 		scratch.write('node_modules/typescript/bin/tsc.js', 'process.exit(1)\n')
 		scratch.write('node_modules/oxlint/package.json', createLintFixture().manifest)
 		// The refusal this row reads lands before any stage runs, so the binary the manifest names
@@ -1445,10 +1490,10 @@ describe.sequential('probe', () => {
 				}),
 			).rejects.toMatchObject({
 				name: 'ProbeError',
-				message: `The supported TypeScript range is ${peerDependencies.typescript}; found 7.0.2`,
+				message: `The supported TypeScript range is ${peerDependencies.typescript}; found 8.0.2`,
 				origin: 'workspace',
 				code: 'malformed',
-				context: { name: 'typescript', value: '7.0.2' },
+				context: { name: 'typescript', value: '8.0.2' },
 			})
 		} finally {
 			const teardown = createTeardown()
@@ -1605,40 +1650,74 @@ describe.sequential('probe', () => {
 	)
 
 	it('replaces a type stage its deadline destroyed', { timeout: 300_000 }, async () => {
+		const scratch = createScratch()
+		writeProbeFixture(scratch, ROOT)
+		const connections = createRecorder<[Socket]>()
+		const gate = createServer((socket) => {
+			socket.on('error', () => {})
+			connections.handler(socket)
+		})
+		await new Promise<void>((ready) => gate.listen(0, '127.0.0.1', ready))
+		const address = gate.address()
+		if (address === null || typeof address === 'string') throw new Error('Missing gate port')
+		scratch.remove('node_modules/typescript')
+		scratch.write(
+			'node_modules/typescript/package.json',
+			JSON.stringify({
+				name: 'typescript',
+				version: readWorkspaceManifest(ROOT, 'typescript').contents.version,
+				bin: { tsc: 'held.cjs' },
+			}),
+		)
+		// Hold one real compiler invocation after boot, independently of the compiler's speed.
+		scratch.write(
+			'node_modules/typescript/held.cjs',
+			`const fs = require('node:fs')
+const active = ${JSON.stringify(resolve(scratch.path, 'hold-check'))}
+const held = ${JSON.stringify(resolve(scratch.path, 'held-check'))}
+if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--showConfig')) {
+	fs.writeFileSync(held, '')
+	const socket = require('node:net').connect(${address.port}, '127.0.0.1')
+	socket.once('data', () => {
+		socket.end()
+		require(${JSON.stringify(resolveWorkspaceBinary(ROOT, 'typescript', 'tsc'))})
+	})
+} else require(${JSON.stringify(resolveWorkspaceBinary(ROOT, 'typescript', 'tsc'))})
+`,
+		)
 		const expirations = createRecorder<[Claim]>()
 		const probe = new Probe({
-			workspace: ROOT,
+			workspace: scratch.path,
 			deadline: 20_000,
 			on: { expire: expirations.handler },
 		})
-		void probe.start().catch(() => {})
 		const test = {
-			path: 'tmp/probes/heavy-type.test.ts',
+			path: 'tmp/probes/type-deadline.test.ts',
 			text: "import { expect, test } from 'vitest'\ntest('passes', () => expect(1).toBe(1))\n",
 		}
-		// Thirty candidates are one compiler run of about 33 seconds behind a 20-second deadline,
-		// measured on 2026-09-06 on the host `guides/probe.md` § Cost names. The compiler runs in a
-		// child process, so the expiry fires on this host's own loop and terminates that child; the
-		// margin is what keeps a faster host from finishing inside the budget.
-		const files: readonly Draft[] = Array.from({ length: 30 }, (_unused, index) =>
-			createHeavyDraft(index),
-		)
 		const heavy: Claim = {
-			project: 'configs/src/tsconfig.core.json',
-			case: { files, test },
+			project: 'tsconfig.json',
+			case: { files: [], test },
 			control: {
-				files,
+				files: [],
 				test: varyDraft(test),
 				stage: 'type',
-				reason: 'the candidate outruns the deadline the coordinator allows one stage',
+				reason: 'the compiler is held past the inspection deadline',
 			},
 		}
 		const clean = {
 			path: 'src/core/after-type-expiry/helpers.ts',
 			text: "export function value(): string {\n\treturn 'ok'\n}\n",
 		}
-		mkdirSync(resolve(ROOT, 'tmp/probes'), { recursive: true })
 		try {
+			const armed = waitForProbeBoot(
+				probe,
+				'the type deadline fixture to arm',
+				computeProbeBootBudget(),
+			)
+			await probe.start()
+			await armed
+			scratch.write('hold-check', '')
 			await expect(probe.prove(heavy)).rejects.toMatchObject({
 				name: 'ProbeError',
 				message: 'The type stage exceeded 20000 ms',
@@ -1646,11 +1725,13 @@ describe.sequential('probe', () => {
 				code: 'deadline',
 				context: { stage: 'type', deadline: 20000 },
 			})
+			expect(connections.count).toBe(1)
 			expect(expirations.calls).toStrictEqual([[heavy]])
+			scratch.remove('hold-check')
 			// The claim that follows is the point: a stage the expiry only destroyed refuses it, and
 			// the refusal names a stage this caller never asked about.
 			const served = await probe.prove({
-				project: 'configs/src/tsconfig.core.json',
+				project: 'tsconfig.json',
 				case: { files: [clean], test },
 				control: {
 					files: [
@@ -1668,6 +1749,9 @@ describe.sequential('probe', () => {
 			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
+			for (const [socket] of connections.calls) socket.destroy()
+			await new Promise<void>((closed) => gate.close(() => closed()))
+			scratch.destroy()
 		}
 	})
 

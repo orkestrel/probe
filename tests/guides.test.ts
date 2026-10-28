@@ -460,7 +460,10 @@ await new GuideCommand({
 				expect(remainder.slice(0, boundary)).toBe('configs/src/tsconfig.core.json')
 				expect(remainder.slice(boundary + 1)).toMatch(/^[0-9a-f]{32}$/)
 				expect(GUIDE).toContain(`verdict.digest // '${DIGEST}'`)
-				expect(GUIDE).toContain(`verdict.receipt // '${receipt}'`)
+				expect(verdict.receipt?.startsWith(`probe:${verdict.digest}:type:`)).toBe(true)
+				expect(GUIDE).toContain(
+					'verdict.receipt?.startsWith(`probe:${verdict.digest}:type:`) // true',
+				)
 			} finally {
 				await probe.destroy()
 			}

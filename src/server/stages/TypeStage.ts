@@ -43,6 +43,8 @@ import { parseProjectConfig, parseRevisionOwner } from '../parsers.js'
  * Inspects TypeScript source by running the target workspace's own compiler over a mirror of it.
  *
  * @remarks
+ * TypeScript 6 and 7 run through the `tsc` entry in their package manifest; neither a compiler API
+ * nor an exported binary subpath is required.
  * The compiler is a process this stage spawns rather than a module it loads, so nothing here holds
  * a resident program and the host's event loop is free for the whole check. Starting sweeps a
  * mirror an earlier host left behind, copies the workspace into a fresh one under
@@ -80,6 +82,7 @@ export class TypeStage implements TypeStageInterface {
 	readonly #revision = `${process.pid}-${randomUUID()}`
 	readonly #mirror: string
 	readonly #configs = new Map<string, ProjectConfig>()
+	readonly #validated = new Set<string>()
 	readonly #mirrored = new Map<string, string>()
 	readonly #drafts = new Set<string>()
 	readonly #children = new Set<ChildProcess>()
@@ -142,6 +145,8 @@ export class TypeStage implements TypeStageInterface {
 	 * refreshed from the workspace first on a cache miss, so the digest names the configuration the
 	 * check applies. The reading is cached per project for the life of the stage, so a draft written
 	 * afterward cannot move it.
+	 * Before returning the identity, validates the project with `--noEmit` unless an unoverlaid check
+	 * already validated it. TypeScript 7's `--showConfig` can succeed for a malformed project.
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
@@ -216,6 +221,10 @@ export class TypeStage implements TypeStageInterface {
 		const contained = this.#contain(project)
 		this.#progress += 1
 		const config = await this.#configure(contained)
+		if (!this.#validated.has(contained)) {
+			this.#refresh()
+			await this.#check(contained, [])
+		}
 		return { path: contained, digest: computeDigest(this.#workspace, config.compilerOptions) }
 	}
 
@@ -232,6 +241,7 @@ export class TypeStage implements TypeStageInterface {
 			rmSync(this.#mirror, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
 		} catch {}
 		this.#configs.clear()
+		this.#validated.clear()
 		this.#mirrored.clear()
 		this.#drafts.clear()
 	}
@@ -455,7 +465,9 @@ export class TypeStage implements TypeStageInterface {
 				context: { stage: this.stage, project },
 			})
 		}
-		return this.#issues(diagnostics, project)
+		const issues = this.#issues(diagnostics, project, scratch)
+		if (this.#drafts.size === 0) this.#validated.add(this.#contain(project))
+		return issues
 	}
 
 	// Writes the scratch project one run reads, beside the mirrored project it extends. Sitting in
@@ -498,7 +510,7 @@ export class TypeStage implements TypeStageInterface {
 		return contained
 	}
 
-	#issues(diagnostics: readonly Diagnostic[], project: string): readonly Issue[] {
+	#issues(diagnostics: readonly Diagnostic[], project: string, scratch: string): readonly Issue[] {
 		const issues: Issue[] = []
 		for (const diagnostic of diagnostics) {
 			const message = this.#translate(diagnostic.message)
@@ -517,7 +529,7 @@ export class TypeStage implements TypeStageInterface {
 			// claimant for a configuration nobody else owns. A `.json` file the claim drafted is the
 			// claimant's like any other draft.
 			if (resolved === undefined || (!drafted && extname(resolved) === '.json')) {
-				throw new ProbeError(message, {
+				throw new ProbeError(message.replaceAll(normalizePath(scratch), normalizePath(project)), {
 					origin: 'workspace',
 					code: 'malformed',
 					context: { stage: this.stage, project },

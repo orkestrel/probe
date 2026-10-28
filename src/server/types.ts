@@ -316,6 +316,10 @@ export interface TypeStageInterface extends StageInterface {
 	 * Resolves one project to the path and digest the stage applies for it.
 	 * Calls `start()` before reading the project.
 	 *
+	 * @remarks
+	 * Validates the project with `--noEmit` unless warming or an earlier unoverlaid check already
+	 * validated it, because TypeScript 7's `--showConfig` can print partial JSON for a malformed project.
+	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
 	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the

@@ -1,5 +1,6 @@
 import type { Draft, Issue } from '@src/core'
 import { EventEmitter } from 'node:events'
+import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join, relative, resolve, sep } from 'node:path'
@@ -686,6 +687,20 @@ describe('server path helpers', () => {
 		)
 		expect(() => resolveWorkspaceBinary(ROOT, 'typescript')).toThrow(
 			'typescript does not publish the typescript binary',
+		)
+	})
+
+	it('executes the workspace compiler through its manifest binary', () => {
+		const result = spawnSync(
+			process.execPath,
+			[resolveWorkspaceBinary(ROOT, 'typescript', 'tsc'), '--version'],
+			{
+				encoding: 'utf8',
+			},
+		)
+		expect(result.status).toBe(0)
+		expect(result.stdout.trim()).toBe(
+			`Version ${readWorkspaceManifest(ROOT, 'typescript').contents.version}`,
 		)
 	})
 

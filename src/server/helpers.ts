@@ -548,6 +548,8 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
  * @remarks
  * A package publishes its binaries under keys of its own choosing, and that key is often not the
  * package name: `typescript` publishes `tsc`. Name the key as `command` wherever the two differ.
+ * Resolution reads `package.json` and its `bin` field, so TypeScript 6 and 7 need no exported
+ * `typescript/bin/tsc` subpath.
  * Default: the package name.
  *
  * @param workspace - The target workspace root

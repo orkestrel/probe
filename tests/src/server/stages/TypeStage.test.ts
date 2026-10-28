@@ -837,8 +837,7 @@ describe('type stage project resolution', () => {
 		scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 		scratch.write('tsconfig.json', STRICT)
 		scratch.write('src/value.ts', 'export const VALUE = 1\n')
-		// This project parses and matches no input, and the diagnostic that reports it quotes the
-		// absolute path the stage handed the compiler.
+		// An empty caller-named project must be refused even when --showConfig prints valid JSON.
 		scratch.write(project, '{}\n')
 		const stage = new TypeStage(scratch.path)
 		try {
@@ -1028,7 +1027,7 @@ describe('type stage workspace faults', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write('tsconfig.json', STRICT)
 			scratch.write('src/value.ts', 'export const VALUE = 1\n')
-			scratch.write('configs/src/tsconfig.core.json', '{"compilerOptions":{"bogus":true}}\n')
+			scratch.write('configs/src/tsconfig.core.json', '{"extends":"./tsconfig.core.json"}\n')
 			const stage = new TypeStage(scratch.path)
 			try {
 				const failure: unknown = await stage
@@ -1042,7 +1041,7 @@ describe('type stage workspace faults', () => {
 					origin: 'workspace',
 					code: 'malformed',
 					context: { stage: 'type', project: 'configs/src/tsconfig.core.json' },
-					message: expect.stringContaining("Unknown compiler option 'bogus'"),
+					message: expect.stringContaining('Circularity detected'),
 				})
 			} finally {
 				const teardown = createTeardown()

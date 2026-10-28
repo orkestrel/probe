@@ -18,6 +18,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { fileURLToPath } from 'node:url'
 import { attempt, isArray, isNumber, isObject, isString } from '@orkestrel/contract'
 import {
@@ -52,6 +53,11 @@ import { Overlay } from '../Overlay.js'
  * Inspects tests through one resident Vitest service from the target workspace.
  *
  * @remarks
+ * Vitest 4.1.12 and 5.0.5 share the mode-first `createVitest` overload used by this stage.
+ * Result eviction removes one file from Vitest 4's results cache. Vitest 5 exposes only a full
+ * cache clear, so eviction clears its results, dependency, and filesystem module caches.
+ * Warming removes termination handlers registered within the factory's async context before
+ * signal delivery, while retaining handlers the host registers outside that context.
  * Starting launches Vitest with the threads pool and instruments each inline or function-declared
  * project with a Vite plugin that reads the active inspection's candidate overlay. A selected
  * string-declared project reports a workspace issue because its configuration carries no runtime
@@ -333,63 +339,63 @@ export class RuntimeStage implements StageInterface {
 		this.#sweep()
 		const output = new PassThrough()
 		output.resume()
-		// Vitest installs one `SIGINT` and one `SIGTERM` handler per `createVitest` call, and each
-		// one force exits this process about a millisecond after the signal arrives. Teardown takes
-		// three orders of magnitude longer than that, so a host answering the signal gracefully
-		// loses the race and leaves its generated files in the consumer's tree. Diff the listeners
-		// across the call and remove exactly what appeared: the handler's name is an unexported
-		// Vitest detail, and matching on it would both miss a rename and strip a coincidental name
-		// match this stage does not own. Every warm strips, because every replacement and every
-		// stage the coordinator recycles calls `createVitest` again. Vitest's `exit` handler is left
-		// alone: it runs while the process is already leaving rather than racing a teardown.
-		//
-		// The call is not awaited here, and that is what makes the diff correct rather than merely
-		// tidy. Vitest registers those handlers before its first await, so releasing them as the
-		// call returns leaves no window a signal can arrive in. Releasing them after the promise
-		// settles would leave the whole warm exposed, and would remove every termination listener
-		// the host registered meanwhile — including the server's own, which starts after this
-		// constructor returns.
+		// Vitest 5 registers termination handlers after resolving configuration in this async scope.
+		const scope = new AsyncLocalStorage<boolean>()
+		const listener = this.#captureSignal.bind(this, scope)
 		const signals = captureListeners(process, ['SIGINT', 'SIGTERM'])
-		let warming: Promise<Vitest>
+		process.on('newListener', listener)
 		try {
-			// Only standard output frames the Model Context Protocol transport. Preserve worker
-			// diagnostics on standard error while draining standard output into a bounded stream.
-			warming = factory(
-				'test',
-				{
-					root: this.#workspace,
-					config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
-					watch: false,
-					run: true,
-					pool: 'threads',
-					reporters: [
+			const warming = scope.run(true, () => {
+				try {
+					// Only standard output frames the Model Context Protocol transport. Preserve worker
+					// diagnostics on standard error while draining standard output into a bounded stream.
+					// Vitest 4.1.12 requires mode first; Vitest 5.0.5 retains that overload for compatibility.
+					return factory(
+						'test',
 						{
-							onInit() {},
-							onTestRunEnd() {},
+							root: this.#workspace,
+							config: resolveWorkspaceFile(this.#workspace, 'vite.config.ts'),
+							watch: false,
+							run: true,
+							pool: 'threads',
+							reporters: [
+								{
+									onInit() {},
+									onTestRunEnd() {},
+								},
+							],
 						},
-					],
-				},
-				{
-					plugins: [
 						{
-							name: 'orkestrel-project-instrumentation',
-							enforce: 'post',
-							config: this.#configure.bind(this),
+							plugins: [
+								{
+									name: 'orkestrel-project-instrumentation',
+									enforce: 'post',
+									config: this.#configure.bind(this),
+								},
+							],
 						},
-					],
-				},
-				{ stdout: output, stderr: process.stderr },
-			)
-		} catch (error) {
-			throw this.#configuration(error)
-		} finally {
-			releaseListeners(process, signals)
-		}
-		try {
+						{ stdout: output, stderr: process.stderr },
+					)
+				} finally {
+					releaseListeners(process, signals)
+				}
+			})
 			return await warming
 		} catch (error) {
 			throw this.#configuration(error)
+		} finally {
+			process.off('newListener', listener)
+			scope.disable()
 		}
+	}
+
+	#captureSignal(
+		scope: AsyncLocalStorage<boolean>,
+		event: string | symbol,
+		listener: () => void,
+	): void {
+		if (scope.getStore() !== true || (event !== 'SIGINT' && event !== 'SIGTERM')) return
+		queueMicrotask(() => process.off(event, listener))
 	}
 
 	#configure(config: ViteUserConfig): void {
@@ -652,8 +658,25 @@ export class RuntimeStage implements StageInterface {
 			}
 			vitest.watcher.onFileDelete(file)
 			vitest.watcher.invalidates.delete(file)
-			vitest.cache.results.removeFromCache(normalizePath(relative(this.#workspace, file)))
-			await vitest.cache.results.writeToCache()
+			const results = 'results' in vitest.cache ? vitest.cache.results : undefined
+			if (
+				isObject(results) &&
+				'removeFromCache' in results &&
+				typeof results.removeFromCache === 'function' &&
+				'writeToCache' in results &&
+				typeof results.writeToCache === 'function'
+			) {
+				results.removeFromCache(normalizePath(relative(this.#workspace, file)))
+				await results.writeToCache()
+			} else if ('clearCache' in vitest && typeof vitest.clearCache === 'function') {
+				await vitest.clearCache()
+			} else {
+				throw new ProbeError('Vitest exposes no cache eviction API', {
+					origin: 'instrument',
+					code: 'malformed',
+					context: { stage: this.stage },
+				})
+			}
 			return []
 		} catch (error) {
 			return [

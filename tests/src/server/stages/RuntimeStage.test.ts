@@ -18,7 +18,7 @@ import { open } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { createTeardown, waitForCondition } from '@orkestrel/test'
+import { createRecorder, createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
 	PROBE_SPECIFICATIONS,
@@ -29,7 +29,7 @@ import {
 } from '@src/core'
 import { RuntimeStage, buildRevisionPath, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
-import { createVitest } from 'vitest/node'
+import { createVitest, version as VITEST_VERSION } from 'vitest/node'
 import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
 import { WORKSPACE_ROOT } from '../../../setup.js'
 
@@ -1207,6 +1207,10 @@ describe('runtime stage', () => {
 		"raises progress for the caller's run and lowers it before the stage's cleanup",
 		{ timeout: 60_000 },
 		async (context) => {
+			context.skip(
+				VITEST_VERSION.startsWith('5.'),
+				'Vitest exposes full cache clearing and atomic results writes, so a FIFO cannot rendezvous with a per-file eviction write',
+			)
 			// The control comes first: a FIFO asked for under a directory that does not exist is not
 			// created, so an instrument reporting a usable gate for that name would be reading nothing
 			// about the call.
@@ -1305,7 +1309,7 @@ describe('runtime stage', () => {
 			scratch.link('node_modules', resolve(ROOT, 'node_modules'))
 			scratch.write(
 				'vite.config.ts',
-				"import { appendFileSync, existsSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nappendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n')\nif (existsSync(fileURLToPath(new URL('refuse-warm', import.meta.url)))) throw new Error('the workspace refuses this warm')\nexport default defineConfig({ test: { projects: [{ test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
+				"import { appendFileSync, existsSync } from 'node:fs'\nimport { fileURLToPath } from 'node:url'\nimport { defineConfig } from 'vitest/config'\nconst plugin = { name: 'record-warm', configureVitest() { appendFileSync(fileURLToPath(new URL('runtime-warms.txt', import.meta.url)), 'warm\\n'); if (existsSync(fileURLToPath(new URL('refuse-warm', import.meta.url)))) throw new Error('the workspace refuses this warm') } }\nexport default defineConfig({ test: { projects: [{ plugins: [plugin], test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'] } }] } })\n",
 			)
 			scratch.write('tmp/probes/.keep', '')
 			const id = randomUUID()
@@ -1547,13 +1551,15 @@ describe('runtime stage', () => {
 			const marker = `runtime-listeners-${randomUUID()}`
 			const first = new RuntimeStage(ROOT)
 			const starting = first.start()
-			// Read synchronously, before anything is awaited. Vitest registers its handlers before
-			// its own first await, so a strip that waits for the warm to settle leaves the whole
-			// boot exposed — which is the window a harness signals a starting process in.
+			// Vitest 4's synchronous handlers must be gone before a host can signal the starting stage.
 			expect({
 				SIGINT: process.listenerCount('SIGINT'),
 				SIGTERM: process.listenerCount('SIGTERM'),
 			}).toStrictEqual(before)
+			const host = createRecorder<[]>()
+			process.on('SIGINT', host.handler)
+			process.on('SIGTERM', host.handler)
+			const retained = { SIGINT: before.SIGINT + 1, SIGTERM: before.SIGTERM + 1 }
 			const second = new RuntimeStage(ROOT)
 			try {
 				await starting
@@ -1568,15 +1574,17 @@ describe('runtime stage', () => {
 				expect({
 					SIGINT: process.listenerCount('SIGINT'),
 					SIGTERM: process.listenerCount('SIGTERM'),
-				}).toStrictEqual(before)
+				}).toStrictEqual(retained)
 				// A second warm is the recycle path in miniature: a strip performed once at boot
 				// stops working the moment the coordinator replaces a stage.
 				await expect(second.inspect(subject)).resolves.toMatchObject({ issues: [] })
 				expect({
 					SIGINT: process.listenerCount('SIGINT'),
 					SIGTERM: process.listenerCount('SIGTERM'),
-				}).toStrictEqual(before)
+				}).toStrictEqual(retained)
 			} finally {
+				process.off('SIGINT', host.handler)
+				process.off('SIGTERM', host.handler)
 				const teardown = createTeardown()
 				teardown.add(() => second.destroy())
 				teardown.add(() => first.destroy())

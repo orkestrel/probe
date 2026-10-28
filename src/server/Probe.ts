@@ -51,6 +51,8 @@ import { TypeStage } from './stages/TypeStage.js'
  * Answers claims through its type, lint, and runtime stages.
  *
  * @remarks
+ * The workspace peers are TypeScript `^6.0.3 || ^7.0.2` and Vitest `^4.1.12 || ^5.0.5`.
+ * Starting refuses TypeScript majors outside 6 and 7 before a stage starts.
  * Construction resolves the target workspace's toolchain. Starting warms every stage and waits
  * for lint and runtime; type warming and the boot controls continue behind that gate. The boot
  * controls mutate imported dependencies and refuse service unless the type and runtime stages
@@ -99,7 +101,7 @@ import { TypeStage } from './stages/TypeStage.js'
  * const probe = new Probe({ workspace: process.cwd() })
  * const verdict = await probe.prove(claim)
  * verdict.digest // 'bdf03e5dfd6bd413ead671c7a2940fcf'
- * verdict.receipt // 'probe:bdf03e5dfd6bd413ead671c7a2940fcf:type:typescript@6.0.3:oxlint@1.89.0:vitest@4.1.12:configs/src/tsconfig.core.json@434f59254d58cf2683d453a26bd0d837'
+ * verdict.receipt?.startsWith(`probe:${verdict.digest}:type:`) // true
  * await probe.destroy()
  * ```
  */
@@ -746,9 +748,9 @@ export class Probe implements ProbeInterface {
 	#support(): void {
 		const version = this.#toolchain.typescript
 		const range = peerDependencies.typescript
-		const supported = /^\^(\d+)\./u.exec(range)?.[1]
 		const found = /^(\d+)\./u.exec(version)?.[1]
-		if (supported === undefined || found !== supported) {
+		const supported = range.split(' || ').some((entry) => /^\^(\d+)\./u.exec(entry)?.[1] === found)
+		if (found === undefined || !supported) {
 			throw new ProbeError(`The supported TypeScript range is ${range}; found ${version}`, {
 				origin: 'workspace',
 				code: 'malformed',
