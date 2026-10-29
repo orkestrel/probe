@@ -1,19 +1,12 @@
-import type { Party, ProbeErrorCode } from '@src/core'
 import { fileURLToPath } from 'node:url'
 import { PROBE_ERROR_CODES, ProbeError, createDestroyedError, isProbeError } from '@src/core'
-import {
-	inferTypeProject,
-	loadWorkspaceVitest,
-	readWorkspaceManifest,
-	resolveWorkspaceBinary,
-	resolveWorkspaceFile,
-	resolveWorkspaceModule,
-} from '@src/server'
-import { createTeardown } from '@orkestrel/test'
+import { readWorkspaceManifest } from '@src/server'
+import { captureError, createTeardown } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { isConstructor, isFunction, isRecord } from '@orkestrel/contract'
-import { WORKSPACE_ROOT } from '../../setup.js'
+import { WORKSPACE_ROOT, findBareErrors, describeFailure } from '../../setup.js'
+import { buildProbeFailureDrives } from '../../setupServer.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
@@ -24,59 +17,6 @@ const SOURCES: Record<string, unknown> = import.meta.glob('../../../src/**/*.ts'
 	query: '?raw',
 	import: 'default',
 })
-
-// One driven failure path: what to call, and the pair the raised value must carry.
-type Drive = readonly [subject: string, origin: Party, code: ProbeErrorCode, raise: () => unknown]
-
-// Documentation examples are prose rather than failure paths.
-function stripComments(source: string): string {
-	return source
-		.replaceAll(/\/\*[\s\S]*?\*\//g, '')
-		.split('\n')
-		.filter((line) => !line.trimStart().startsWith('//'))
-		.join('\n')
-}
-
-function findBareErrors(source: string, path: string): readonly string[] {
-	const text = stripComments(source)
-	// The MCP handshake answers in the protocol's error type.
-	const factory =
-		path === '../../../src/server/errors.ts'
-			? /^export function createHandshakeError\(error: ProbeError\): MCPError \{\s*return (new\s+MCPError\s*\()/m.exec(
-					text,
-				)
-			: null
-	const sanctioned =
-		factory === null || factory[1] === undefined
-			? undefined
-			: factory.index + factory[0].length - factory[1].length
-	return [...text.matchAll(/\b(throw\s+)?new\s+([A-Za-z_][\w]*)\s*\(/g)]
-		.filter((match) =>
-			match[2] === 'MCPError'
-				? match.index !== sanctioned
-				: match[1] !== undefined && match[2] !== 'ProbeError',
-		)
-		.map((match) => `${path} ${match[2] ?? ''}`)
-}
-
-// Runs one failure path and hands back what it raised, so an assertion reads the value a consumer
-// catches. A call that returns instead of raising hands back `undefined`. No following assertion
-// admits that value.
-function raiseFailure(action: () => unknown): unknown {
-	try {
-		action()
-		return undefined
-	} catch (error) {
-		return error
-	}
-}
-
-// Renders one raised value as the pair a consumer branches on, or as what it is when the guard
-// refuses it, so a failed assertion names the drift instead of printing `false`.
-function describeFailure(value: unknown): string {
-	if (!isProbeError(value)) return `unclassified ${String(value)}`
-	return `${value.origin}/${value.code}`
-}
 
 describe('probe error', () => {
 	it('narrows its own failure and refuses a plain Error', () => {
@@ -215,99 +155,18 @@ describe('failure adoption', () => {
 			outside.write('secret.ts', 'export const SECRET = 1\n')
 			workspace.link('link', outside.path)
 
-			const drives: readonly Drive[] = [
-				[
-					'a torn-down subject',
-					'claimant',
-					'destroyed',
-					() => {
-						throw createDestroyedError('probe')
-					},
-				],
-				[
-					'a path escaping the workspace',
-					'claimant',
-					'refused',
-					() => resolveWorkspaceFile(workspace.path, '../secrets.env'),
-				],
-				[
-					'a mutation crossing a symbolic link',
-					'workspace',
-					'refused',
-					() => resolveWorkspaceFile(workspace.path, 'link/secret.ts', true),
-				],
-				[
-					'an unreadable mutation path',
-					'claimant',
-					'refused',
-					() => resolveWorkspaceFile(workspace.path, 'invalid\0path.ts', true),
-				],
-				[
-					'a candidate outside every scoped project',
-					'claimant',
-					'refused',
-					() => inferTypeProject('tests/src/core/greeting.test.ts'),
-				],
-				[
-					'a module the workspace does not install',
-					'workspace',
-					'missing',
-					() => resolveWorkspaceModule(workspace.path, 'definitely-absent-package'),
-				],
-				[
-					'a tool the workspace does not install',
-					'workspace',
-					'missing',
-					() => loadWorkspaceVitest(workspace.path),
-				],
-				[
-					'a manifest the workspace does not publish',
-					'workspace',
-					'missing',
-					() => readWorkspaceManifest(workspace.path, 'definitely-absent-package'),
-				],
-				[
-					'a manifest that is not JSON',
-					'workspace',
-					'malformed',
-					() => readWorkspaceManifest(workspace.path, 'unparsable'),
-				],
-				[
-					'a manifest that is not a record',
-					'workspace',
-					'malformed',
-					() => readWorkspaceManifest(workspace.path, 'listed'),
-				],
-				[
-					'a package publishing no bin field',
-					'workspace',
-					'missing',
-					() => resolveWorkspaceBinary(workspace.path, 'binless'),
-				],
-				[
-					'a package publishing no binary of its own name',
-					'workspace',
-					'missing',
-					() => resolveWorkspaceBinary(ROOT, 'typescript'),
-				],
-				[
-					'a package publishing a bin entry that is not a path',
-					'workspace',
-					'malformed',
-					() => resolveWorkspaceBinary(workspace.path, 'oddbin'),
-				],
-			]
+			const drives = buildProbeFailureDrives(workspace.path, ROOT)
 
 			expect(drives.length).toBeGreaterThan(0)
 			const reported = drives.map((drive) => {
-				const raised = raiseFailure(drive[3])
+				const raised = captureError(drive[3])
 				expect(raised, `${drive[0]} raised nothing`).toBeDefined()
 				return `${drive[0]}: ${describeFailure(raised)}`
 			})
 			expect(reported).toStrictEqual(drives.map((drive) => `${drive[0]}: ${drive[1]}/${drive[2]}`))
 			// The translated ones keep the dependency's own fault reachable, so a caller can print
 			// what the host said as well as what probe made of it.
-			const translated = raiseFailure(() => readWorkspaceManifest(workspace.path, 'unparsable'))
+			const translated = captureError(() => readWorkspaceManifest(workspace.path, 'unparsable'))
 			expect(isProbeError(translated) && translated.cause instanceof Error).toBe(true)
 		} finally {
 			const teardown = createTeardown()
@@ -324,7 +183,7 @@ describe('failure adoption', () => {
 		const workspace = createScratch({ prefix: 'probe-adoption-control-' })
 		try {
 			workspace.write('node_modules/unparsable/package.json', '{ this is not JSON\n')
-			const untranslated = raiseFailure(() =>
+			const untranslated = captureError(() =>
 				JSON.parse(workspace.read('node_modules/unparsable/package.json') ?? ''),
 			)
 			expect(untranslated).toBeInstanceOf(Error)

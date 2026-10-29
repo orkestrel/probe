@@ -1,4 +1,9 @@
-import type { Check, Issue, Project, Stage, Toolchain, Verdict } from '@src/core'
+import {
+	PROBE_EXAMPLE_TOOLCHAIN as TOOLCHAIN,
+	PROBE_EXAMPLE_PROJECT as PROJECT,
+	PROBE_EXAMPLE_TOKEN as TOKEN,
+} from '../../setup.js'
+import type { Check, Issue, Project, Verdict } from '@src/core'
 import {
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
@@ -13,29 +18,7 @@ import {
 	matchesSpecification,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-
-const TOOLCHAIN: Toolchain = { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' }
-const PROJECT: Project = {
-	path: 'configs/src/tsconfig.core.json',
-	digest: 'd61f11b52460b1c6707cfac2c6078d59',
-}
-// The token the package documents, reproduced here as a literal rather than rebuilt from the
-// constants the source joins: a token assembled the way `computeReceipt` assembles it would match
-// whatever `computeReceipt` returned.
-const TOKEN =
-	'probe:6ca20c3bff623031d3955b9d1a76d71d:type:typescript@6.0.3:oxlint@1.79.0:vitest@4.1.11:configs/src/tsconfig.core.json@d61f11b52460b1c6707cfac2c6078d59'
-
-// The control shape `prove` really produces: one check per stage, in the order a verdict reports
-// them, with the issues under test at the one stage that carries them. A shorter array is a
-// verdict this package never returns, and a receipt decided from one certifies a stage that never
-// reported.
-function buildControl(stage: Stage, issues: readonly Issue[]): readonly Check[] {
-	return PROBE_STAGES.map((name) => ({
-		stage: name,
-		elapsed: 1,
-		issues: name === stage ? issues : [],
-	}))
-}
+import { buildControl } from '../../setup.js'
 
 describe('core formatting helpers', () => {
 	// The issues `formatIssue` documents, transcribed as the typed literals the contract

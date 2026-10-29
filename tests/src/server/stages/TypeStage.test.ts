@@ -1,3 +1,4 @@
+import { PROBE_TYPE_CONFIG as STRICT } from '../../../setupServer.js'
 import {
 	existsSync,
 	mkdirSync,
@@ -11,32 +12,16 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTeardown, waitForCondition } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, supportsFileLinks } from '@orkestrel/test/server'
 import { TypeStage } from '@src/server'
 import { TYPE_MIRROR, formatIssue, formatSpecification, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
-// A workspace the compiler accepts and this suite can write drafts into. Every scratch below
-// declares its own project, so a case reads the configuration it names rather than this package's.
-const STRICT =
-	'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[],"strict":true},"include":["src/**/*.ts"]}\n'
-
 // A host that refuses `symlinkSync` with `EPERM` cannot hold the tree the symbolic-link case below
 // needs, so that case is skipped there rather than reported red for an environment limit.
-const LINKS = (() => {
-	const scratch = createScratch({ prefix: 'probe-type-links-probe-' })
-	try {
-		scratch.write('real.ts', 'export const REAL = 1\n')
-		symlinkSync(resolve(scratch.path, 'real.ts'), resolve(scratch.path, 'linked.ts'))
-		return true
-	} catch {
-		return false
-	} finally {
-		scratch.destroy()
-	}
-})()
+const LINKS = supportsFileLinks()
 
 describe('type stage', () => {
 	it('defers the mirror until start and marks a fresh resolve', async () => {
@@ -787,12 +772,10 @@ describe('type stage project resolution', () => {
 			scratch.write(project, '{"compilerOptions":{"strict":true}}\n')
 			scratch.write('projects/value.ts', 'export const VALUE = 1\n')
 			const first = new TypeStage(scratch.path)
-			let digest: string
-			try {
-				digest = (await first.resolve(project)).digest
-			} finally {
-				await first.destroy()
-			}
+			const digest = await first
+				.resolve(project)
+				.then((value) => value.digest)
+				.finally(() => first.destroy())
 			const second = new TypeStage(scratch.path)
 			try {
 				await second.inspect(

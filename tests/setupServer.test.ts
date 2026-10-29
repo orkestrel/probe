@@ -1,3 +1,4 @@
+import { utimesSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +25,7 @@ import {
 	readFixtureServer,
 	readHostEnding,
 	readSignalEnding,
+	requireProbeBuild,
 	spawnProbeServerHost,
 	waitForFixtureServer,
 	writeProbeServerTarget,
@@ -33,6 +35,41 @@ const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const BUILT_SERVER = resolve(ROOT, 'dist/src/server/index.js')
 
 describe('server test setup', () => {
+	it('refuses missing and stale builds before accepting entries at or after the newest source', () => {
+		const scratch = createScratch({
+			files: {
+				'src/older.ts': '',
+				'src/nested/newer.ts': '',
+				'dist/entry.js': '',
+				'dist/server.js': '',
+			},
+		})
+		try {
+			const older = new Date('2020-01-01T00:00:00Z')
+			const newer = new Date('2020-01-02T00:00:00Z')
+			const latest = new Date('2020-01-03T00:00:00Z')
+			const entry = resolve(scratch.path, 'dist/entry.js')
+			const server = resolve(scratch.path, 'dist/server.js')
+			utimesSync(resolve(scratch.path, 'src/older.ts'), older, older)
+			utimesSync(resolve(scratch.path, 'src/nested/newer.ts'), newer, newer)
+			utimesSync(entry, older, older)
+			utimesSync(server, latest, latest)
+			expect(() =>
+				requireProbeBuild(scratch.path, [resolve(scratch.path, 'dist/missing.js')]),
+			).toThrow('npm run build')
+			expect(() => requireProbeBuild(scratch.path, [resolve(scratch.path, 'dist')])).toThrow(
+				'npm run build',
+			)
+			expect(() => requireProbeBuild(scratch.path, [server, entry])).toThrow('npm run build')
+			utimesSync(entry, newer, newer)
+			expect(() => requireProbeBuild(scratch.path, [entry, server])).not.toThrow()
+			utimesSync(resolve(scratch.path, 'src/nested/newer.ts'), latest, latest)
+			expect(() => requireProbeBuild(scratch.path, [entry, server])).toThrow('npm run build')
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('builds the ProbeServer host guard and event vocabulary', () => {
 		const program = createProbeServerHost()
 		expect(program).toContain(
@@ -85,10 +122,10 @@ describe('server test setup', () => {
 		const scratch = createScratch({ prefix: 'probe-server-host-' })
 		const teardown = createTeardown()
 		teardown.add(() => destroyScratch(scratch))
-		writeProbeServerTarget(scratch, ROOT)
-		const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
-		teardown.add(() => killChildTree(host.child))
 		try {
+			writeProbeServerTarget(scratch, ROOT)
+			const host = spawnProbeServerHost(scratch, BUILT_SERVER, 'controlled')
+			teardown.add(() => killChildTree(host.child))
 			await waitForCondition(
 				'the generated ProbeServer host to start',
 				() => host.events.some((event) => event['name'] === 'server-started'),

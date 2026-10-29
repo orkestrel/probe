@@ -1,11 +1,12 @@
-import type { Draft, Issue } from '@src/core'
+import { PROBE_EXAMPLE_ISSUE as DOCUMENTED_ISSUE } from '../../setup.js'
+import type { Draft } from '@src/core'
 import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join, relative, resolve, sep } from 'node:path'
 import { compileGuard } from '@orkestrel/contract'
-import { captureError } from '@orkestrel/test'
+import { captureError, createRecorder } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
 	buildRevisionPath,
@@ -42,20 +43,6 @@ import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
-const DOCUMENTED_ISSUE: Issue = {
-	origin: 'claimant',
-	path: 'src/core/greeting.ts',
-	message: 'not assignable',
-}
-
-// Two distinct listeners reporting one name, so a release keyed on the name cannot tell them apart
-// and a release keyed on identity can. The name is assigned rather than declared, because two
-// function declarations cannot share a name in one scope, which is the whole difficulty the pair
-// under test exists to survive.
-function onExit(): void {}
-function onExitAgain(): void {}
-Object.defineProperty(onExitAgain, 'name', { value: 'onExit' })
-
 // Every `@example` block the documented server helpers carry, run verbatim and asserted against
 // the value each block states. An illustrative `/srv/checkout` root stands for the workspace under
 // test, so a documented value carrying a path is composed the same way the block composes it rather
@@ -280,7 +267,7 @@ describe('server stage boundary', () => {
 describe('server listener leaves', () => {
 	it('releases what an emitter gained and leaves every captured listener attached', () => {
 		const emitter = new EventEmitter()
-		const kept = (): void => {}
+		const kept = createRecorder().handler
 		emitter.on('close', kept)
 		const capture = captureListeners(emitter, ['close', 'error'])
 		emitter.on('close', () => {})
@@ -295,7 +282,7 @@ describe('server listener leaves', () => {
 
 	it('leaves a listener the capture held and something else removed', () => {
 		const emitter = new EventEmitter()
-		const departed = (): void => {}
+		const departed = createRecorder().handler
 		emitter.on('close', departed)
 		const capture = captureListeners(emitter, ['close'])
 		emitter.removeListener('close', departed)
@@ -307,6 +294,8 @@ describe('server listener leaves', () => {
 	// rename its own between releases, so a release keyed on the name would strip a stranger's
 	// listener and miss the one it came for.
 	it('separates two listeners that share a name', () => {
+		const onExit = createRecorder().handler
+		const onExitAgain = createRecorder().handler
 		const emitter = new EventEmitter()
 		expect(onExitAgain.name).toBe(onExit.name)
 		expect(onExitAgain).not.toBe(onExit)
@@ -367,6 +356,13 @@ describe('server path helpers', () => {
 			'src/core/value.ts',
 		)
 		expect(normalizeValue(ROOT, resolve(ROOT, 'src/core/value.ts'))).toBe('src/core/value.ts')
+	})
+
+	it('drops a parsed __proto__ key and sorts the rest, as the assignment-built record did', () => {
+		const parsed: unknown = JSON.parse('{"b":1,"__proto__":{"x":1},"a":"kept"}')
+		const normalized = normalizeValue(ROOT, parsed)
+		expect(JSON.stringify(normalized)).toBe('{"a":"kept","b":1}')
+		expect(Object.keys(normalized ?? {})).toEqual(['a', 'b'])
 	})
 
 	it('builds sibling revision paths with and without extensions', () => {

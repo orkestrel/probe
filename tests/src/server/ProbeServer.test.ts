@@ -1,11 +1,11 @@
-import type { MCPLimitOptions } from '@orkestrel/mcp'
-import type { JSONValue } from '@orkestrel/contract'
+import { buildRecord, readCall, readInput, readSignals } from '../../setupServer.js'
 import type { ProbeServerHost } from '../../setupServer.js'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { fileURLToPath } from 'node:url'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+import { fileURLToPath } from 'node:url'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import {
 	createRecorder,
@@ -15,7 +15,6 @@ import {
 	waitForDelay,
 } from '@orkestrel/test'
 import { createScratch, destroyScratch } from '@orkestrel/test/server'
-import { createTool, createToolManager } from '@orkestrel/tool'
 import { PROBE_KEYS } from '@src/core'
 import { ProbeServer } from '@src/server'
 import { describe, expect, it } from 'vitest'
@@ -39,91 +38,6 @@ import {
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const BUILT_SERVER = resolve(ROOT, 'dist/src/server/index.js')
-
-// A verdict carrying one issue per refused declaration, which is what a control refusing several
-// declarations at once produces. The shape is the `Verdict` record `isVerdict` admits; the values
-// are inert, because what is read here is how the installed package bounds the record rather than
-// what the record says.
-function buildRecord(issues: number): JSONValue {
-	return {
-		id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
-		digest: '6ca20c3bff623031d3955b9d1a76d71d',
-		toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
-		project: { path: 'configs/src/tsconfig.core.json', digest: 'd61f11b52460b1c6707cfac2c6078d59' },
-		case: [{ stage: 'type', elapsed: 61, issues: [] }],
-		control: [
-			{
-				stage: 'type',
-				elapsed: 58,
-				issues: Array.from({ length: issues }, (_, index) => ({
-					origin: 'claimant',
-					path: `src/core/wide-${String(index)}.ts`,
-					message: 'not assignable',
-					range: {
-						start: { line: index, character: 6 },
-						end: { line: index, character: 13 },
-					},
-				})),
-			},
-		],
-		elapsed: 549,
-		receipt: 'probe:6ca20c3bff623031d3955b9d1a76d71d:type',
-	}
-}
-
-// Dispatches one `tools/call` against a server composed the way `ProbeServer` composes its own —
-// an explicit execution policy answering with a complete result that carries the record beside one
-// rendered text block — and returns the parsed JSON-RPC message the dispatcher answered with.
-async function readCall(record: JSONValue, limit: MCPLimitOptions): Promise<unknown> {
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'prove',
-			description: 'Answers whether a TypeScript edit compiles, lints, and passes its test',
-			parameters: { type: 'object', properties: {} },
-			execute: () => record,
-		}),
-	)
-	const server = createMCPServer({
-		identity: { name: 'probe', version: '0.0.0' },
-		tools,
-		limit,
-		execution: () =>
-			Promise.resolve({
-				resultType: 'complete',
-				content: [{ type: 'text', text: 'probe rendered\nreceipt probe:6ca20c' }],
-				structuredContent: record,
-			}),
-	})
-	const answer = await createMCPLegacy(server).handle(
-		JSON.stringify({
-			jsonrpc: '2.0',
-			id: 1,
-			method: 'tools/call',
-			params: { name: 'prove', arguments: {} },
-		}),
-	)
-	if (typeof answer !== 'string') return undefined
-	const message: unknown = JSON.parse(answer)
-	return message
-}
-
-// Every following count is a delta against the moment it was read. A sibling test in this project
-// holds listeners of its own, and the worker these run in is not a fresh process.
-function readInput() {
-	return {
-		data: process.stdin.listenerCount('data'),
-		close: process.stdin.listenerCount('close'),
-		error: process.stdin.listenerCount('error'),
-	}
-}
-
-function readSignals() {
-	return {
-		SIGINT: process.listenerCount('SIGINT'),
-		SIGTERM: process.listenerCount('SIGTERM'),
-	}
-}
 
 describe('probe server', () => {
 	// A stream nobody has read reports `readableFlowing` as `null` and `isPaused()` as false, so a
@@ -190,7 +104,6 @@ describe('probe server', () => {
 			error: input.error + 1,
 		}
 		const armed = { SIGINT: signals.SIGINT + 1, SIGTERM: signals.SIGTERM + 1 }
-		let closing: Promise<void> | undefined
 		try {
 			server.start()
 			expect(readInput()).toStrictEqual(seized)
@@ -201,7 +114,7 @@ describe('probe server', () => {
 			expect(readInput()).toStrictEqual(seized)
 			expect(readSignals()).toStrictEqual(armed)
 		} finally {
-			closing = server.destroy()
+			const closing = server.destroy()
 			// The latch is the promise itself, so a second caller joins the first teardown rather
 			// than starting a second one against resources the first is already releasing.
 			expect(server.destroy()).toBe(closing)

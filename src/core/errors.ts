@@ -1,5 +1,13 @@
 import type { Party, ProbeErrorCode, ProbeErrorContext, ProbeErrorOptions } from './types.js'
-import { holds, isError } from '@orkestrel/contract'
+import {
+	INTRINSICS,
+	holds,
+	isError,
+	isFunction,
+	isNumber,
+	isObject,
+	isString,
+} from '@orkestrel/contract'
 import { PROBE_ERROR_CODES, PROBE_PARTIES } from './constants.js'
 
 /**
@@ -40,10 +48,7 @@ export class ProbeError extends Error {
 	constructor(message: string, options: ProbeErrorOptions) {
 		const cause = options.cause
 		super(message, cause === undefined ? undefined : { cause })
-		// A global own-property brand rather than the constructor identity, because a consumer that
-		// installs this package twice, or loads its ESM and CommonJS builds together, holds two
-		// classes and `instanceof` refuses the other one's error.
-		Object.defineProperty(this, Symbol.for('@orkestrel/probe.error'), { value: true })
+		Object.defineProperty(this, Symbol.for('@orkestrel/probe.error'), { value: this })
 		this.origin = options.origin
 		this.code = options.code
 		if (options.context !== undefined) this.context = options.context
@@ -54,12 +59,11 @@ export class ProbeError extends Error {
  * Checks whether an unknown value is a {@link ProbeError}.
  *
  * @remarks
- * Recognition combines the global own-property brand with the native `Error` base, the subclass
- * prototype, the fixed name, a party {@link PROBE_PARTIES} declares, and a condition
- * {@link PROBE_ERROR_CODES} declares. The brand carries recognition across duplicate installations
- * and across an ESM and a CommonJS copy of this package, where the two classes are different values.
- * A plain `Error`, a property-only lookalike, and a branded value carrying an undeclared origin or
- * condition all stay outside the type.
+ * Recognition requires the native `Error` base, a non-base prototype, an own global brand holding
+ * the error itself, a declared party and condition, and context members of their declared types.
+ * The brand carries recognition across duplicate installations and module formats. A subclass may
+ * replace `name`. A transparent proxy, a plain `Error`, a property-only lookalike, and an error with
+ * invalid members stay outside the type.
  *
  * @param value - The value to inspect
  * @returns True if the value is a `ProbeError` instance; false otherwise
@@ -73,12 +77,24 @@ export class ProbeError extends Error {
 export function isProbeError(value: unknown): value is ProbeError {
 	if (!isError(value)) return false
 	return holds(() => {
-		if (Object.getPrototypeOf(value) === Error.prototype) return false
-		if (value.name !== 'ProbeError' || !('origin' in value) || !('code' in value)) return false
-		const descriptor = Object.getOwnPropertyDescriptor(value, Symbol.for('@orkestrel/probe.error'))
-		if (descriptor?.value !== true) return false
-		const origin: unknown = value.origin
-		const code: unknown = value.code
+		if (INTRINSICS.prototype(value) === Error.prototype) return false
+		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/probe.error'))
+		if (descriptor?.value !== value) return false
+		const origin: unknown = INTRINSICS.reflect.read(value, 'origin')
+		const code: unknown = INTRINSICS.reflect.read(value, 'code')
+		const context: unknown = INTRINSICS.reflect.read(value, 'context')
+		if (context !== undefined) {
+			if (!isObject(context) && !isFunction(context)) return false
+			const stage: unknown = INTRINSICS.reflect.read(context, 'stage')
+			if (stage !== undefined && stage !== 'type' && stage !== 'lint' && stage !== 'runtime')
+				return false
+			for (const key of ['path', 'project', 'name']) {
+				const member: unknown = INTRINSICS.reflect.read(context, key)
+				if (member !== undefined && !isString(member)) return false
+			}
+			const deadline: unknown = INTRINSICS.reflect.read(context, 'deadline')
+			if (deadline !== undefined && !isNumber(deadline)) return false
+		}
 		return (
 			PROBE_PARTIES.some((declared) => declared === origin) &&
 			PROBE_ERROR_CODES.some((declared) => declared === code)

@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs
 import { randomUUID } from 'node:crypto'
 import { basename, relative } from 'node:path'
 import { Emitter } from '@orkestrel/emitter'
-import { isString } from '@orkestrel/contract'
+import { attempt, isString } from '@orkestrel/contract'
 import { createPool, isPoolError } from '@orkestrel/pool'
 import { isLSPError } from '@orkestrel/lsp'
 import { addAbortListener } from 'node:events'
@@ -252,11 +252,12 @@ export class Probe implements ProbeInterface {
 	}
 
 	async #start(filling: Promise<readonly void[]>, warming: Promise<void>): Promise<void> {
-		let created = false
-		try {
+		const preparation = attempt(() => {
 			this.#support()
-			if (this.#arming === undefined) created = this.#workbench()
-		} catch (error) {
+			return this.#arming === undefined && this.#workbench()
+		})
+		if (!preparation.success) {
+			const error = preparation.error
 			// The workbench refusal names the boot in its own message and reports the target tree's
 			// fault, so it surfaces and rejects unchanged. Rewrapping it here would report a
 			// directory this workspace blocks as this package refusing to serve.
@@ -270,7 +271,7 @@ export class Probe implements ProbeInterface {
 			throw this.#refuseArm(error)
 		}
 		if (this.#arming === undefined) {
-			this.#arming = this.#arm(warming, created)
+			this.#arming = this.#arm(warming, preparation.value)
 			void this.#arming.catch(() => {
 				if (this.#refusal === undefined) this.#arming = undefined
 			})

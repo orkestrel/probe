@@ -243,17 +243,16 @@ export class RuntimeStage implements StageInterface {
 			const file = sep === '\\' ? normalizePath(specification) : specification
 			this.#specifications += 1
 			this.#revisions.add(file)
-			let issues: readonly Issue[] = []
-			let cleanup: readonly Issue[] = []
+			const issues: Issue[] = []
 			const task = project.createSpecification(file, undefined, 'threads')
 			this.#progress += 1
 			try {
 				try {
 					const result = await vitest.runTestSpecifications([task], false)
-					issues = [
+					issues.push(
 						...this.#issues(result, file, subject.test.path),
 						...this.#misses(project, file),
-					]
+					)
 				} catch (error) {
 					if (isProbeError(error)) throw error
 					throw new ProbeError(
@@ -270,7 +269,7 @@ export class RuntimeStage implements StageInterface {
 				this.#progress -= 1
 				process.exitCode = exitCode
 				this.#revisions.delete(file)
-				cleanup = await this.#evict(vitest, file)
+				issues.push(...(await this.#evict(vitest, file)))
 				try {
 					const contained = resolveWorkspaceFile(
 						this.#workspace,
@@ -279,21 +278,18 @@ export class RuntimeStage implements StageInterface {
 					)
 					if (existsSync(contained)) unlinkSync(contained)
 				} catch (error) {
-					cleanup = [
-						...cleanup,
-						{
-							origin:
-								isProbeError(error) && error.origin === 'workspace' ? 'workspace' : 'instrument',
-							path: relativeWorkspaceFile(this.#workspace, file),
-							message: `The runtime stage could not delete the generated specification (${describeUnknown(error)})`,
-						},
-					]
+					issues.push({
+						origin:
+							isProbeError(error) && error.origin === 'workspace' ? 'workspace' : 'instrument',
+						path: relativeWorkspaceFile(this.#workspace, file),
+						message: `The runtime stage could not delete the generated specification (${describeUnknown(error)})`,
+					})
 				}
 			}
 			return {
 				stage: this.stage,
 				elapsed: Math.round(performance.now() - started),
-				issues: [...issues, ...cleanup],
+				issues,
 			}
 		} finally {
 			this.#loads.clear()
@@ -476,72 +472,57 @@ export class RuntimeStage implements StageInterface {
 	}
 
 	#specification(test: Draft): string | Issue {
-		let creating = false
-		// The sibling path the write aimed at, kept where the classification below can read it. That
-		// path is composed inside the attempt because it carries a revision minted there, and the
-		// classification needs the path itself rather than the fault's own text.
-		let generated: string | undefined
-		const outcome = attempt(() => {
-			// The writing host's own process id leads the revision, so a later host can tell a file
-			// whose writer is gone from one a live host still holds. Several hosts share one
-			// workspace routinely — this package's own suite is one — and a sweep reading the name
-			// alone deletes a neighbour's specification out from under its run. The same revision
-			// goes into the file's own marker, so the sweep reads one value from two places.
+		// The process id identifies the writer; the marker repeats this revision inside the file.
+		const location = attempt(() => {
 			const revision = `${process.pid}-${randomUUID()}`
-			const file = buildRevisionPath(this.#workspace, test.path, revision)
-			generated = file
-			const target = relative(this.#workspace, file)
+			return { revision, file: buildRevisionPath(this.#workspace, test.path, revision) }
+		})
+		if (!location.success) return this.#specificationFault(test, location.error)
+		const { revision, file } = location.value
+		const target = relative(this.#workspace, file)
+		const containment = attempt(() => resolveWorkspaceFile(this.#workspace, target, true))
+		if (!containment.success) return this.#specificationFault(test, containment.error, file)
+		// The declared test directory may be absent in a fresh checkout. Its creation is a workspace
+		// operation; a refused filename after it exists is classified separately below.
+		const directory = attempt(() => mkdirSync(dirname(file), { recursive: true }))
+		if (!directory.success) return this.#specificationFault(test, directory.error, file, true)
+		const written = attempt(() => {
 			resolveWorkspaceFile(this.#workspace, target, true)
-			// The caller declared where its test lives, so creating that directory is part of what the
-			// declaration asked for. `tmp` is ignored by version control and the coordinator's boot
-			// tidies away the workbench it created, so the path the convention names is absent in a
-			// fresh checkout of a target: a stage that refused over the absence alone refused the first
-			// claim of every consumer. A directory the host will not create still refuses through the
-			// issue a failed write reports.
-			creating = true
-			mkdirSync(dirname(file), { recursive: true })
-			creating = false
-			resolveWorkspaceFile(this.#workspace, target, true)
-			// The marker goes in the file rather than in its name alone, because the name is the
-			// caller's path and the text is the caller's test: without it nothing in the tree says
-			// this package wrote the file, and the sweep would have to delete on a name.
 			writeFileSync(file, formatSpecification(test.text, revision), {
 				encoding: 'utf8',
 				flag: 'wx',
 			})
-			return file
 		})
-		if (outcome.success) return outcome.value
-		if (isProbeError(outcome.error) && outcome.error.origin === 'claimant') {
-			throw new ProbeError(outcome.error.message, {
-				origin: outcome.error.origin,
-				code: outcome.error.code,
-				context: { ...outcome.error.context, path: test.path },
-				cause: outcome.error.cause,
+		return written.success ? file : this.#specificationFault(test, written.error, file)
+	}
+
+	#specificationFault(test: Draft, error: unknown, generated?: string, directory = false): Issue {
+		if (isProbeError(error) && error.origin === 'claimant') {
+			throw new ProbeError(error.message, {
+				origin: error.origin,
+				code: error.code,
+				context: { ...error.context, path: test.path },
+				cause: error.cause,
 			})
 		}
-		// A create the host refused is the caller's name, not this package's machinery and not the
-		// target tree. The directory exists by this point, so an ordinary absent file would have been
-		// created; what remains is a name the host will not accept. `creating` bounds this to the
-		// final write, leaving a directory the tree blocks to the workspace issue below.
-		if (!creating && generated !== undefined && isRefusedName(generated, outcome.error)) {
+		if (!directory && generated !== undefined && isRefusedName(generated, error)) {
 			throw new ProbeError(
-				`The runtime stage cannot write a specification beside a test path the host refuses (${describeUnknown(outcome.error)})`,
+				`The runtime stage cannot write a specification beside a test path the host refuses (${describeUnknown(error)})`,
 				{
 					origin: 'claimant',
 					code: 'refused',
 					context: { stage: this.stage, path: test.path },
-					cause: outcome.error,
+					cause: error,
 				},
 			)
 		}
 		return {
 			origin:
-				(isProbeError(outcome.error) && outcome.error.origin === 'workspace') || creating
+				(isProbeError(error) && error.origin === 'workspace') || directory
 					? 'workspace'
 					: 'instrument',
 			path: test.path,
-			message: `The runtime stage could not write the generated specification (${describeUnknown(outcome.error)})`,
+			message: `The runtime stage could not write the generated specification (${describeUnknown(error)})`,
 		}
 	}
 
@@ -586,46 +567,43 @@ export class RuntimeStage implements StageInterface {
 	// because an earlier inspection imported the same path.
 	#misses(project: TestProject, specification: string): readonly Issue[] {
 		const file = normalizePath(specification)
-		const issues: Issue[] = []
-		for (const path of this.#overlay.paths) {
-			if (this.#reads.has(path)) continue
-			let served = false
-			let loaded = false
-			for (const environment of Object.values(project.vite.environments)) {
+		return this.#overlay.paths.flatMap((path): readonly Issue[] => {
+			if (this.#reads.has(path)) return []
+			const served = Object.values(project.vite.environments).flatMap((environment) => {
 				const modules = environment.moduleGraph.getModulesByFile(path)
-				if (modules === undefined) continue
-				for (const module of modules) {
-					const pending = [...module.importers]
-					const seen = new Set(pending)
-					let reaches = false
-					while (pending.length > 0) {
-						const importer = pending.pop()
-						if (importer === undefined) break
-						if (importer.file !== null && normalizePath(importer.file) === file) {
-							reaches = true
-							break
+				if (modules === undefined) return []
+				return Iterator.from(modules)
+					.flatMap((module) => {
+						const pending = [...module.importers]
+						const seen = new Set(pending)
+						while (pending.length > 0) {
+							const importer = pending.pop()
+							if (importer === undefined) break
+							if (importer.file !== null && normalizePath(importer.file) === file) {
+								return [module.id !== null && this.#loads.has(normalizePath(module.id))]
+							}
+							for (const parent of importer.importers) {
+								if (seen.has(parent)) continue
+								seen.add(parent)
+								pending.push(parent)
+							}
 						}
-						for (const parent of importer.importers) {
-							if (seen.has(parent)) continue
-							seen.add(parent)
-							pending.push(parent)
-						}
-					}
-					if (!reaches) continue
-					served = true
-					if (module.id !== null && this.#loads.has(normalizePath(module.id))) loaded = true
-				}
-			}
-			if (!served) continue
-			issues.push({
-				origin: loaded ? 'instrument' : 'workspace',
-				path: relativeWorkspaceFile(this.#workspace, path),
-				message: loaded
-					? 'The runtime overlay did not resolve this module'
-					: 'The workspace configuration served this module before the runtime overlay',
+						return []
+					})
+					.toArray()
 			})
-		}
-		return issues
+			if (served.length === 0) return []
+			const loaded = served.some((value) => value)
+			return [
+				{
+					origin: loaded ? 'instrument' : 'workspace',
+					path: relativeWorkspaceFile(this.#workspace, path),
+					message: loaded
+						? 'The runtime overlay did not resolve this module'
+						: 'The workspace configuration served this module before the runtime overlay',
+				},
+			]
+		})
 	}
 
 	async #evict(vitest: Vitest, file: string): Promise<readonly Issue[]> {

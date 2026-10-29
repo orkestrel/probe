@@ -1,4 +1,16 @@
-import type { ScratchInterface } from '@orkestrel/test/server'
+import {
+	PROBE_LINT_UNBOUNDED as UNBOUNDED,
+	PROBE_LINT_CLOSE_WRITE as CLOSE_WRITE,
+	PROBE_LINT_FIXTURE as FIXTURE,
+	PROBE_LINT_PASSING as PASSING,
+	PROBE_LINT_HOST as HOST,
+} from '../../../setupServer.js'
+import {
+	readInputRefusal,
+	readPipeWrites,
+	readStallPayload,
+	createLintWorkspace,
+} from '../../../setupServer.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -15,27 +27,10 @@ import {
 	readHostEnding,
 	waitForFixtureServer,
 } from '../../../setupServer.js'
-import { WORKSPACE_ROOT } from '../../../setup.js'
+import { ProbeObservation, WORKSPACE_ROOT } from '../../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const STAGE = resolve(ROOT, 'src/server/stages/LintStage.ts')
-
-// The stage inspects only under a bound its caller supplies, and most rows here measure something
-// other than that bound. Each of those supplies a signal that never aborts, so the row reads the
-// stage's own answer rather than a deadline of its own making. A row whose subject is the bound
-// arms its own signal instead.
-const UNBOUNDED: AbortSignal = new AbortController().signal
-
-// The close notification the client writes for one document, rounded up from its framing, its
-// method, and a scratch-directory URI. The stall reading uses it as the follow-up write, so the
-// size it searches for is the size that holds exactly this write.
-const CLOSE_WRITE = 200
-
-// The workspace every row here drives the stage against, carrying the shared protocol-faithful
-// Oxlint language server. `createLintFixture` states which marker selects which conversation.
-const FIXTURE = createLintFixture().files
-
-const PASSING = "import { test } from 'vitest'\ntest('passes', () => {})\n"
 
 describe('explicit lint onset', () => {
 	it('destroys without spawning before start', async () => {
@@ -106,186 +101,6 @@ describe('explicit lint onset', () => {
 		}
 	})
 })
-
-// A resident host that drives the real stage outside Vitest, so an unhandled rejection ends a
-// process whose exit code a test can read. Node stops at the `.js` specifiers the source compiles
-// against, so the host registers the one resolution rule that maps them onto the TypeScript files
-// beside them; it replaces no project behaviour.
-const HOST = [
-	"import { readFileSync } from 'node:fs'",
-	"import { registerHooks } from 'node:module'",
-	"import { pathToFileURL } from 'node:url'",
-	'const [, , stage, workspace] = process.argv',
-	// The stage is loaded as source in a bare host, so this hook stands in for what the workspace's
-	// own resolver and the published build each do for it: the extension the source writes, and the
-	// core entry the server bundle externalizes `@src/core` to.
-	"const root = new URL('../../../', pathToFileURL(stage))",
-	"const owned = new URL('src/', root).href",
-	'registerHooks({',
-	'\tresolve(specifier, context, next) {',
-	'\t\tconst inside = context.parentURL !== undefined && context.parentURL.startsWith(owned)',
-	"\t\tif (inside && specifier.startsWith('.') && specifier.endsWith('.js')) {",
-	"\t\t\treturn next(specifier.slice(0, -3) + '.ts', context)",
-	'\t\t}',
-	"\t\tif (specifier === '@src/core') {",
-	"\t\t\treturn next(new URL('src/core/index.ts', root).href, context)",
-	'\t\t}',
-	'\t\treturn next(specifier, context)',
-	'\t},',
-	'})',
-	'const { LintStage } = await import(pathToFileURL(stage).href)',
-	"const text = \"import { test } from 'vitest'\\ntest('passes', () => {})\\n\"",
-	'const dead = new LintStage(workspace)',
-	// The host arms nothing: every inspection here is measured by the ending its server takes, so the
-	// bound each one carries must never be what ends it.
-	'const open = { signal: new AbortController().signal }',
-	"await dead.inspect({ files: [], test: { path: 'tests/src/server/host-warm.test.ts', text } }, open)",
-	"const announced = readFileSync(workspace + '/server.pid', 'utf8')",
-	"process.kill(Number.parseInt(announced, 10), 'SIGKILL')",
-	'await new Promise((settle) => setTimeout(settle, 250))',
-	'const refused = await dead',
-	"\t.inspect({ files: [], test: { path: 'tests/src/server/host-dead.test.ts', text } }, open)",
-	'\t.then(() => undefined, (error) => error.message)',
-	"if (refused === undefined) throw new Error('the inspection resolved against a dead server')",
-	'await dead.destroy()',
-	'const live = new LintStage(workspace)',
-	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } }, open)",
-	'await live.destroy()',
-	'await new Promise((settle) => setTimeout(settle, 300))',
-	"console.log('refused ' + refused)",
-	"console.log('settled ' + check.stage + ' ' + check.issues.length)",
-].join('\n')
-
-// A bare child that ends its own standard input the way the fixture server's `PROBE_CLOSES_INPUT`
-// branch does: it reads a message, calls `closeSync(0)` on itself, and announces the close on its
-// standard output, so a parent writes again only after the close has landed. The timer holds it
-// open past the write that follows.
-const CLOSER = [
-	"import { closeSync } from 'node:fs'",
-	"process.stdin.on('data', () => {",
-	'\tcloseSync(0)',
-	"\tprocess.stdout.write('closed')",
-	'})',
-	'setTimeout(() => {}, 10_000)',
-].join('\n')
-
-// Reads how this host reports a write to a child that closed its own standard input, which is the
-// mechanism the fixture server's `PROBE_CLOSES_INPUT` marker uses. A host that breaks the writing
-// end when that descriptor closes refuses the next write, and the refusal's own code comes back; a
-// host that leaves the writing end open accepts the write, and nothing comes back. Killing the child
-// before the write is the control: that write is refused, so an instrument reporting nothing for it
-// would be reporting nothing about the write at all.
-async function readInputRefusal(signal?: NodeJS.Signals): Promise<string | undefined> {
-	const child = spawn(process.execPath, ['-e', CLOSER], { stdio: ['pipe', 'pipe', 'ignore'] })
-	// A host that does break the pipe reports it on the stream as well as on the write, and an
-	// unheard `error` event there would end the run instead of the write.
-	child.stdin.on('error', () => {})
-	const closed = new Promise<void>((settle) => {
-		child.stdout.on('data', () => settle())
-	})
-	const ended = new Promise<void>((settle) => {
-		child.on('exit', () => settle())
-	})
-	child.stdin.write('open\n')
-	await closed
-	if (signal !== undefined) {
-		child.kill(signal)
-		await ended
-	}
-	const refusal = await new Promise<string | undefined>((settle) => {
-		child.stdin.write('next\n', (error) => {
-			if (error === null || error === undefined) {
-				settle(undefined)
-				return
-			}
-			settle('code' in error && typeof error.code === 'string' ? error.code : error.message)
-		})
-	})
-	// The control already ended this child, so only the measured run leaves one to end.
-	if (signal === undefined) child.kill('SIGKILL')
-	await ended
-	return refusal
-}
-
-// Reads whether each of two sized writes reaches the standard input of a child that never reads it.
-// A write settles when the host has taken every byte, so a write into a pipe already holding all the
-// host will hold never settles at all. The pair is what separates the two states: how much a host
-// takes is its own decision, and only a reading where the first write settled says anything about
-// the second.
-async function readPipeWrites(first: number, second: number): Promise<readonly [boolean, boolean]> {
-	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], {
-		stdio: ['pipe', 'ignore', 'ignore'],
-	})
-	child.stdin.on('error', () => {})
-	let settled = false
-	let following = false
-	child.stdin.write(Buffer.alloc(first, 0x61), () => {
-		settled = true
-	})
-	await waitForDelay(200)
-	child.stdin.write(Buffer.alloc(second, 0x62), () => {
-		following = true
-	})
-	await waitForDelay(200)
-	child.kill('SIGKILL')
-	return [settled, following]
-}
-
-// Reads the payload size that leaves this host's pipe with room for the document open and none for
-// the close that follows it. The search walks the one size the reading turns on — below it a later
-// close-sized write still settles, above it that write is held — and returns a size a little past
-// the turn so a host whose reading drifts by a few hundred bytes stays inside the band. Returns
-// `undefined` when the returned size does not reproduce the reading, which is how a host that takes
-// every write reports that this condition cannot be built on it.
-async function readStallPayload(): Promise<number | undefined> {
-	let low = 4_096
-	let high = 4_194_304
-	while (high - low > 1_024) {
-		const middle = low + Math.floor((high - low) / 2)
-		const [, following] = await readPipeWrites(middle, CLOSE_WRITE)
-		if (following) low = middle
-		else high = middle
-	}
-	const payload = high + 8_192
-	const [settled, following] = await readPipeWrites(payload, CLOSE_WRITE)
-	return settled && !following ? payload : undefined
-}
-
-// Everything a settled teardown owes a consumer, read through the public surface alone: teardown
-// resolves again without doing more work, and every later inspection is refused rather than left
-// waiting on a server that is gone.
-async function expectReleased(stage: LintStage): Promise<void> {
-	await expect(stage.destroy()).resolves.toBeUndefined()
-	await expect(
-		stage.inspect(
-			{
-				files: [],
-				test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
-			},
-			{ signal: UNBOUNDED },
-		),
-	).rejects.toThrow('The lint stage has been destroyed')
-}
-
-// Allocates a workspace that runs the target's own Oxlint binary against a configuration this file
-// owns, so every override under test is one the workspace's gate really applies. The overrides
-// are the selection shapes a candidate's declared path has to preserve: a whole directory, a file
-// name inside a directory, and one exact path.
-function createLintWorkspace(): ScratchInterface {
-	return createScratch({
-		files: {
-			...createLintFixture({ binary: resolveWorkspaceBinary(ROOT, 'oxlint') }).files,
-			'.oxlintrc.json': `${JSON.stringify({
-				rules: { 'no-debugger': 'error' },
-				overrides: [
-					{ files: ['configs/**'], rules: { 'no-debugger': 'off' } },
-					{ files: ['guides/candidate*.ts'], rules: { 'no-debugger': 'off' } },
-					{ files: ['lib/exempt.ts'], rules: { 'no-debugger': 'off' } },
-				],
-			})}\n`,
-		},
-	})
-}
 
 describe('lint stage', () => {
 	it('reports a workspace lint issue at the declared path', { timeout: 60_000 }, async () => {
@@ -473,14 +288,14 @@ describe('lint stage', () => {
 			const stage = new LintStage(scratch.path)
 			const baseline = stage.progress
 			const source = { path, text: `${PASSING}${'x'.repeat(payload - 512)}\n` }
-			let settled = false
+			const settled = new ProbeObservation(false)
 			const held = stage.inspect({ files: [], test: source }, { signal: UNBOUNDED })
 			void held.then(
 				() => {
-					settled = true
+					settled.value = true
 				},
 				() => {
-					settled = true
+					settled.value = true
 				},
 			)
 			try {
@@ -501,7 +316,7 @@ describe('lint stage', () => {
 				// instrument is still waiting for room, and the inspection has not returned. The
 				// gauge a coordinator compares with its snapshot reads level with it, so an expiry
 				// landing in this window names the instrument rather than the claimant.
-				expect(settled).toBe(false)
+				expect(settled.value).toBe(false)
 				expect(stage.progress).toBe(baseline)
 			} finally {
 				await stage.destroy()
@@ -920,7 +735,16 @@ describe('lint stage', () => {
 		void inspection.catch(() => {})
 		await Promise.all([stage.destroy(), stage.destroy()])
 		await expect(inspection).rejects.toThrow('The lint stage has been destroyed')
-		await expectReleased(stage)
+		await expect(stage.destroy()).resolves.toBeUndefined()
+		await expect(
+			stage.inspect(
+				{
+					files: [],
+					test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+				},
+				{ signal: UNBOUNDED },
+			),
+		).rejects.toThrow('The lint stage has been destroyed')
 	})
 
 	it(
@@ -983,7 +807,16 @@ describe('lint stage', () => {
 				// Signal zero is refused for a process the host has reaped, which is what separates
 				// a released child from an orphan the stage abandoned to the host's lifetime.
 				expect(isRunning(owned)).toBe(false)
-				await expectReleased(stage)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 			} finally {
 				scratch.destroy()
 			}
@@ -1013,7 +846,16 @@ describe('lint stage', () => {
 			const killed = performance.now()
 			await expect(signalled.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - killed).toBeLessThan(5_000)
-			await expectReleased(signalled)
+			await expect(signalled.destroy()).resolves.toBeUndefined()
+			await expect(
+				signalled.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				),
+			).rejects.toThrow('The lint stage has been destroyed')
 			expect(isRunning(owned)).toBe(false)
 
 			// The control is the death the guard already handled. A teardown that settles only for a
@@ -1030,7 +872,16 @@ describe('lint stage', () => {
 			const exited = performance.now()
 			await expect(closed.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - exited).toBeLessThan(5_000)
-			await expectReleased(closed)
+			await expect(closed.destroy()).resolves.toBeUndefined()
+			await expect(
+				closed.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				),
+			).rejects.toThrow('The lint stage has been destroyed')
 			expect(isRunning(answering)).toBe(false)
 		} finally {
 			scratch.destroy()
@@ -1052,7 +903,16 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(silent.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(10_000)
-				await expectReleased(silent)
+				await expect(silent.destroy()).resolves.toBeUndefined()
+				await expect(
+					silent.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
@@ -1078,7 +938,16 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(unanswered.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				await expectReleased(unanswered)
+				await expect(unanswered.destroy()).resolves.toBeUndefined()
+				await expect(
+					unanswered.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
@@ -1100,7 +969,16 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				await expectReleased(stage)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 				expect(isRunning(owned)).toBe(false)
 			} finally {
 				answering.destroy()
@@ -1130,7 +1008,16 @@ describe('lint stage', () => {
 				// life. A bounded wait plus a signal is what makes the child's death this stage's
 				// decision rather than the server's.
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				await expectReleased(stage)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 				expect(isRunning(owned)).toBe(false)
 			} finally {
 				scratch.destroy()
@@ -1172,7 +1059,16 @@ describe('lint stage', () => {
 				// inspection was admitted before teardown and never reached a document, so nothing
 				// but the interrupted warming can have settled it.
 				expect(stage.progress).toBe(0)
-				await expectReleased(stage)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 			} finally {
 				scratch.destroy()
 			}
@@ -1209,7 +1105,16 @@ describe('lint stage', () => {
 			const asked = performance.now()
 			await expect(stage.destroy()).resolves.toBeUndefined()
 			expect(performance.now() - asked).toBeLessThan(5_000)
-			await expectReleased(stage)
+			await expect(stage.destroy()).resolves.toBeUndefined()
+			await expect(
+				stage.inspect(
+					{
+						files: [],
+						test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+					},
+					{ signal: UNBOUNDED },
+				),
+			).rejects.toThrow('The lint stage has been destroyed')
 		} finally {
 			scratch.destroy()
 		}
@@ -1328,7 +1233,16 @@ describe('lint stage', () => {
 				const asked = performance.now()
 				await expect(stage.destroy()).resolves.toBeUndefined()
 				expect(performance.now() - asked).toBeLessThan(5_000)
-				await expectReleased(stage)
+				await expect(stage.destroy()).resolves.toBeUndefined()
+				await expect(
+					stage.inspect(
+						{
+							files: [],
+							test: { path: 'tests/src/server/lint-released.test.ts', text: PASSING },
+						},
+						{ signal: UNBOUNDED },
+					),
+				).rejects.toThrow('The lint stage has been destroyed')
 			} finally {
 				await stage.destroy()
 			}

@@ -1,7 +1,6 @@
 import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
 import type { Diagnostic, Execution, ProjectConfig, TypeStageInterface } from '../types.js'
 import type { ChildProcess } from 'node:child_process'
-import type { Dirent } from 'node:fs'
 import {
 	existsSync,
 	lstatSync,
@@ -13,7 +12,7 @@ import {
 } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { attempt } from '@orkestrel/contract'
 import {
 	ProbeError,
@@ -259,20 +258,19 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	#projects(): readonly string[] {
-		const projects = ['tsconfig.json']
-		for (const axis of ['src', 'app']) {
-			const directory = resolveWorkspaceFile(this.#workspace, `configs/${axis}`)
-			let names: readonly string[]
-			try {
-				names = readdirSync(directory)
-			} catch {
-				continue
-			}
-			for (const name of names.filter((entry) => /^tsconfig\.[^.]+\.json$/.test(entry)).sort()) {
-				projects.push(`configs/${axis}/${name}`)
-			}
-		}
-		return projects
+		return [
+			'tsconfig.json',
+			...['src', 'app'].flatMap((axis) => {
+				const directory = resolveWorkspaceFile(this.#workspace, `configs/${axis}`)
+				const reading = attempt(() => readdirSync(directory))
+				return reading.success
+					? reading.value
+							.filter((entry) => /^tsconfig\.[^.]+\.json$/.test(entry))
+							.sort()
+							.map((name) => `configs/${axis}/${name}`)
+					: []
+			}),
+		]
 	}
 
 	// Refuses an inspection this stage was torn down during. The compiler runs in a child process,
@@ -306,13 +304,9 @@ export class TypeStage implements TypeStageInterface {
 	// where it is, whoever wrote it.
 	#sweep(): void {
 		const root = resolveWorkspaceFile(this.#workspace, TYPE_MIRROR)
-		let entries: readonly Dirent[] = []
-		try {
-			entries = readdirSync(root, { withFileTypes: true })
-		} catch {
-			return
-		}
-		for (const entry of entries) {
+		const reading = attempt(() => readdirSync(root, { withFileTypes: true }))
+		if (!reading.success) return
+		for (const entry of reading.value) {
 			if (!entry.isDirectory()) continue
 			const owner = parseRevisionOwner(entry.name)
 			if (owner === undefined || matchesLiveProcess(owner)) continue
@@ -386,12 +380,10 @@ export class TypeStage implements TypeStageInterface {
 	// directory, both reach here: the mirror is this stage's own tree, so the path the write names
 	// wins and the next refresh restores whatever the workspace still holds.
 	#displace(target: string): void {
-		const ancestors: string[] = []
-		let directory = dirname(target)
-		while (directory !== this.#mirror && directory !== dirname(directory)) {
-			ancestors.unshift(directory)
-			directory = dirname(directory)
-		}
+		const ancestors = relative(this.#mirror, target)
+			.split(sep)
+			.slice(0, -1)
+			.map((_segment, index, segments) => join(this.#mirror, ...segments.slice(0, index + 1)))
 		for (const ancestor of [...ancestors, target]) {
 			const reading = attempt(() => lstatSync(ancestor))
 			if (!reading.success) continue
@@ -597,15 +589,15 @@ export class TypeStage implements TypeStageInterface {
 				return
 			}
 			this.#children.add(child)
-			let stdout = ''
-			let stderr = ''
+			const stdout: string[] = []
+			const stderr: string[] = []
 			output.setEncoding('utf8')
 			errors.setEncoding('utf8')
 			output.on('data', (chunk: string) => {
-				stdout += chunk
+				stdout.push(chunk)
 			})
 			errors.on('data', (chunk: string) => {
-				stderr += chunk
+				stderr.push(chunk)
 			})
 			child.on('error', (error: unknown) => {
 				this.#children.delete(child)
@@ -620,7 +612,11 @@ export class TypeStage implements TypeStageInterface {
 			})
 			child.on('close', (code: number | null) => {
 				this.#children.delete(child)
-				settle({ ...(code === null ? {} : { status: code }), stdout, stderr })
+				settle({
+					...(code === null ? {} : { status: code }),
+					stdout: stdout.join(''),
+					stderr: stderr.join(''),
+				})
 			})
 		})
 	}

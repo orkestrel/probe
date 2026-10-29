@@ -1,5 +1,25 @@
-import type { JSONValue } from '@orkestrel/contract'
-import type { Interface } from 'node:readline'
+import {
+	PROBE_ENTRY_DELIVERIES as DELIVERIES,
+	PROBE_ENTRY_HANDLED as HANDLED,
+	PROBE_ENTRY_UNHANDLED as UNHANDLED,
+	PROBE_ENTRY_CLEAN as CLEAN,
+	PROBE_ENTRY_BROKEN as BROKEN,
+	PROBE_ENTRY_WIDE as WIDE,
+	PROBE_ENTRY_WIDER as WIDER,
+	PROBE_ENTRY_RESERVED as RESERVED,
+	PROBE_ENTRY_EXTENSIONS as EXTENSIONS,
+	PROBE_ENTRY_THROWING as THROWING,
+	PROBE_ENTRY_PASSING as PASSING,
+} from '../../setupServer.js'
+import {
+	readAnswer,
+	indexFrames,
+	readProbeContent,
+	readFrames,
+	buildClaim,
+	readProbeTerminalFrame,
+	requireProbeBuild,
+} from '../../setupServer.js'
 import { version } from '../../../package.json' with { type: 'json' }
 import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -11,13 +31,12 @@ import {
 	MCP_MODERN_VERSION,
 	createMCPClient,
 	createMCPLegacyClientTransport,
-	isJSONObject,
 } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { formatVerdict, isVerdict } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
 	PROBE_SERVER_WORKSPACES,
 	PROBE_FIXTURE_DISPOSAL,
@@ -56,128 +75,8 @@ const ARMING_TIMEOUT = 30_000
 // teardown awaits the boot in flight, which measured 2.3 s on the host `guides/probe.md` § Cost
 // names; this bound sits far above that so a loaded host reports a hang rather than its own load.
 const TEARDOWN_BOUND = 60_000
-const DELIVERIES = [
-	{ signal: 'SIGTERM', phase: 'boot' },
-	{ signal: 'SIGINT', phase: 'boot' },
-	{ signal: 'SIGTERM', phase: 'service' },
-	{ signal: 'SIGINT', phase: 'service' },
-] as const
 
-// A bare child that answers a termination signal the way the entry does: a handler that exits 0. It
-// announces on its standard output that the handler is installed, so a parent signals it only after
-// the handler is in place, and the timer holds it open until the signal arrives.
-const HANDLED = [
-	"for (const name of ['SIGTERM', 'SIGINT']) process.on(name, () => process.exit(0))",
-	"process.stdout.write('armed')",
-	'setTimeout(() => {}, 10_000)',
-].join('\n')
-// The same child with no handler. It cannot exit 0 on a signal, which is what makes it the control
-// for the reading that follows.
-const UNHANDLED = ["process.stdout.write('armed')", 'setTimeout(() => {}, 10_000)'].join('\n')
-// The module text a claim's case carries, and the text its control carries in place of it. The
-// control's annotation refuses the string literal beside it, so the type stage reports one issue.
-const CLEAN = "export const VALUE = 'ok'\n"
-const BROKEN = "export const VALUE: number = 'bad'\n"
-// The same refusal repeated, so the type stage reports an issue per declaration. `@orkestrel/mcp`
-// bounds a tool-call result by total enumerable keys as well as by bytes, and a verdict's key count
-// grows with the issues its stages report, so this control is what drives the record past the key
-// bound the package defaults to.
-const WIDE = Array.from(
-	{ length: 30 },
-	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
-).join('\n')
-// The same refusal repeated past the key bound the server publishes. A whole result costs 44 keys
-// plus 11 for each issue, so `PROBE_KEYS` carries a record reporting up to 368 issues; this control
-// reports past that, which makes the record the part of the answer that cannot travel.
-const WIDER = Array.from(
-	{ length: 400 },
-	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
-).join('\n')
-// The reserved metadata a current-revision request carries, and extension keys past the installed
-// default key bound of 64. `PROBE_KEYS` reaches inbound metadata as well as produced content, so a
-// request the default would refuse is admitted here.
-const RESERVED = {
-	'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-	'io.modelcontextprotocol/clientCapabilities': {},
-} as const
-const EXTENSIONS = Object.fromEntries(
-	Array.from({ length: 200 }, (_, index) => [`probe.test/extension-${String(index)}`, index]),
-)
-// A control whose test throws a message longer than the 4 MiB content bound. The string is built
-// inside the child rather than sent to it, so a claim of a few hundred bytes produces a rendering
-// the reply cannot carry — which is the one input under which the rendered text is refused too.
-const THROWING =
-	"import { test } from 'vitest'\ntest('breaks', () => {\n\tthrow new Error('A'.repeat(5_000_000))\n})\n"
-// The test text every case phase runs. It asserts against no draft, so a control breaking at the
-// type stage and one breaking at the runtime stage differ only in the draft each replaces.
-const PASSING =
-	"import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n"
-
-// Reads one JSON-RPC response line as the `result` record it carries, or `undefined` when the line
-// carries an error or anything else. `isJSONObject` is the installed guard, so nothing here
-// re-implements the envelope's shape.
-function readAnswer(line: string): Readonly<Record<string, JSONValue>> | undefined {
-	const message: unknown = JSON.parse(line)
-	if (!isJSONObject(message)) return undefined
-	const answer = message['result']
-	return isJSONObject(answer) ? answer : undefined
-}
-
-// Pairs each answered frame with the request id it carries, so a reader takes the reply to one
-// request rather than the frame that happened to arrive first.
-function indexFrames(frames: readonly string[]): ReadonlyMap<number, string> {
-	const answered = new Map<number, string>()
-	for (const frame of frames) {
-		const message: unknown = JSON.parse(frame)
-		if (isJSONObject(message) && typeof message['id'] === 'number') {
-			answered.set(message['id'], frame)
-		}
-	}
-	return answered
-}
-
-// Reads the text of the one content block a result carries, or `undefined` when the result carries
-// anything else. The block count is part of the reading: every reply this server produces carries
-// exactly one, and a reader that took the first of several would not notice the second.
-function readText(answer: Readonly<Record<string, JSONValue>>): string | undefined {
-	const content = answer['content']
-	if (!Array.isArray(content) || content.length !== 1) return undefined
-	const block = content[0]
-	if (!isJSONObject(block) || block['type'] !== 'text') return undefined
-	const text = block['text']
-	return typeof text === 'string' ? text : undefined
-}
-
-// Collects newline-delimited JSON-RPC responses from a child's standard output until the expected
-// number of non-empty frames has arrived.
-async function readFrames(output: Interface, expected: number): Promise<readonly string[]> {
-	const frames: string[] = []
-	for await (const line of output) {
-		if (line.trim() !== '') frames.push(line)
-		if (frames.length === expected) break
-	}
-	return frames
-}
-
-// One claim that earns a receipt in this workspace, named so two claims never share a draft path.
-// `control` is the text the named module carries in the control phase, which is what decides how
-// many issues the type stage reports for it.
-function buildClaim(name: string, control: string): Readonly<Record<string, unknown>> {
-	const specification = { path: `tmp/probes/bin/${name}-runtime.test.ts`, text: PASSING }
-	return {
-		project: 'configs/src/tsconfig.core.json',
-		case: {
-			files: [{ path: `src/core/${name}/constants.ts`, text: CLEAN }],
-			test: specification,
-		},
-		control: {
-			files: [{ path: `src/core/${name}/constants.ts`, text: control }],
-			test: specification,
-			stage: 'type',
-			reason: 'the source assigns a string to a number',
-		},
-	}
-}
+beforeAll(() => requireProbeBuild(ROOT, [BUILT_ENTRY, fileURLToPath(BUILT_SERVER)]))
 
 describe('bin entry', () => {
 	it('occupies the path the manifest declares side-effectful', () => {
@@ -245,7 +144,7 @@ describe('bin entry', () => {
 			const missing = readAnswer(indexFrames(frames).get(1) ?? '')
 			expect(missing).toMatchObject({ isError: true })
 			if (missing === undefined) return
-			expect(readText(missing)).toContain('typescript does not publish a readable manifest')
+			expect(readProbeContent(missing)).toContain('typescript does not publish a readable manifest')
 
 			scratch.write('node_modules/typescript/package.json', '{"name":"typescript"}\n')
 			child.stdin.write(JSON.stringify({ ...request, id: 2 }) + '\n')
@@ -256,7 +155,7 @@ describe('bin entry', () => {
 			const malformed = readAnswer(indexFrames(frames).get(2) ?? '')
 			expect(malformed).toMatchObject({ isError: true })
 			if (malformed === undefined) return
-			expect(readText(malformed)).toContain('typescript publishes no readable version')
+			expect(readProbeContent(malformed)).toContain('typescript publishes no readable version')
 			const lines = Buffer.concat(errors)
 				.toString('utf8')
 				.split(/\r\n|\n/u)
@@ -377,7 +276,7 @@ describe('bin entry', () => {
 				const refusedAnswer = readAnswer(refused)
 				expect(refusedAnswer).toMatchObject({ isError: true })
 				if (refusedAnswer === undefined) return
-				expect(readText(refusedAnswer)).toContain(
+				expect(readProbeContent(refusedAnswer)).toContain(
 					'The prove tool requires a claim matching the advertised schema',
 				)
 				const admitted = answered.get(4)
@@ -386,7 +285,7 @@ describe('bin entry', () => {
 				const admittedAnswer = readAnswer(admitted)
 				expect(admittedAnswer).toMatchObject({ isError: true })
 				if (admittedAnswer === undefined) return
-				expect(readText(admittedAnswer)).toContain(
+				expect(readProbeContent(admittedAnswer)).toContain(
 					'typescript does not publish a readable manifest',
 				)
 			} finally {
@@ -485,7 +384,7 @@ describe('bin entry', () => {
 							expect(answer).toBeDefined()
 							if (answer === undefined) continue
 							expect(isVerdict(answer['structuredContent'])).toBe(true)
-							expect(readText(answer)).toMatch(/^probe .+receipt probe:/s)
+							expect(readProbeContent(answer)).toMatch(/^probe .+receipt probe:/s)
 						}
 						expect(Buffer.concat(errors).toString('utf8')).toBe('')
 						expect(scratch.read(`${label}.log`)).toBe('arm\nerror arm\n')
@@ -928,7 +827,7 @@ describe('bin entry', () => {
 				expect(answer, `no result on ${wide.slice(0, 200)}`).toBeDefined()
 				if (answer === undefined) return
 				expect(answer['structuredContent']).toBeUndefined()
-				const text = readText(answer)
+				const text = readProbeContent(answer)
 				expect(text, 'the result carries no single text block').toBeDefined()
 				if (text === undefined) return
 				// The whole rendering rather than the fallback: the stage lines are what the fallback
@@ -1006,7 +905,7 @@ describe('bin entry', () => {
 				expect(answer, `no result on ${frame.slice(0, 200)}`).toBeDefined()
 				if (answer === undefined) return
 				expect(answer['structuredContent']).toBeUndefined()
-				const text = readText(answer)
+				const text = readProbeContent(answer)
 				expect(text, 'the result carries no single text block').toBeDefined()
 				if (text === undefined) return
 				const lines = text.split('\n')
@@ -1218,13 +1117,7 @@ describe('bin entry', () => {
 			try {
 				await waitForDelay(250)
 				child.stdin.write(JSON.stringify(request) + '\n')
-				let response: unknown
-				for await (const line of output) {
-					const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
-					if (frame.trim() === '') continue
-					response = JSON.parse(frame)
-					break
-				}
+				const response = await readProbeTerminalFrame(output)
 				expect(response).toMatchObject({
 					id: 1,
 					result: {

@@ -62,17 +62,12 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
 export const isDraft: Guard<Draft> = recordOf({
 	path: andOf<string>(isNonEmptyString, (path) => {
 		if (/^(?:[\\/]|[A-Za-z]:)/.test(path)) return false
-		let depth = 0
-		for (const segment of path.split(/[\\/]+/)) {
-			if (segment === '' || segment === '.') continue
-			if (segment !== '..') {
-				depth += 1
-				continue
-			}
-			if (depth === 0) return false
-			depth -= 1
-		}
-		return true
+		return (
+			path.split(/[\\/]+/).reduce((depth, segment) => {
+				if (depth < 0 || segment === '' || segment === '.') return depth
+				return segment === '..' ? depth - 1 : depth + 1
+			}, 0) >= 0
+		)
 	}),
 	text: isString,
 })

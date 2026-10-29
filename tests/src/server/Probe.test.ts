@@ -1,17 +1,24 @@
-import type { Check, Claim, Draft, ProbeEventMap, Toolchain, Verdict } from '@src/core'
+import {
+	PROBE_STALL_SERVER as STALLING,
+	PROBE_ORDERED_SERVER as ORDERED,
+} from '../../setupServer.js'
+import {
+	createHeavyDraft,
+	readDocumentedTimings,
+	computeSlowestCheck,
+	releaseProbeGate,
+	buildProbeClaim,
+} from '../../setupServer.js'
+import type { Claim, ProbeEventMap, Toolchain, Verdict } from '@src/core'
 import type { Socket } from 'node:net'
 import {
-	closeSync,
-	constants,
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	openSync,
 	readFileSync,
 	readdirSync,
 	rmSync,
 	writeFileSync,
-	writeSync,
 } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -20,6 +27,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
 	createRecorder,
+	retryUntil,
 	createTeardown,
 	waitForCondition,
 	waitForDelay,
@@ -49,7 +57,7 @@ import {
 	waitForProbeBoot,
 	writeProbeFixture,
 } from '../../setupServer.js'
-import { WORKSPACE_ROOT } from '../../setup.js'
+import { ProbeObservation, varyDraft, WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
 
@@ -455,8 +463,8 @@ else if (process.argv.includes('--showConfig')) {
 		{ timeout: 60_000 },
 		async (context) => {
 			const scratch = createScratch()
-			let probe: Probe | undefined
-			let proof: Promise<unknown> | undefined
+			const probe = new ProbeObservation<Probe | undefined>(undefined)
+			const proof = new ProbeObservation<Promise<unknown> | undefined>(undefined)
 			const gate = resolve(scratch.path, 'runtime-gate')
 			try {
 				const fifo = spawnSync('mkfifo', [gate])
@@ -470,8 +478,8 @@ else if (process.argv.includes('--showConfig')) {
 					'tsconfig.json',
 					'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":["node"]}}\n',
 				)
-				probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
-				await probe.start()
+				probe.value = new Probe({ workspace: scratch.path, deadline: 15_000 })
+				await probe.value.start()
 				const claim: Claim = {
 					project: 'tsconfig.json',
 					case: {
@@ -491,7 +499,7 @@ else if (process.argv.includes('--showConfig')) {
 						reason: 'the control throws',
 					},
 				}
-				proof = probe
+				proof.value = probe.value
 					.prove({
 						...claim,
 						case: {
@@ -506,19 +514,12 @@ else if (process.argv.includes('--showConfig')) {
 				await waitForCondition('runtime FIFO inspection', () => scratch.has('runtime-ready'), {
 					budget: 5_000,
 				})
-				expect(await proof).toMatchObject({ code: 'deadline', context: { stage: 'runtime' } })
-				expect(await probe.prove(claim)).toHaveProperty('receipt')
+				expect(await proof.value).toMatchObject({ code: 'deadline', context: { stage: 'runtime' } })
+				expect(await probe.value.prove(claim)).toHaveProperty('receipt')
 			} finally {
-				let descriptor: number | undefined
-				try {
-					descriptor = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK)
-					writeSync(descriptor, 'release')
-				} catch {
-				} finally {
-					if (descriptor !== undefined) closeSync(descriptor)
-				}
-				await proof
-				await probe?.destroy()
+				releaseProbeGate(gate)
+				await proof.value
+				await probe.value?.destroy()
 				scratch.destroy()
 			}
 		},
@@ -854,59 +855,6 @@ else if (process.argv.includes('--showConfig')) {
 	})
 })
 
-// The Oxlint language server every claim here is answered by. Its own exit budget sits above the
-// longest row's timeout, so a row reads the ending it drove rather than the server leaving on its
-// own. The `stall-lint` marker file silences every document, which is what holds the probe's boot
-// control past its deadline; the text marker `PROBE_SILENT` silences one document, which holds a
-// claim's candidate while the boot controls still answer.
-const STALLING = createLintFixture({ budget: 300_000 })
-
-// The same server, publishing one document's diagnostics a tenth of a second after admitting it and
-// recording each session in `probe-lint.log`. A coordinator that admits two inspections at once
-// leaves a count above one in that record; one that admits them out of order leaves the sessions
-// transposed.
-const ORDERED = createLintFixture({ budget: 300_000, delay: 100 })
-
-// Builds repeated conditional-type work for the elapsed-time assertions.
-function createHeavyDraft(index: number): Draft {
-	const rows = [
-		'type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9',
-		'type Pair = `${Digit}${Digit}`',
-		'type Quad = `${Pair}${Pair}`',
-		'type Step0 = Quad',
-	]
-	for (let step = 1; step <= 100; step += 1) {
-		rows.push(`type Step${step} = Exclude<Step${step - 1}, '${String(step).padStart(4, '0')}'>`)
-	}
-	rows.push(`export const HEAVY_${index}: Step100 = '9999'`)
-	return { path: `src/core/probe-heavy-${index}.ts`, text: `${rows.join('\n')}\n` }
-}
-
-// The timings the `Verdict` contract's own `@example` states, in the order the block writes them:
-// each case stage, each control stage, then the whole call. `prove` runs the case through
-// its stages and only then the control through its own, so an example whose call is faster than the
-// slowest stage of each phase together describes an accounting this coordinator does not have.
-function readDocumentedTimings(): readonly number[] {
-	const contract = readFileSync(resolve(ROOT, 'src/core/types.ts'), 'utf8')
-	const start = contract.indexOf('const verdict: Verdict = {')
-	const end = contract.indexOf('export interface Verdict', start)
-	return [...contract.slice(start, end).matchAll(/elapsed: (\d+)/g)].map((match) =>
-		Number(match[1]),
-	)
-}
-
-function slowest(checks: readonly Check[]): number {
-	return Math.max(...checks.map((check) => check.elapsed))
-}
-
-// Returns the draft again carrying one trailing comment, which every stage reads as the draft it
-// already was. A fixture whose subject is a deadline, a queue, or a teardown wants its control to
-// reach the stages, and `prove` refuses a control repeating the whole case without letting a stage
-// inspect it, so each such control varies here rather than in the behaviour the fixture is measuring.
-function varyDraft(draft: Draft): Draft {
-	return { path: draft.path, text: `${draft.text}// the control, one comment apart\n` }
-}
-
 describe('probe', { concurrent: false }, () => {
 	it(
 		'mints receipts only when every stage executes cleanly, including for a control that shares no path with its case, and returns admitted path issues',
@@ -1190,7 +1138,7 @@ describe('probe', { concurrent: false }, () => {
 				const documented = readDocumentedTimings()
 
 				expect(verdict.elapsed).toBeGreaterThanOrEqual(
-					slowest(verdict.case) + slowest(verdict.control),
+					computeSlowestCheck(verdict.case) + computeSlowestCheck(verdict.control),
 				)
 				// The same relation applied to the contract's own example, so the documented figure
 				// cannot drift back below the accounting the preceding run demonstrated.
@@ -1822,7 +1770,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 					}),
 				])
 				const include: string[] = []
-				for (let index = 0; index < 10_000; index += 1) {
+				for (const index of Array.from({ length: 10_000 }).keys()) {
 					const directory = `generated/d${index}`
 					scratch.write(`${directory}/index.ts`, 'export {}\n')
 					if (index < 3_000) include.push(`../${directory}/**/*.ts`)
@@ -2203,16 +2151,15 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 			const directory = resolve(scratch.path, 'tmp/probes')
 			const probe = new Probe({ workspace: scratch.path, deadline: 60_000 })
 			void probe.start().catch(() => {})
-			let observed: readonly string[] = []
+
 			try {
-				await waitForCondition(
+				const observed = await retryUntil(
 					'the probe boot dependencies to appear',
-					() => {
-						observed = existsSync(directory)
+					() =>
+						existsSync(directory)
 							? readdirSync(directory).filter((name) => name.startsWith('arm-'))
-							: []
-						return observed.length === 2
-					},
+							: [],
+					(names) => names.length === 2,
 					{ budget: 30_000, interval: 5 },
 				)
 				const revision = `probe-${process.pid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
@@ -2530,7 +2477,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 			// host on 2026-09-06 showed 6_000 ms did not.
 			const probe = new Probe({ workspace: scratch.path, deadline: 15_000 })
 			void probe.start().catch(() => {})
-			let closing: Promise<void> | undefined
+			const closing = new ProbeObservation<Promise<void> | undefined>(undefined)
 			const claim: Claim = {
 				project: 'tsconfig.json',
 				case: {
@@ -2558,23 +2505,16 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 				expect(existsSync(ready), 'the generated specification never reached its FIFO').toBe(true)
 				await waitForDelay(50)
 				const started = performance.now()
-				closing = probe.destroy()
+				closing.value = probe.destroy()
 				const settled = await Promise.race([
-					closing.then(() => true),
+					closing.value.then(() => true),
 					waitForDelay(16_000).then(() => false),
 				])
 				expect(settled).toBe(true)
 				expect(performance.now() - started).toBeLessThan(16_000)
 			} finally {
-				let descriptor: number | undefined
-				try {
-					descriptor = openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK)
-					writeSync(descriptor, 'release')
-				} catch {
-				} finally {
-					if (descriptor !== undefined) closeSync(descriptor)
-				}
-				await (closing ?? probe.destroy()).catch(() => {})
+				releaseProbeGate(gate)
+				await (closing.value ?? probe.destroy()).catch(() => {})
 				scratch.destroy()
 			}
 		},
@@ -2864,24 +2804,25 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 			path: `src/core/probe-claims-${id}/helpers.ts`,
 			text: "export function value(): number {\n\treturn 'bad'\n}\n",
 		}
-		const claim = (text: string): Claim => ({
-			project: 'configs/src/tsconfig.core.json',
-			case: { files: [{ path: `src/core/probe-claims-${id}/helpers.ts`, text }], test },
-			control: {
-				files: [broken],
-				test,
-				stage: 'type',
-				reason: 'the source assigns a string to a number',
-			},
-		})
+
 		const probe = new Probe({ workspace: ROOT, deadline: 60_000 })
 		void probe.start().catch(() => {})
 		try {
 			const first = await probe.prove(
-				claim("export function value(): string {\n\treturn 'first'\n}\n"),
+				buildProbeClaim(
+					id,
+					test,
+					broken,
+					"export function value(): string {\n\treturn 'first'\n}\n",
+				),
 			)
 			const second = await probe.prove(
-				claim("export function value(): string {\n\treturn 'second'\n}\n"),
+				buildProbeClaim(
+					id,
+					test,
+					broken,
+					"export function value(): string {\n\treturn 'second'\n}\n",
+				),
 			)
 			const firstToken = first.receipt?.split(':') ?? []
 			const secondToken = second.receipt?.split(':') ?? []

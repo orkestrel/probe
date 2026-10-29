@@ -1,7 +1,6 @@
 import type { Issue, Stage } from '@src/core'
 import type { Diagnostic, ListenerCapture, WorkspaceManifest } from './types.js'
 import type { EventEmitter } from 'node:events'
-import type { Dirent } from 'node:fs'
 import type * as VitestNode from 'vitest/node'
 import {
 	closeSync,
@@ -151,13 +150,13 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 	if (!mutate) return file
 	try {
 		const canonical = realpathSync(root)
-		let descendant = root
-		for (const segment of path.split(sep)) {
-			descendant = resolve(descendant, segment)
+		path.split(sep).reduce<string | undefined>((parent, segment) => {
+			if (parent === undefined) return undefined
+			const descendant = resolve(parent, segment)
 			const outcome = attempt(() => lstatSync(descendant))
 			if (!outcome.success) {
 				const code = readFaultCode(outcome.error)
-				if (code === 'ENOENT' || code === 'ENOTDIR') break
+				if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
 				throw outcome.error
 			}
 			if (outcome.value.isSymbolicLink()) {
@@ -175,7 +174,8 @@ export function resolveWorkspaceFile(workspace: string, target: string, mutate =
 					context: { path: target },
 				})
 			}
-		}
+			return descendant
+		}, root)
 	} catch (error) {
 		if (isProbeError(error)) throw error
 		const code = readFaultCode(error)
@@ -352,16 +352,16 @@ export function relativeWorkspaceMessage(workspace: string, message: string): st
 		forward.endsWith('/') ? forward : `${forward}/`,
 		root.endsWith(sep) ? root : `${root}${sep}`,
 	])
-	let text = message
-	for (const spelling of spellings) {
-		text = text.replaceAll(spelling, (match: string, offset: number, source: string) =>
-			// A character a path carries sits before this occurrence, so the occurrence is inside a
-			// longer path that another tree holds rather than at the start of one of this tree's own.
-			// The character before offset 0 reads as empty, which no class matches.
-			/[^\s"'`()[\]{}<>,;:=|]/u.test(source.charAt(offset - 1)) ? match : '',
-		)
-	}
-	return text
+	return [...spellings].reduce(
+		(text, spelling) =>
+			text.replaceAll(spelling, (match: string, offset: number, source: string) =>
+				// A character a path carries sits before this occurrence, so the occurrence is inside a
+				// longer path that another tree holds rather than at the start of one of this tree's own.
+				// The character before offset 0 reads as empty, which no class matches.
+				/[^\s"'`()[\]{}<>,;:=|]/u.test(source.charAt(offset - 1)) ? match : '',
+			),
+		message,
+	)
 }
 
 /**
@@ -391,33 +391,36 @@ export function relativeWorkspaceMessage(workspace: string, message: string): st
  * ```
  */
 export function scanDiagnostics(text: string): readonly Diagnostic[] {
-	const diagnostics: Diagnostic[] = []
-	for (const line of text.split(/\r\n|\n/)) {
-		const located = /^(.+)\((\d+),(\d+)\): (?:error|warning) TS\d+: (.*)$/u.exec(line)
-		if (located !== null) {
-			const row = Number.parseInt(located[2] ?? '1', 10) - 1
-			const column = Number.parseInt(located[3] ?? '1', 10) - 1
-			const point = { line: row, character: column }
-			diagnostics.push({
-				path: normalizePath(located[1] ?? ''),
-				range: { start: point, end: point },
-				message: located[4] ?? '',
-			})
-			continue
-		}
-		const bare = /^(?:error|warning) TS\d+: (.*)$/u.exec(line)
-		if (bare !== null) {
-			diagnostics.push({ message: bare[1] ?? '' })
-			continue
-		}
-		const previous = diagnostics.at(-1)
-		if (previous === undefined || !/^\s+\S/u.test(line)) continue
-		diagnostics[diagnostics.length - 1] = {
-			...previous,
-			message: `${previous.message}\n${line}`,
-		}
-	}
-	return diagnostics
+	const lines = text.split(/\r\n|\n/)
+	const headers = lines
+		.map((line, index) => {
+			const located = /^(.+)\((\d+),(\d+)\): (?:error|warning) TS\d+: (.*)$/u.exec(line)
+			if (located !== null) {
+				const row = Number.parseInt(located[2] ?? '1', 10) - 1
+				const column = Number.parseInt(located[3] ?? '1', 10) - 1
+				const point = { line: row, character: column }
+				return {
+					index,
+					diagnostic: {
+						path: normalizePath(located[1] ?? ''),
+						range: { start: point, end: point },
+						message: located[4] ?? '',
+					},
+				}
+			}
+			const bare = /^(?:error|warning) TS\d+: (.*)$/u.exec(line)
+			return bare === null ? undefined : { index, diagnostic: { message: bare[1] ?? '' } }
+		})
+		.filter((header) => header !== undefined)
+	return headers.map((header, index) => ({
+		...header.diagnostic,
+		message: [
+			header.diagnostic.message,
+			...lines
+				.slice(header.index + 1, headers[index + 1]?.index)
+				.filter((line) => /^\s+\S/u.test(line)),
+		].join('\n'),
+	}))
 }
 
 /**
@@ -498,10 +501,9 @@ export function loadWorkspaceVitest(workspace: string): typeof VitestNode {
  * ```
  */
 export function readWorkspaceManifest(workspace: string, name: string): WorkspaceManifest {
-	let path: string
-	try {
-		path = resolveWorkspaceModule(workspace, `${name}/package.json`)
-	} catch (error) {
+	const resolved = attempt(() => resolveWorkspaceModule(workspace, `${name}/package.json`))
+	if (!resolved.success) {
+		const error = resolved.error
 		if (!isProbeError(error)) throw error
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
 			origin: 'workspace',
@@ -510,6 +512,7 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 			cause: error.cause,
 		})
 	}
+	const path = resolved.value
 	const reading = attempt(() => readFileSync(path, 'utf8'))
 	if (!reading.success) {
 		const error = reading.error
@@ -522,16 +525,16 @@ export function readWorkspaceManifest(workspace: string, name: string): Workspac
 			cause: error,
 		})
 	}
-	const parsing = attempt<unknown>(() => JSON.parse(reading.value))
-	if (!parsing.success) {
+	const parsed = attempt<unknown>(() => JSON.parse(reading.value))
+	if (!parsed.success) {
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
 			origin: 'workspace',
 			code: 'malformed',
 			context: { name, path },
-			cause: parsing.error,
+			cause: parsed.error,
 		})
 	}
-	const contents = parsing.value
+	const contents = parsed.value
 	if (!isRecord(contents)) {
 		throw new ProbeError(`${name} does not publish a readable manifest`, {
 			origin: 'workspace',
@@ -710,15 +713,12 @@ export function buildRevisionPath(workspace: string, path: string, revision: str
  * ```
  */
 export function filterUniqueIssues(issues: readonly Issue[]): readonly Issue[] {
-	const seen = new Set<string>()
-	const distinct: Issue[] = []
-	for (const issue of issues) {
-		const key = JSON.stringify([issue.origin, issue.path, issue.message, issue.range])
-		if (seen.has(key)) continue
-		seen.add(key)
-		distinct.push(issue)
-	}
-	return distinct
+	const groups = Map.groupBy(issues, (issue) =>
+		JSON.stringify([issue.origin, issue.path, issue.message, issue.range]),
+	)
+	return Iterator.from(groups.values())
+		.flatMap((group) => group.slice(0, 1))
+		.toArray()
 }
 
 /**
@@ -791,10 +791,8 @@ export function collectWorkspaceFiles(workspace: string): readonly string[] {
 	while (directories.length > 0) {
 		const directory = directories.pop()
 		if (directory === undefined) break
-		let entries: readonly Dirent[] = []
-		try {
-			entries = readdirSync(directory, { withFileTypes: true })
-		} catch {}
+		const reading = attempt(() => readdirSync(directory, { withFileTypes: true }))
+		const entries = reading.success ? reading.value : []
 		for (const entry of entries) {
 			if (entry.name === '.git' || entry.name === 'dist' || entry.name === 'node_modules') continue
 			const path = join(directory, entry.name)
@@ -888,19 +886,16 @@ export async function guardStage<T>(stage: Stage, operation: Promise<T>): Promis
  */
 export function findRefusedPaths(value: unknown): readonly string[] {
 	if (!compileGuard(CLAIM_SHAPE)(value)) return []
-	const members: string[] = []
-	for (const phase of ['case', 'control'] as const) {
+	return (['case', 'control'] as const).flatMap((phase) => {
 		const subject = value[phase]
-		const drafts = new Map<string, unknown>([[`${phase}.test`, subject.test]])
-		for (const [index, file] of subject.files.entries()) {
-			drafts.set(`${phase}.files.${index}`, file)
-		}
-		for (const [member, draft] of drafts) {
-			if (isDraft(draft)) continue
-			members.push(`${member}.path`)
-		}
-	}
-	return members
+		const drafts = [
+			[`${phase}.test`, subject.test] as const,
+			...Iterator.from(subject.files.entries()).map(
+				([index, file]) => [`${phase}.files.${index}`, file] as const,
+			),
+		]
+		return drafts.flatMap(([member, draft]) => (isDraft(draft) ? [] : [`${member}.path`]))
+	})
 }
 
 /**
@@ -913,7 +908,8 @@ export function findRefusedPaths(value: unknown): readonly string[] {
  * its relative form keeps one commit checked out at two roots reading to one digest. A path that
  * escapes the workspace is left as it stands, because rewriting it would name a file outside the
  * tree by a relative spelling. Key order is the compiler's own and it differs between the supported
- * majors, so sorting removes a difference that means nothing.
+ * majors, so sorting removes a difference that means nothing. A `__proto__` key is dropped, as
+ * the earlier assignment-built record dropped it, so a digest stays the same across releases.
  *
  * @param workspace - The target workspace root
  * @param value - The value to rewrite
@@ -936,9 +932,13 @@ export function normalizeValue(workspace: string, value: unknown): unknown {
 	}
 	if (isArray(value)) return value.map((entry) => normalizeValue(workspace, entry))
 	if (isRecord(value)) {
-		const record: Record<string, unknown> = {}
-		for (const key of Object.keys(value).sort()) record[key] = normalizeValue(workspace, value[key])
-		return record
+		// An assigned `__proto__` key set the prototype and never reached the JSON, so it stays out.
+		return Object.fromEntries(
+			Object.keys(value)
+				.sort()
+				.filter((key) => key !== '__proto__')
+				.map((key) => [key, normalizeValue(workspace, value[key])]),
+		)
 	}
 	return value
 }
@@ -984,9 +984,7 @@ export function captureListeners(
 	emitter: EventEmitter,
 	events: readonly string[],
 ): ListenerCapture {
-	const capture = new Map<string, readonly Function[]>()
-	for (const event of events) capture.set(event, emitter.listeners(event))
-	return capture
+	return new Map(Iterator.from(events).map((event) => [event, emitter.listeners(event)] as const))
 }
 
 /**

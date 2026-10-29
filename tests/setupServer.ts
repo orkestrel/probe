@@ -1,16 +1,46 @@
+import type { MCPLimitOptions } from '@orkestrel/mcp'
+import type { Interface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
+import { createTool, createToolManager } from '@orkestrel/tool'
+import { ProbeObservation, WORKSPACE_ROOT } from './setup.js'
+import {
+	inferTypeProject,
+	loadWorkspaceVitest,
+	readWorkspaceManifest,
+	resolveWorkspaceBinary,
+	resolveWorkspaceFile,
+	resolveWorkspaceModule,
+} from '@src/server'
 import type { JSONValue } from '@orkestrel/contract'
-import type { ProbeInterface } from '@src/core'
+import type { Check, Claim, Draft, Party, ProbeErrorCode, ProbeInterface } from '@src/core'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { ChildProcess, ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 import { spawn, spawnSync } from 'node:child_process'
-import { readdirSync, statSync, writeFileSync } from 'node:fs'
+import {
+	closeSync,
+	constants,
+	existsSync,
+	lstatSync,
+	openSync,
+	readFileSync,
+	readdirSync,
+	statSync,
+	writeFileSync,
+	writeSync,
+} from 'node:fs'
 import { resolve } from 'node:path'
 import { attempt } from '@orkestrel/contract'
 import { locateComment, unwrapComment } from '@orkestrel/guide'
-import { isJSONObject } from '@orkestrel/mcp'
-import { waitForCondition, waitForEvent } from '@orkestrel/test'
-import { LINT_TEARDOWN, PROBE_DEADLINE, PROBE_RESTARTS, PROBE_WARM } from '@src/core'
+import { createMCPLegacy, createMCPServer, isJSONObject } from '@orkestrel/mcp'
+import { waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
+import {
+	LINT_TEARDOWN,
+	PROBE_DEADLINE,
+	PROBE_RESTARTS,
+	PROBE_WARM,
+	createDestroyedError,
+} from '@src/core'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
 
 /** Bounds concurrent stage disposal by the lint floor and the coordinator deadline. */
@@ -226,6 +256,7 @@ export function spawnProbeServerHost(
 	server: string,
 	scenario: ProbeServerScenario,
 ): ProbeServerHost {
+	requireProbeBuild(fileURLToPath(WORKSPACE_ROOT), [server])
 	const entry = scratch.write('probe-server-host.mjs', createProbeServerHost())
 	const child = spawn(process.execPath, [entry, scratch.path, server, scenario], {
 		cwd: scratch.path,
@@ -887,3 +918,627 @@ export function extractProbeSection(text: string, heading: string): string | und
 	const next = new RegExp(`\\n#{1,${level}} `).exec(rest)
 	return next === null ? rest : rest.slice(0, next.index)
 }
+
+/** Names a failure path and the classification its call must raise. */
+export type ProbeFailureDrive = readonly [
+	subject: string,
+	origin: Party,
+	code: ProbeErrorCode,
+	raise: () => unknown,
+]
+
+/** Builds failure paths over an owned workspace and the installed toolchain. */
+export function buildProbeFailureDrives(
+	workspace: string,
+	root: string,
+): readonly ProbeFailureDrive[] {
+	return [
+		[
+			'a torn-down subject',
+			'claimant',
+			'destroyed',
+			() => {
+				throw createDestroyedError('probe')
+			},
+		],
+		[
+			'a path escaping the workspace',
+			'claimant',
+			'refused',
+			() => resolveWorkspaceFile(workspace, '../secrets.env'),
+		],
+		[
+			'a mutation crossing a symbolic link',
+			'workspace',
+			'refused',
+			() => resolveWorkspaceFile(workspace, 'link/secret.ts', true),
+		],
+		[
+			'an unreadable mutation path',
+			'claimant',
+			'refused',
+			() => resolveWorkspaceFile(workspace, 'invalid\0path.ts', true),
+		],
+		[
+			'a candidate outside every scoped project',
+			'claimant',
+			'refused',
+			() => inferTypeProject('tests/src/core/greeting.test.ts'),
+		],
+		[
+			'a module the workspace does not install',
+			'workspace',
+			'missing',
+			() => resolveWorkspaceModule(workspace, 'definitely-absent-package'),
+		],
+		[
+			'a tool the workspace does not install',
+			'workspace',
+			'missing',
+			() => loadWorkspaceVitest(workspace),
+		],
+		[
+			'a manifest the workspace does not publish',
+			'workspace',
+			'missing',
+			() => readWorkspaceManifest(workspace, 'definitely-absent-package'),
+		],
+		[
+			'a manifest that is not JSON',
+			'workspace',
+			'malformed',
+			() => readWorkspaceManifest(workspace, 'unparsable'),
+		],
+		[
+			'a manifest that is not a record',
+			'workspace',
+			'malformed',
+			() => readWorkspaceManifest(workspace, 'listed'),
+		],
+		[
+			'a package publishing no bin field',
+			'workspace',
+			'missing',
+			() => resolveWorkspaceBinary(workspace, 'binless'),
+		],
+		[
+			'a package publishing no binary of its own name',
+			'workspace',
+			'missing',
+			() => resolveWorkspaceBinary(root, 'typescript'),
+		],
+		[
+			'a package publishing a bin entry that is not a path',
+			'workspace',
+			'malformed',
+			() => resolveWorkspaceBinary(workspace, 'oddbin'),
+		],
+	]
+}
+
+/** Holds the child entry that closes its input after one message. */
+export const PROBE_INPUT_CLOSER = [
+	"import { closeSync } from 'node:fs'",
+	"process.stdin.on('data', () => {",
+	'\tcloseSync(0)',
+	"\tprocess.stdout.write('closed')",
+	'})',
+	'setTimeout(() => {}, 10_000)',
+].join('\n')
+
+/** Finds the pipe threshold within the bounded binary search. */
+export async function findProbePipeLimit(low: number, high: number): Promise<number> {
+	if (high - low <= 1_024) return high
+	const middle = low + Math.floor((high - low) / 2)
+	const [, following] = await readPipeWrites(middle, 200)
+	return following ? findProbePipeLimit(middle, high) : findProbePipeLimit(low, middle)
+}
+
+/** Builds an inert verdict carrying the requested number of issues. */
+export function buildRecord(issues: number): JSONValue {
+	return {
+		id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
+		digest: '6ca20c3bff623031d3955b9d1a76d71d',
+		toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
+		project: { path: 'configs/src/tsconfig.core.json', digest: 'd61f11b52460b1c6707cfac2c6078d59' },
+		case: [{ stage: 'type', elapsed: 61, issues: [] }],
+		control: [
+			{
+				stage: 'type',
+				elapsed: 58,
+				issues: Array.from({ length: issues }, (_, index) => ({
+					origin: 'claimant',
+					path: `src/core/wide-${String(index)}.ts`,
+					message: 'not assignable',
+					range: {
+						start: { line: index, character: 6 },
+						end: { line: index, character: 13 },
+					},
+				})),
+			},
+		],
+		elapsed: 549,
+		receipt: 'probe:6ca20c3bff623031d3955b9d1a76d71d:type',
+	}
+}
+
+/** Reads the response from a real MCP dispatcher with the requested content limit. */
+export async function readCall(record: JSONValue, limit: MCPLimitOptions): Promise<unknown> {
+	const tools = createToolManager()
+	tools.add(
+		createTool({
+			name: 'prove',
+			description: 'Answers whether a TypeScript edit compiles, lints, and passes its test',
+			parameters: { type: 'object', properties: {} },
+			execute: () => record,
+		}),
+	)
+	const server = createMCPServer({
+		identity: { name: 'probe', version: '0.0.0' },
+		tools,
+		limit,
+		execution: () =>
+			Promise.resolve({
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'probe rendered\nreceipt probe:6ca20c' }],
+				structuredContent: record,
+			}),
+	})
+	const answer = await createMCPLegacy(server).handle(
+		JSON.stringify({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: { name: 'prove', arguments: {} },
+		}),
+	)
+	if (typeof answer !== 'string') return undefined
+	const message: unknown = JSON.parse(answer)
+	return message
+}
+
+/** Captures the standard input state and listener identities. */
+export function readInput() {
+	return {
+		data: process.stdin.listenerCount('data'),
+		close: process.stdin.listenerCount('close'),
+		error: process.stdin.listenerCount('error'),
+	}
+}
+
+/** Captures the process signal listener identities. */
+export function readSignals() {
+	return {
+		SIGINT: process.listenerCount('SIGINT'),
+		SIGTERM: process.listenerCount('SIGTERM'),
+	}
+}
+
+/** Builds repeated conditional-type work for elapsed-time assertions. */
+export function createHeavyDraft(index: number): Draft {
+	const rows = [
+		'type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9',
+		'type Pair = `${Digit}${Digit}`',
+		'type Quad = `${Pair}${Pair}`',
+		'type Step0 = Quad',
+	]
+	rows.push(
+		...Array.from({ length: 100 }, (_, position) => {
+			const step = position + 1
+			return `type Step${step} = Exclude<Step${step - 1}, '${String(step).padStart(4, '0')}'>`
+		}),
+	)
+	rows.push(`export const HEAVY_${index}: Step100 = '9999'`)
+	return { path: `src/core/probe-heavy-${index}.ts`, text: `${rows.join('\n')}\n` }
+}
+
+/** Reads the elapsed values from the Verdict contract example. */
+export function readDocumentedTimings(): readonly number[] {
+	const contract = readFileSync(resolve(fileURLToPath(WORKSPACE_ROOT), 'src/core/types.ts'), 'utf8')
+	const start = contract.indexOf('const verdict: Verdict = {')
+	const end = contract.indexOf('export interface Verdict', start)
+	return [...contract.slice(start, end).matchAll(/elapsed: (\d+)/g)].map((match) =>
+		Number(match[1]),
+	)
+}
+
+/** Returns the longest elapsed time among the checks. */
+export function computeSlowestCheck(checks: readonly Check[]): number {
+	return Math.max(...checks.map((check) => check.elapsed))
+}
+
+/** Checks whether mkfifo creates an owned FIFO on this host. */
+export function readFIFOGate(name: string): boolean {
+	const scratch = createScratch({ prefix: 'probe-runtime-gate-' })
+	try {
+		const path = resolve(scratch.path, name)
+		if (spawnSync('mkfifo', [path]).status !== 0) return false
+		return existsSync(path) && lstatSync(path).isFIFO()
+	} finally {
+		scratch.destroy()
+	}
+}
+
+/** Reads the host's refusal when writing to closed child input. */
+export async function readInputRefusal(signal?: NodeJS.Signals): Promise<string | undefined> {
+	const child = spawn(process.execPath, ['-e', PROBE_INPUT_CLOSER], {
+		stdio: ['pipe', 'pipe', 'ignore'],
+	})
+	// A host that does break the pipe reports it on the stream as well as on the write, and an
+	// unheard `error` event there would end the run instead of the write.
+	child.stdin.on('error', () => {})
+	const closed = new Promise<void>((settle) => {
+		child.stdout.on('data', () => settle())
+	})
+	const ended = new Promise<void>((settle) => {
+		child.on('exit', () => settle())
+	})
+	child.stdin.write('open\n')
+	await closed
+	if (signal !== undefined) {
+		child.kill(signal)
+		await ended
+	}
+	const refusal = await new Promise<string | undefined>((settle) => {
+		child.stdin.write('next\n', (error) => {
+			if (error === null || error === undefined) {
+				settle(undefined)
+				return
+			}
+			settle('code' in error && typeof error.code === 'string' ? error.code : error.message)
+		})
+	})
+	// The control already ended this child, so only the measured run leaves one to end.
+	if (signal === undefined) child.kill('SIGKILL')
+	await ended
+	return refusal
+}
+
+/** Reads whether successive writes settle against an unread child pipe. */
+export async function readPipeWrites(
+	first: number,
+	second: number,
+): Promise<readonly [boolean, boolean]> {
+	const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], {
+		stdio: ['pipe', 'ignore', 'ignore'],
+	})
+	child.stdin.on('error', () => {})
+	const settled = new ProbeObservation(false)
+	const following = new ProbeObservation(false)
+	child.stdin.write(Buffer.alloc(first, 0x61), () => {
+		settled.value = true
+	})
+	await waitForDelay(200)
+	child.stdin.write(Buffer.alloc(second, 0x62), () => {
+		following.value = true
+	})
+	await waitForDelay(200)
+	child.kill('SIGKILL')
+	return [settled.value, following.value]
+}
+
+/** Finds a payload that settles while the following close-sized write remains pending. */
+export async function readStallPayload(): Promise<number | undefined> {
+	const high = await findProbePipeLimit(4_096, 4_194_304)
+	const payload = high + 8_192
+	const [settled, following] = await readPipeWrites(payload, 200)
+	return settled && !following ? payload : undefined
+}
+
+/** Creates a workspace with the installed Oxlint binary and selection overrides. */
+export function createLintWorkspace(): ScratchInterface {
+	return createScratch({
+		files: {
+			...createLintFixture({
+				binary: resolveWorkspaceBinary(fileURLToPath(WORKSPACE_ROOT), 'oxlint'),
+			}).files,
+			'.oxlintrc.json': `${JSON.stringify({
+				rules: { 'no-debugger': 'error' },
+				overrides: [
+					{ files: ['configs/**'], rules: { 'no-debugger': 'off' } },
+					{ files: ['guides/candidate*.ts'], rules: { 'no-debugger': 'off' } },
+					{ files: ['lib/exempt.ts'], rules: { 'no-debugger': 'off' } },
+				],
+			})}\n`,
+		},
+	})
+}
+
+/** Reads the result record from a JSON-RPC response line. */
+export function readAnswer(line: string): Readonly<Record<string, JSONValue>> | undefined {
+	const message: unknown = JSON.parse(line)
+	if (!isJSONObject(message)) return undefined
+	const answer = message['result']
+	return isJSONObject(answer) ? answer : undefined
+}
+
+/** Indexes answered frames by request id, retaining the latest response to each id. */
+export function indexFrames(frames: readonly string[]): ReadonlyMap<number, string> {
+	return new Map(
+		Iterator.from(frames).flatMap((frame) => {
+			const message: unknown = JSON.parse(frame)
+			return isJSONObject(message) && typeof message['id'] === 'number'
+				? [[message['id'], frame] as const]
+				: []
+		}),
+	)
+}
+
+/** Reads the text from a result containing exactly one text block. */
+export function readProbeContent(answer: Readonly<Record<string, JSONValue>>): string | undefined {
+	const content = answer['content']
+	if (!Array.isArray(content) || content.length !== 1) return undefined
+	const block = content[0]
+	if (!isJSONObject(block) || block['type'] !== 'text') return undefined
+	const text = block['text']
+	return typeof text === 'string' ? text : undefined
+}
+
+/** Collects response lines until the requested frame count arrives. */
+export async function readFrames(output: Interface, expected: number): Promise<readonly string[]> {
+	const frames: string[] = []
+	for await (const line of output) {
+		if (line.trim() !== '') frames.push(line)
+		if (frames.length === expected) break
+	}
+	return frames
+}
+
+/** Builds a bin-entry claim with the supplied control module. */
+export function buildClaim(name: string, control: string): Readonly<Record<string, unknown>> {
+	const specification = {
+		path: `tmp/probes/bin/${name}-runtime.test.ts`,
+		text: PROBE_ENTRY_PASSING,
+	}
+	return {
+		project: 'configs/src/tsconfig.core.json',
+		case: {
+			files: [{ path: `src/core/${name}/constants.ts`, text: PROBE_ENTRY_CLEAN }],
+			test: specification,
+		},
+		control: {
+			files: [{ path: `src/core/${name}/constants.ts`, text: control }],
+			test: specification,
+			stage: 'type',
+			reason: 'the source assigns a string to a number',
+		},
+	}
+}
+
+/** Releases a FIFO gate if its nonblocking writer can open. */
+export function releaseProbeGate(gate: string): void {
+	const descriptor = attempt(() => openSync(gate, constants.O_WRONLY | constants.O_NONBLOCK))
+	if (!descriptor.success) return
+	try {
+		writeSync(descriptor.value, 'release')
+	} catch {
+	} finally {
+		closeSync(descriptor.value)
+	}
+}
+
+/** Builds a claim whose candidate and control share a module path and test. */
+export function buildProbeClaim(id: string, test: Draft, broken: Draft, text: string): Claim {
+	return {
+		project: 'configs/src/tsconfig.core.json',
+		case: { files: [{ path: `src/core/probe-claims-${id}/helpers.ts`, text }], test },
+		control: {
+			files: [broken],
+			test,
+			stage: 'type',
+			reason: 'the source assigns a string to a number',
+		},
+	}
+}
+
+/** Reads the first nonempty JSON frame after removing terminal cursor controls. */
+export async function readProbeTerminalFrame(output: Interface): Promise<unknown> {
+	for await (const line of output) {
+		const frame = line.replaceAll('\u001b[?25l', '').replaceAll('\u001b[?25h', '')
+		if (frame.trim() !== '') return JSON.parse(frame)
+	}
+	return undefined
+}
+
+/** Refuses missing or stale built entries before a proof starts their processes. */
+export function requireProbeBuild(root: string, entries: readonly string[]): void {
+	const newest = readdirSync(resolve(root, 'src'), { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => statSync(resolve(entry.parentPath, entry.name)).mtimeMs)
+		.reduce<number | undefined>(
+			(previous, modified) => (previous === undefined ? modified : Math.max(previous, modified)),
+			undefined,
+		)
+	for (const entry of entries) {
+		const built = attempt(() => statSync(entry))
+		if (
+			!built.success ||
+			!built.value.isFile() ||
+			(newest !== undefined && built.value.mtimeMs < newest)
+		) {
+			throw new Error(
+				`The built entry ${entry} is missing or older than src/. Run npm run build before this proof.`,
+			)
+		}
+	}
+}
+
+/** Builds the packed-copy error recognition proof for a standalone Node process. */
+export function createProbeErrorDriver(): string {
+	return [
+		"import assert from 'node:assert/strict'",
+		"import { createRequire } from 'node:module'",
+		"import { join } from 'node:path'",
+		"import { pathToFileURL } from 'node:url'",
+		'const require = createRequire(import.meta.url)',
+		'const roots = process.argv.slice(2)',
+		"const copies = await Promise.all(roots.flatMap((root) => [import(pathToFileURL(join(root, 'dist/src/core/index.js')).href), require(join(root, 'dist/src/core/index.cjs'))]))",
+		'assert.equal(new Set(copies.map((copy) => copy.ProbeError)).size, copies.length)',
+		"const brand = Symbol.for('@orkestrel/probe.error')",
+		'for (const source of copies) {',
+		"  const error = new source.ProbeError('fixture', { origin: 'claimant', code: 'refused', context: { path: 'fixture.ts' } })",
+		"  class Derived extends source.ProbeError { constructor() { super('derived', { origin: 'workspace', code: 'missing' }); Object.defineProperty(this, 'name', { value: 'Derived' }) } }",
+		'  const derived = new Derived()',
+		"  const lookalike = Object.assign(new Error('fixture'), { origin: 'claimant', code: 'refused' })",
+		'  const plain = {}; Object.defineProperty(plain, brand, { value: plain })',
+		'  assert.deepEqual(Object.getOwnPropertyDescriptor(error, brand), { value: error, enumerable: false, writable: false, configurable: false })',
+		'  for (const target of copies) {',
+		'    assert.equal(target.isProbeError(error), true)',
+		'    assert.equal(target.isProbeError(derived), true)',
+		'    assert.equal(target.isProbeError(lookalike), false)',
+		'    assert.equal(target.isProbeError(new Proxy(error, {})), false)',
+		'    assert.equal(target.isProbeError(plain), false)',
+		"    for (const context of [new class { path = 'fixture.ts' }(), Object.assign(() => {}, { deadline: NaN }), { deadline: Infinity }, { stage: 'runtime' }]) {",
+		"      assert.equal(target.isProbeError(new source.ProbeError('context', { origin: 'claimant', code: 'refused', context })), true)",
+		'    }',
+		"    for (const context of [null, 1, { stage: 'other' }, { path: 1 }, { project: 1 }, { name: 1 }, { deadline: 'slow' }]) {",
+		"      assert.equal(target.isProbeError(new source.ProbeError('context', { origin: 'claimant', code: 'refused', context })), false)",
+		'    }',
+		'  }',
+		'}',
+	].join('\n')
+}
+
+export const PROBE_ENTRY_DELIVERIES = [
+	{ signal: 'SIGTERM', phase: 'boot' },
+	{ signal: 'SIGINT', phase: 'boot' },
+	{ signal: 'SIGTERM', phase: 'service' },
+	{ signal: 'SIGINT', phase: 'service' },
+] as const
+
+// A bare child that answers a termination signal the way the entry does: a handler that exits 0. It
+// announces on its standard output that the handler is installed, so a parent signals it only after
+// the handler is in place, and the timer holds it open until the signal arrives.
+export const PROBE_ENTRY_HANDLED = [
+	"for (const name of ['SIGTERM', 'SIGINT']) process.on(name, () => process.exit(0))",
+	"process.stdout.write('armed')",
+	'setTimeout(() => {}, 10_000)',
+].join('\n')
+// The same child with no handler. It cannot exit 0 on a signal, which is what makes it the control
+// for the reading that follows.
+export const PROBE_ENTRY_UNHANDLED = [
+	"process.stdout.write('armed')",
+	'setTimeout(() => {}, 10_000)',
+].join('\n')
+// The module text a claim's case carries, and the text its control carries in place of it. The
+// control's annotation refuses the string literal beside it, so the type stage reports one issue.
+export const PROBE_ENTRY_CLEAN = "export const VALUE = 'ok'\n"
+export const PROBE_ENTRY_BROKEN = "export const VALUE: number = 'bad'\n"
+// The same refusal repeated, so the type stage reports an issue per declaration. `@orkestrel/mcp`
+// bounds a tool-call result by total enumerable keys as well as by bytes, and a verdict's key count
+// grows with the issues its stages report, so this control is what drives the record past the key
+// bound the package defaults to.
+export const PROBE_ENTRY_WIDE = Array.from(
+	{ length: 30 },
+	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
+).join('\n')
+// The same refusal repeated past the key bound the server publishes. A whole result costs 44 keys
+// plus 11 for each issue, so `PROBE_KEYS` carries a record reporting up to 368 issues; this control
+// reports past that, which makes the record the part of the answer that cannot travel.
+export const PROBE_ENTRY_WIDER = Array.from(
+	{ length: 400 },
+	(_, index) => `export const VALUE_${String(index)}: number = 'bad'`,
+).join('\n')
+// The reserved metadata a current-revision request carries, and extension keys past the installed
+// default key bound of 64. `PROBE_KEYS` reaches inbound metadata as well as produced content, so a
+// request the default would refuse is admitted here.
+export const PROBE_ENTRY_RESERVED = {
+	'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+	'io.modelcontextprotocol/clientCapabilities': {},
+} as const
+export const PROBE_ENTRY_EXTENSIONS = Object.fromEntries(
+	Array.from({ length: 200 }, (_, index) => [`probe.test/extension-${String(index)}`, index]),
+)
+// A control whose test throws a message longer than the 4 MiB content bound. The string is built
+// inside the child rather than sent to it, so a claim of a few hundred bytes produces a rendering
+// the reply cannot carry — which is the one input under which the rendered text is refused too.
+export const PROBE_ENTRY_THROWING =
+	"import { test } from 'vitest'\ntest('breaks', () => {\n\tthrow new Error('A'.repeat(5_000_000))\n})\n"
+// The test text every case phase runs. It asserts against no draft, so a control breaking at the
+// type stage and one breaking at the runtime stage differ only in the draft each replaces.
+export const PROBE_ENTRY_PASSING =
+	"import { expect, test } from 'vitest'\ntest('passes', () => expect(2 + 2).toBe(4))\n"
+
+// A workspace the compiler accepts and this suite can write drafts into. Every scratch below
+// declares its own project, so a case reads the configuration it names rather than this package's.
+export const PROBE_TYPE_CONFIG =
+	'{"compilerOptions":{"module":"ESNext","moduleResolution":"Bundler","target":"ESNext","types":[],"strict":true},"include":["src/**/*.ts"]}\n'
+
+// The Oxlint language server every claim here is answered by. Its own exit budget sits above the
+// longest row's timeout, so a row reads the ending it drove rather than the server leaving on its
+// own. The `stall-lint` marker file silences every document, which is what holds the probe's boot
+// control past its deadline; the text marker `PROBE_SILENT` silences one document, which holds a
+// claim's candidate while the boot controls still answer.
+export const PROBE_STALL_SERVER = createLintFixture({ budget: 300_000 })
+
+// The same server, publishing one document's diagnostics a tenth of a second after admitting it and
+// recording each session in `probe-lint.log`. A coordinator that admits two inspections at once
+// leaves a count above one in that record; one that admits them out of order leaves the sessions
+// transposed.
+export const PROBE_ORDERED_SERVER = createLintFixture({ budget: 300_000, delay: 100 })
+
+// The stage inspects only under a bound its caller supplies, and most rows here measure something
+// other than that bound. Each of those supplies a signal that never aborts, so the row reads the
+// stage's own answer rather than a deadline of its own making. A row whose subject is the bound
+// arms its own signal instead.
+export const PROBE_LINT_UNBOUNDED: AbortSignal = new AbortController().signal
+
+// The close notification the client writes for one document, rounded up from its framing, its
+// method, and a scratch-directory URI. The stall reading uses it as the follow-up write, so the
+// size it searches for is the size that holds exactly this write.
+export const PROBE_LINT_CLOSE_WRITE = 200
+
+// The workspace every row here drives the stage against, carrying the shared protocol-faithful
+// Oxlint language server. `createLintFixture` states which marker selects which conversation.
+export const PROBE_LINT_FIXTURE = createLintFixture().files
+
+export const PROBE_LINT_PASSING = "import { test } from 'vitest'\ntest('passes', () => {})\n"
+
+// A resident host that drives the real stage outside Vitest, so an unhandled rejection ends a
+// process whose exit code a test can read. Node stops at the `.js` specifiers the source compiles
+// against, so the host registers the one resolution rule that maps them onto the TypeScript files
+// beside them; it replaces no project behaviour.
+export const PROBE_LINT_HOST = [
+	"import { readFileSync } from 'node:fs'",
+	"import { registerHooks } from 'node:module'",
+	"import { pathToFileURL } from 'node:url'",
+	'const [, , stage, workspace] = process.argv',
+	// The stage is loaded as source in a bare host, so this hook stands in for what the workspace's
+	// own resolver and the published build each do for it: the extension the source writes, and the
+	// core entry the server bundle externalizes `@src/core` to.
+	"const root = new URL('../../../', pathToFileURL(stage))",
+	"const owned = new URL('src/', root).href",
+	'registerHooks({',
+	'\tresolve(specifier, context, next) {',
+	'\t\tconst inside = context.parentURL !== undefined && context.parentURL.startsWith(owned)',
+	"\t\tif (inside && specifier.startsWith('.') && specifier.endsWith('.js')) {",
+	"\t\t\treturn next(specifier.slice(0, -3) + '.ts', context)",
+	'\t\t}',
+	"\t\tif (specifier === '@src/core') {",
+	"\t\t\treturn next(new URL('src/core/index.ts', root).href, context)",
+	'\t\t}',
+	'\t\treturn next(specifier, context)',
+	'\t},',
+	'})',
+	'const { LintStage } = await import(pathToFileURL(stage).href)',
+	"const text = \"import { test } from 'vitest'\\ntest('passes', () => {})\\n\"",
+	'const dead = new LintStage(workspace)',
+	// The host arms nothing: every inspection here is measured by the ending its server takes, so the
+	// bound each one carries must never be what ends it.
+	'const open = { signal: new AbortController().signal }',
+	"await dead.inspect({ files: [], test: { path: 'tests/src/server/host-warm.test.ts', text } }, open)",
+	"const announced = readFileSync(workspace + '/server.pid', 'utf8')",
+	"process.kill(Number.parseInt(announced, 10), 'SIGKILL')",
+	'await new Promise((settle) => setTimeout(settle, 250))',
+	'const refused = await dead',
+	"\t.inspect({ files: [], test: { path: 'tests/src/server/host-dead.test.ts', text } }, open)",
+	'\t.then(() => undefined, (error) => error.message)',
+	"if (refused === undefined) throw new Error('the inspection resolved against a dead server')",
+	'await dead.destroy()',
+	'const live = new LintStage(workspace)',
+	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } }, open)",
+	'await live.destroy()',
+	'await new Promise((settle) => setTimeout(settle, 300))',
+	"console.log('refused ' + refused)",
+	"console.log('settled ' + check.stage + ' ' + check.issues.length)",
+].join('\n')

@@ -1,7 +1,7 @@
+import { readFIFOGate } from '../../../setupServer.js'
 import type { Check, Verdict } from '@src/core'
 import {
 	existsSync,
-	lstatSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
@@ -31,30 +31,9 @@ import { RuntimeStage, buildRevisionPath, normalizePath } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createVitest, version as VITEST_VERSION } from 'vitest/node'
 import { DIRECTORY_LINKS, REFUSED_RUNTIME_TARGETS } from '../../../setupServer.js'
-import { WORKSPACE_ROOT } from '../../../setup.js'
+import { ProbeObservation, WORKSPACE_ROOT } from '../../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
-
-// Reads whether this host leaves a FIFO at a filesystem path a caller names. Vitest writes its
-// results cache twice inside one inspection — as the caller's run ends, and again as the stage
-// evicts that run — and a FIFO standing at that path parks each write until this file reads it,
-// which is what puts a reader on either side of the stage's progress accounting. A marker the
-// generated specification writes reaches the first window on its own and cannot reach the second,
-// because the specification has returned by the time the stage cleans up; that is the whole reason
-// the cleanup sample needs this gate and the claimant sample does not. `mkfifo` reports success on
-// a host whose emulation layer accepts the call and leaves no path behind, so the reading is the
-// path rather than the exit code. The FIFO goes into an owned scratch directory, so nothing
-// survives the reading.
-function readFIFOGate(name: string): boolean {
-	const scratch = createScratch({ prefix: 'probe-runtime-gate-' })
-	try {
-		const path = resolve(scratch.path, name)
-		if (spawnSync('mkfifo', [path]).status !== 0) return false
-		return existsSync(path) && lstatSync(path).isFIFO()
-	} finally {
-		scratch.destroy()
-	}
-}
 
 describe('runtime stage', () => {
 	// The revision marker lands between the stem and the extension, so a specification generated
@@ -1081,7 +1060,7 @@ describe('runtime stage', () => {
 			scratch.write('tmp/probes/.keep', '')
 			const samples: Array<{ readonly unresolved: number; readonly files: number }> = []
 			try {
-				for (let generation = 1; generation <= 2; generation += 1) {
+				for (const generation of [1, 2]) {
 					const output = new PassThrough()
 					output.resume()
 					const vitest = await createVitest(
@@ -1114,22 +1093,27 @@ describe('runtime stage', () => {
 						const specification = project.createSpecification(file, undefined, 'threads')
 						const result = await vitest.runTestSpecifications([specification], false)
 						expect(result.testModules[0]?.state()).toBe('passed')
-						let unresolved = 0
-						let files = 0
-						for (const candidate of vitest.projects) {
-							for (const environment of Object.values(candidate.vite.environments)) {
+						const graphs = Iterator.from(vitest.projects)
+							.flatMap((candidate) => Object.values(candidate.vite.environments))
+							.map((environment) => {
 								const graph = environment.moduleGraph
 								const retained: unknown = Reflect.get(graph, '_unresolvedUrlToModuleMap')
-								if (!(retained instanceof Map)) {
+								if (!(retained instanceof Map))
 									throw new Error('Vite exposes no unresolved-url map')
-								}
-								unresolved += retained.size
+								const unresolved = retained.size
 								graph.onFileDelete(file)
 								graph.fileToModulesMap.delete(file)
-								files += graph.fileToModulesMap.size
-							}
-						}
-						samples.push({ unresolved, files })
+								return { unresolved, files: graph.fileToModulesMap.size }
+							})
+						samples.push(
+							graphs.reduce(
+								(sum, graph) => ({
+									unresolved: sum.unresolved + graph.unresolved,
+									files: sum.files + graph.files,
+								}),
+								{ unresolved: 0, files: 0 },
+							),
+						)
 					} finally {
 						const teardown = createTeardown()
 						teardown.add(() => vitest.close())
@@ -1240,7 +1224,7 @@ describe('runtime stage', () => {
 				"import { defineConfig } from 'vitest/config'\nconst project = { test: { name: 'probe', include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }\nexport default defineConfig({ cacheDir: '.probe-cache', test: { projects: [project] } })\n",
 			)
 			const stage = new RuntimeStage(scratch.path)
-			let cache: string | undefined
+			const cache = new ProbeObservation<string | undefined>(undefined)
 			const subject = {
 				files: [],
 				test: {
@@ -1256,11 +1240,11 @@ describe('runtime stage', () => {
 					encoding: 'utf8',
 				}).find((entry) => entry.endsWith('results.json'))
 				if (result === undefined) throw new Error('Vitest wrote no results cache')
-				cache = resolve(cacheRoot, result)
-				rmSync(cache, { force: true })
-				const fifo = spawnSync('mkfifo', [cache])
+				cache.value = resolve(cacheRoot, result)
+				rmSync(cache.value, { force: true })
+				const fifo = spawnSync('mkfifo', [cache.value])
 				if (fifo.status !== 0) throw new Error('The host cannot create a FIFO for the cache gate')
-				const cleanupGate = `${cache}.cleanup`
+				const cleanupGate = `${cache.value}.cleanup`
 				const cleanupFifo = spawnSync('mkfifo', [cleanupGate])
 				if (cleanupFifo.status !== 0) {
 					throw new Error('The host cannot create a second FIFO for the cache gate')
@@ -1269,15 +1253,15 @@ describe('runtime stage', () => {
 				const baseline = stage.progress
 				const running = stage.inspect(subject)
 				const buffer = Buffer.alloc(65_536)
-				const claimantReader = await open(cache, 'r')
+				const claimantReader = await open(cache.value, 'r')
 				const claimant = stage.progress
 				await claimantReader.read(buffer, 0, buffer.length, null)
 				// Each rendezvous owns one FIFO inode. Replace the cache path atomically while the
 				// claimant reader still holds the first inode, so the cleanup reader can attach only
 				// to the second inode and cannot sample the caller's still-open writer.
-				renameSync(cleanupGate, cache)
+				renameSync(cleanupGate, cache.value)
 				await claimantReader.close()
-				const cleanupReader = await open(cache, 'r')
+				const cleanupReader = await open(cache.value, 'r')
 				const cleanup = stage.progress
 				// Drain the cleanup inode to end of file before closing its reader, so the stage's
 				// cache write completes rather than racing this proof's teardown.
@@ -1292,7 +1276,7 @@ describe('runtime stage', () => {
 				teardown.add(() => scratch.destroy())
 				teardown.add(() => stage.destroy())
 				teardown.add(() => {
-					if (cache !== undefined) rmSync(cache, { force: true })
+					if (cache.value !== undefined) rmSync(cache.value, { force: true })
 				})
 				await teardown.destroy()
 			}
@@ -1337,7 +1321,10 @@ describe('runtime stage', () => {
 					code: 'missing',
 					context: { stage: 'runtime', path: 'tests/unmapped.test.ts' },
 				})
-				for (let index = 1; index <= PROBE_SPECIFICATIONS; index += 1) {
+				for (const index of Array.from(
+					{ length: PROBE_SPECIFICATIONS },
+					(_, position) => position + 1,
+				)) {
 					const text = `import { expect, test } from 'vitest'\ntest('passes ${marker}-${index}', () => expect(1).toBe(1))\n`
 					await expect(stage.inspect({ files: [], test: { path, text } })).resolves.toMatchObject({
 						issues: [],

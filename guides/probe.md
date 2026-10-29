@@ -504,6 +504,9 @@ Measured on 2026-08-20: `computeDigest(workspace, cyclic)` raises
 `isProbeError` reads a global brand rather than the constructor, so it admits a failure raised by a
 second copy of this package — a duplicate installation, or the ESM and CommonJS builds loaded
 together — where `instanceof` refuses a failure the other copy raised.
+The own brand holds the error itself. Recognition requires an `Error` with a non-base prototype,
+a declared origin and code, and context members of their declared types. A subclass may replace
+`name`. A transparent proxy, a plain branded object, and a lookalike without the brand are refused.
 
 ## Prerequisites
 
