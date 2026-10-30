@@ -6,6 +6,7 @@ import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join, relative, resolve, sep } from 'node:path'
 import { compileGuard } from '@orkestrel/contract'
+import { inspectProcess } from '@orkestrel/process/server'
 import { captureError, createRecorder } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
@@ -43,6 +44,28 @@ import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from '../../setup.js'
 
 const ROOT = fileURLToPath(WORKSPACE_ROOT)
+
+describe('process liveness', () => {
+	it('preserves files when the host cannot judge a safe process id', () => {
+		expect(inspectProcess(Number.MAX_SAFE_INTEGER)).toBeUndefined()
+		expect(matchesLiveProcess(Number.MAX_SAFE_INTEGER)).toBe(true)
+	})
+
+	it('keeps invalid identities and distinguishes a live host from a departed child', () => {
+		expect(matchesLiveProcess(process.pid)).toBe(true)
+		expect(matchesLiveProcess(0)).toBe(true)
+		expect(matchesLiveProcess(-1)).toBe(true)
+		expect(matchesLiveProcess(-2)).toBe(true)
+		expect(matchesLiveProcess(NaN)).toBe(true)
+		expect(matchesLiveProcess(Infinity)).toBe(true)
+		expect(matchesLiveProcess(1.5)).toBe(true)
+		expect(matchesLiveProcess(Number.MAX_SAFE_INTEGER + 1)).toBe(true)
+		const departed = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' })
+		expect(departed.status).toBe(0)
+		expect(matchesLiveProcess(departed.pid)).toBe(false)
+	})
+})
+
 // Every `@example` block the documented server helpers carry, run verbatim and asserted against
 // the value each block states. An illustrative `/srv/checkout` root stands for the workspace under
 // test, so a documented value carrying a path is composed the same way the block composes it rather

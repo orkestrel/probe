@@ -253,7 +253,7 @@ Pure leaves and workspace readers, from [`helpers.ts`](../src/server/helpers.ts)
 | `inferDocumentLanguage`    | function | `(path: string) => string`                                              | Selects the Language Server Protocol language identifier for a source path.                                               |
 | `buildRevisionPath`        | function | `(workspace: string, path: string, revision: string) => string`         | Builds the fresh sibling path a revision's file is written at, preserving the test's resolution directory.                |
 | `matchesWorkspaceModule`   | function | `(path: string) => boolean`                                             | Reports whether a path is a workspace module Vitest can cache.                                                            |
-| `matchesLiveProcess`       | function | `(id: number) => boolean`                                               | Reports whether the host that wrote one file is still running.                                                            |
+| `matchesLiveProcess`       | function | `(id: number) => boolean`                                               | Reports whether a file's owning host is running or cannot be judged.                                                      |
 | `collectWorkspaceFiles`    | function | `(workspace: string) => readonly string[]`                              | Collects every regular file a target workspace holds, skipping the trees no inspection reads.                             |
 | `filterUniqueIssues`       | function | `(issues: readonly Issue[]) => readonly Issue[]`                        | Filters one issue list to the distinct issues it carries, in the order they arrived.                                      |
 | `describeUnknown`          | function | `(value: unknown) => string`                                            | Normalizes a caught or foreign error into readable text.                                                                  |
@@ -305,6 +305,11 @@ The stage implements the preceding `StageInterface` contract.
 | `destroy` | `Promise<void>`  | Tears down the resident tool or the mirror and releases its resources. |
 
 #### `TypeStageInterface`
+
+`destroy()` abandons inspections and awaits Windows compiler tree termination before removing the
+mirror. Each termination utility has the existing `PROBE_DEADLINE` budget of 30,000 ms; the attempts
+run concurrently. POSIX teardown retains `SIGTERM`. Warming settles before mirror removal on either
+host. The termination attempt remains best effort if the host utility fails.
 
 | Method    | Returns            | Summary                                                                                                           |
 | --------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
@@ -954,6 +959,10 @@ nothing behind. The mirror is refreshed from the workspace before each inspectio
 the stage, and the mirror is this stage's own tree: where the workspace holds a file at a path a
 draft declares a directory under, the mirrored copy of that file is removed so the draft can be
 written, and the next refresh restores it.
+
+The stale-resource sweep retains an owner whose liveness cannot be judged. `matchesLiveProcess`
+keeps its invalid-identity guard and uses process 0.0.16's `inspectProcess` for the host probe. An
+indeterminate answer preserves the resource; only confirmed absence permits the sweep to remove it.
 
 **A read is contained lexically only, and that is the reach to plan for.** The mirror carries
 regular files inside the workspace only: a symbolic link is not carried, so a file reached only

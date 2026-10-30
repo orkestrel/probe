@@ -14,7 +14,7 @@ import {
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
-import { createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { TIMER_LEAD, createTeardown, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { LINT_DEADLINE, formatIssue, isProbeError } from '@src/core'
 import { LintStage, resolveWorkspaceBinary } from '@src/server'
@@ -453,7 +453,7 @@ describe('lint stage', () => {
 				// The interval separates the caller's bound from the client's `LINT_DEADLINE` one: a wait that
 				// timeout still governed would have run past it before answering.
 				const elapsed = performance.now() - started
-				expect(elapsed).toBeGreaterThan(300)
+				expect(elapsed).toBeGreaterThanOrEqual(500 - TIMER_LEAD)
 				expect(elapsed).toBeLessThan(LINT_DEADLINE)
 			} finally {
 				const teardown = createTeardown()

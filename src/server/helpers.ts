@@ -30,6 +30,7 @@ import {
 	isString,
 } from '@orkestrel/contract'
 import { CLAIM_SHAPE, ProbeError, TYPE_MIRROR, isDraft, isProbeError } from '@src/core'
+import { inspectProcess } from '@orkestrel/process/server'
 
 /**
  * Rewrites one path into the forward-slash spelling this package compares and reports paths in.
@@ -738,13 +739,11 @@ export function matchesWorkspaceModule(path: string): boolean {
 }
 
 /**
- * Reports whether the host that wrote one file is still running.
+ * Reports whether a file's owning host is running or cannot be judged.
  *
  * @remarks
- * Signal 0 delivers nothing and reports reachability alone. A process this one may not signal
- * reports `EPERM` and reads as running, and a non-positive identity names a process group rather
- * than a process, so both answer true: the safe direction is to keep a file this package cannot
- * account for.
+ * Keeps a file when its identity is invalid or `inspectProcess` reports existence, denied
+ * permission, or an indeterminate host failure. Only a confirmed absent process answers false.
  *
  * @param id - The process id a file's own revision names
  * @returns True if that process is running or cannot be judged; false otherwise
@@ -757,12 +756,7 @@ export function matchesWorkspaceModule(path: string): boolean {
  */
 export function matchesLiveProcess(id: number): boolean {
 	if (!isNumber(id) || !Number.isSafeInteger(id) || id <= 0) return true
-	try {
-		process.kill(id, 0)
-		return true
-	} catch (error) {
-		return readFaultCode(error) === 'EPERM'
-	}
+	return inspectProcess(id) !== false
 }
 
 /**

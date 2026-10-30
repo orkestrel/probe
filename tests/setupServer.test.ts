@@ -4,11 +4,13 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTeardown, waitForCondition } from '@orkestrel/test'
 import { createScratch, destroyScratch } from '@orkestrel/test/server'
+import { executeSync } from '@orkestrel/process/server'
 import { describe, expect, it } from 'vitest'
 import { WORKSPACE_ROOT } from './setup.js'
 import {
 	REFUSED_RUNTIME_TARGETS,
 	createLintFixture,
+	createTypeTerminationWorkspace,
 	createProbeServerHost,
 	createProbeServerRequest,
 	describeEnding,
@@ -35,6 +37,29 @@ const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const BUILT_SERVER = resolve(ROOT, 'dist/src/server/index.js')
 
 describe('server test setup', () => {
+	it('creates a compiler fixture that reports its project and exits before a hold', () => {
+		const scratch = createTypeTerminationWorkspace()
+		try {
+			const compiler = resolve(scratch.path, 'node_modules/typescript/bin/tsc.cjs')
+			const configuration = executeSync(
+				{ file: process.execPath, arguments: [compiler, '--showConfig'] },
+				{ workspace: scratch.path },
+			)
+			expect(JSON.parse(configuration.stdout)).toStrictEqual({
+				compilerOptions: {},
+				files: ['src/value.ts'],
+			})
+			const checked = executeSync(
+				{ file: process.execPath, arguments: [compiler, '--noEmit'] },
+				{ workspace: scratch.path },
+			)
+			expect(checked.code).toBe(0)
+			expect(scratch.has('compiler')).toBe(false)
+		} finally {
+			scratch.destroy()
+		}
+	})
+
 	it('refuses missing and stale builds before accepting entries at or after the newest source', () => {
 		const scratch = createScratch({
 			files: {

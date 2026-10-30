@@ -1,4 +1,5 @@
 import { PROBE_TYPE_CONFIG as STRICT } from '../../../setupServer.js'
+import { PROBE_TYPE_TERMINATIONS, createTypeTerminationWorkspace } from '../../../setupServer.js'
 import {
 	existsSync,
 	mkdirSync,
@@ -12,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTeardown, waitForCondition } from '@orkestrel/test'
-import { createScratch, supportsFileLinks } from '@orkestrel/test/server'
+import { createScratch, isRunning, supportsFileLinks } from '@orkestrel/test/server'
 import { TypeStage } from '@src/server'
 import { TYPE_MIRROR, formatIssue, formatSpecification, isProbeError } from '@src/core'
 import { describe, expect, it } from 'vitest'
@@ -24,6 +25,54 @@ const ROOT = fileURLToPath(WORKSPACE_ROOT)
 const LINKS = supportsFileLinks()
 
 describe('type stage', () => {
+	it.each(PROBE_TYPE_TERMINATIONS)(
+		'awaits compiler termination before removing the mirror during %s',
+		{ timeout: 60_000 },
+		async (phase) => {
+			const scratch = createTypeTerminationWorkspace()
+			const stage = new TypeStage(scratch.path)
+			try {
+				if (phase === 'inspection') await stage.start()
+				scratch.write('hold', '')
+				const pending =
+					phase === 'warm'
+						? stage.start()
+						: stage.inspect({ files: [], test: { path: 'src/candidate.ts', text: 'export {}\n' } })
+				void pending.catch(() => {})
+				await waitForCondition(
+					'the held compiler to announce its process tree',
+					() =>
+						Number(scratch.read('compiler')) > 0 &&
+						(process.platform !== 'win32' || Number(scratch.read('descendant')) > 0),
+					{ budget: 10_000, interval: 20 },
+				)
+				const compiler = Number(scratch.read('compiler'))
+				const descendant = Number(scratch.read('descendant'))
+				expect(isRunning(compiler)).toBe(true)
+				expect(process.platform !== 'win32' || isRunning(descendant)).toBe(true)
+				const ending = stage.destroy()
+				expect(stage.destroy()).toBe(ending)
+				// A Windows utility close needs an event-loop turn after these queued microtasks.
+				await Promise.resolve()
+				await Promise.resolve()
+				expect(scratch.names(TYPE_MIRROR)).not.toStrictEqual([])
+				await ending
+				expect(process.platform === 'win32' && isRunning(compiler)).toBe(false)
+				expect(process.platform === 'win32' && isRunning(descendant)).toBe(false)
+				expect(scratch.names(TYPE_MIRROR)).toStrictEqual([])
+				await expect(pending).rejects.toThrow('The type stage has been destroyed')
+				await waitForCondition('the compiler to exit', () => !isRunning(compiler), {
+					budget: 10_000,
+					interval: 20,
+				})
+				expect(process.platform === 'win32' || scratch.read('signal') === 'SIGTERM').toBe(true)
+			} finally {
+				await stage.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('defers the mirror until start and marks a fresh resolve', async () => {
 		const scratch = createScratch()
 		scratch.write('package.json', '{"type":"module"}\n')

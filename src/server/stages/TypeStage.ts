@@ -10,12 +10,14 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { attempt } from '@orkestrel/contract'
+import { killTree } from '@orkestrel/process/server'
 import {
 	ProbeError,
+	PROBE_DEADLINE,
 	TYPE_MIRROR,
 	createDestroyedError,
 	formatSpecification,
@@ -156,6 +158,14 @@ export class TypeStage implements TypeStageInterface {
 		return guardStage(this.stage, this.#resolve(project))
 	}
 
+	/**
+	 * Tears down the compiler processes and releases the mirror without awaiting inspections.
+	 *
+	 * @remarks
+	 * On Windows, awaits each tree termination attempt before removing the mirror. Each attempt
+	 * uses `PROBE_DEADLINE`, the existing default inspection budget, as its utility timeout.
+	 * On POSIX, sends `SIGTERM` to each compiler. Warming settles before the mirror is removed.
+	 */
 	destroy(): Promise<void> {
 		if (this.#closing !== undefined) return this.#closing
 		this.#closing = guardStage(this.stage, this.#destroy())
@@ -228,13 +238,10 @@ export class TypeStage implements TypeStageInterface {
 	}
 
 	async #destroy(): Promise<void> {
-		// Abandon every inspection in flight rather than waiting for one: the coordinator tears a
-		// stage down exactly when it cannot wait. Terminating the compiler is what makes that
-		// immediate, and warming is awaited afterwards because its own run is one of the terminated
-		// children and the mirror it built is the resource this releases.
+		// Inspections are abandoned; termination and warming settle before their mirror is removed.
 		const children = [...this.#children]
 		this.#children.clear()
-		for (const child of children) this.#terminate(child)
+		await Promise.all(children.map((child) => this.#terminate(child)))
 		await this.#warming?.catch(() => undefined)
 		try {
 			rmSync(this.#mirror, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
@@ -566,29 +573,30 @@ export class TypeStage implements TypeStageInterface {
 		)
 	}
 
-	#spawn(args: readonly string[], cwd: string): Promise<Execution> {
+	async #spawn(args: readonly string[], cwd: string): Promise<Execution> {
 		this.#refuseDestroyed()
 		const compiler = this.#compiler
 		if (compiler === undefined) throw createDestroyedError('type stage')
-		return new Promise<Execution>((settle, refuse) => {
-			const child = spawn(process.execPath, [compiler, ...args], {
-				cwd,
-				stdio: ['ignore', 'pipe', 'pipe'],
-			})
-			const output = child.stdout
-			const errors = child.stderr
-			if (output === null || errors === null) {
-				this.#terminate(child)
-				refuse(
-					new ProbeError('The compiler was spawned without its own output streams', {
-						origin: 'instrument',
-						code: 'malformed',
-						context: { stage: this.stage },
-					}),
-				)
-				return
+		const child = spawn(process.execPath, [compiler, ...args], {
+			cwd,
+			stdio: ['ignore', 'pipe', 'pipe'],
+		})
+		this.#children.add(child)
+		const output = child.stdout
+		const errors = child.stderr
+		if (output === null || errors === null) {
+			try {
+				await this.#terminate(child)
+			} finally {
+				this.#children.delete(child)
 			}
-			this.#children.add(child)
+			throw new ProbeError('The compiler was spawned without its own output streams', {
+				origin: 'instrument',
+				code: 'malformed',
+				context: { stage: this.stage },
+			})
+		}
+		return new Promise<Execution>((settle, refuse) => {
 			const stdout: string[] = []
 			const stderr: string[] = []
 			output.setEncoding('utf8')
@@ -621,13 +629,11 @@ export class TypeStage implements TypeStageInterface {
 		})
 	}
 
-	// Ends one compiler run. A Windows host never delivers a cooperative signal to a child, and the
-	// compiler is spawned through the Node executable, so the whole tree is ended there by process
-	// id; every other host receives the signal it handles.
-	#terminate(child: ChildProcess): void {
+	// Windows requires an awaited tree termination; POSIX keeps the compiler's cooperative signal.
+	async #terminate(child: ChildProcess): Promise<void> {
 		const id = child.pid
 		if (process.platform === 'win32' && id !== undefined) {
-			spawnSync('taskkill', ['/pid', String(id), '/t', '/f'], { stdio: 'ignore' })
+			await killTree(id, PROBE_DEADLINE)
 			return
 		}
 		child.kill('SIGTERM')

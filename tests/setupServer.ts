@@ -43,6 +43,41 @@ import {
 } from '@src/core'
 import { createScratch, supportsDirectoryLinks } from '@orkestrel/test/server'
 
+/** Selects the lifecycle phase whose compiler teardown interrupts. */
+export const PROBE_TYPE_TERMINATIONS = Object.freeze(['warm', 'inspection'] as const)
+
+/** Creates a compiler protocol fixture that parks while its workspace holds a stop marker. */
+export function createTypeTerminationWorkspace(): ScratchInterface {
+	const scratch = createScratch({ prefix: 'probe-type-termination-' })
+	scratch.write('package.json', '{}\n')
+	scratch.write('tsconfig.json', '{"include":["src/**/*.ts"]}\n')
+	scratch.write('src/value.ts', 'export const VALUE = 1\n')
+	scratch.write(
+		'node_modules/typescript/package.json',
+		'{"name":"typescript","version":"7.0.2","bin":{"tsc":"bin/tsc.cjs"}}\n',
+	)
+	scratch.write(
+		'node_modules/typescript/bin/tsc.cjs',
+		[
+			"const fs = require('node:fs')",
+			"const { spawn } = require('node:child_process')",
+			`const root = ${JSON.stringify(scratch.path)}`,
+			"if (process.argv.includes('--showConfig')) {",
+			"\tprocess.stdout.write(JSON.stringify({ compilerOptions: {}, files: ['src/value.ts'] }))",
+			"} else if (fs.existsSync(root + '/hold')) {",
+			'\tsetInterval(() => {}, 1000)',
+			"\tprocess.on('SIGTERM', () => { fs.writeFileSync(root + '/signal', 'SIGTERM'); process.exit(0) })",
+			"\tif (process.platform === 'win32') {",
+			"\t\tspawn(process.execPath, ['-e', \"const fs = require('node:fs'); setInterval(() => {}, 1000); fs.writeFileSync(process.argv[1], String(process.pid))\", root + '/descendant'], { stdio: 'inherit', windowsHide: true })",
+			'\t}',
+			"\tfs.writeFileSync(root + '/compiler', String(process.pid))",
+			'}',
+			'',
+		].join('\n'),
+	)
+	return scratch
+}
+
 /** Bounds concurrent stage disposal by the lint floor and the coordinator deadline. */
 export const PROBE_FIXTURE_DISPOSAL = Math.max(PROBE_DEADLINE, LINT_TEARDOWN)
 
