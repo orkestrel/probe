@@ -3,7 +3,7 @@ import type { InspectionOptions, LintStageInterface } from '../types.js'
 import type { LSPClientInterface, LSPDiagnostic, LSPExit } from '@orkestrel/lsp'
 import { pathToFileURL } from 'node:url'
 import { createLSPClient } from '@orkestrel/lsp'
-import { createStdioClientTransport } from '@orkestrel/lsp/server'
+import { createLSPStdioTransport } from '@orkestrel/lsp/server'
 import { LINT_DEADLINE, ProbeError, createDestroyedError } from '@src/core'
 import { isError } from '@orkestrel/contract'
 import {
@@ -20,7 +20,7 @@ import {
  *
  * @remarks
  * Starting launches the target workspace's Oxlint binary with its Language Server Protocol mode
- * and hands the conversation to `@orkestrel/lsp`: `createStdioClientTransport` owns the child
+ * and hands the conversation to `@orkestrel/lsp`: `createLSPStdioTransport` owns the child
  * process and its bytes, and `createLSPClient` owns the framing, the request correlation, the
  * capabilities this stage advertises, and the choice between pulled and pushed diagnostics. This
  * stage owns the workspace, the candidate identity, and the projection from a diagnostic to an
@@ -60,7 +60,7 @@ export class LintStage implements LintStageInterface {
 	// Teardown reads the constructed client rather than the warming result, because a warming that
 	// failed or that is still waiting for its answer still leaves a client and a child to release.
 	#client: LSPClientInterface | undefined
-	#transport: ReturnType<typeof createStdioClientTransport> | undefined
+	#transport: ReturnType<typeof createLSPStdioTransport> | undefined
 	#ending: string | undefined
 	// The teardown latch and the destroyed reading are one field: `destroy` assigns it before the
 	// teardown it starts can suspend, so every later read of `#closing !== undefined` answers the
@@ -155,7 +155,7 @@ export class LintStage implements LintStageInterface {
 	// next; a workspace that publishes no Oxlint binary rejects here instead, and leaves none.
 	async #warm(): Promise<void> {
 		const binary = resolveWorkspaceBinary(this.#workspace, 'oxlint')
-		const transport = createStdioClientTransport({
+		const transport = createLSPStdioTransport({
 			server: {
 				command: [process.execPath, binary, '--lsp'],
 				directory: this.#workspace,

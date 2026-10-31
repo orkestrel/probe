@@ -1008,7 +1008,7 @@ carries. Put every candidate draft you want linted at a path version control tra
 The lint stage owns the workspace, the candidate's identity, and the projection from a diagnostic to
 an `Issue`. `@orkestrel/lsp` owns everything between them, and the hookup is fixed:
 
-- **The transport is `createStdioClientTransport` from `@orkestrel/lsp/server`.** Its command vector
+- **The transport is `createLSPStdioTransport` from `@orkestrel/lsp/server`.** Its command vector
   is the current executable, the entry `resolveWorkspaceBinary` resolves for `oxlint` in the target
   workspace, and `--lsp`; its directory is that workspace. The child is therefore the workspace's
   own installed Oxlint entry rather than a `node_modules/.bin` shim, for the reason the
