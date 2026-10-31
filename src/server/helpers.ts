@@ -860,12 +860,12 @@ export async function guardStage<T>(stage: Stage, operation: Promise<T>): Promis
  *
  * @remarks
  * The published claim schema constrains `Draft.path` to a non-empty string and nothing else, while
- * `isDraft` also refuses an absolute path and one that escapes the workspace. That one member is
- * the whole of the difference between the advertised contract and the enforced one, so a caller
- * refused after satisfying the schema is refused here and nowhere else. The whole input must first
- * satisfy that schema. Each draft is then tested with `isDraft` itself rather than with a second
- * copy of its rule. Reports nothing for a value carrying no draft member, including one refused for
- * a member this contract does not declare.
+ * `isDraft` also refuses an absolute path and one that resolves outside the workspace. That one
+ * member is the whole of the difference between the advertised contract and the enforced one, so a
+ * caller refused after satisfying the schema is refused here and nowhere else. The whole input must
+ * first satisfy that schema. Each draft is then tested with `isDraft` itself rather than with a
+ * second copy of its rule. Reports nothing for a value carrying no draft member, including one
+ * refused for a member this contract does not declare.
  *
  * This function lives in the server helpers rather than in core: core's leaf pair, `helpers.ts` and
  * `validators.ts`, may not consume the shapes module this function reads `CLAIM_SHAPE` from, and
@@ -907,10 +907,11 @@ export function findRefusedPaths(value: unknown): readonly string[] {
  * `tsc --showConfig` spells a path relative to the project file, so a printed record carries an
  * absolute path only where a project itself declares one. Rewriting a contained absolute path to
  * its relative form keeps one commit checked out at two roots reading to one digest. A path that
- * escapes the workspace is left as it stands, because rewriting it would name a file outside the
- * tree by a relative spelling. Key order is the compiler's own and it differs between the supported
- * majors, so sorting removes a difference that means nothing. A `__proto__` key is dropped, as
- * the earlier assignment-built record dropped it, so a digest stays the same across releases.
+ * resolves outside the workspace is left as it stands, because rewriting it would name a file
+ * outside the tree by a relative spelling. Key order is the compiler's own and it differs between
+ * the supported majors, so sorting removes a difference that means nothing. A `__proto__` key is
+ * dropped, as the earlier assignment-built record dropped it, so a digest stays the same across
+ * releases.
  *
  * @param workspace - The target workspace root
  * @param value - The value to rewrite

@@ -151,8 +151,8 @@ export class TypeStage implements TypeStageInterface {
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
-	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the
-	 * stage has already been destroyed
+	 * @throws When the project resolves outside the workspace, when the compiler refuses it, or when
+	 * the stage has already been destroyed
 	 */
 	resolve(project: string): Promise<Project> {
 		return guardStage(this.stage, this.#resolve(project))
@@ -177,8 +177,8 @@ export class TypeStage implements TypeStageInterface {
 		const started = performance.now()
 		await this.start()
 		this.#refuseDestroyed()
-		// Every declared path is resolved before anything is written, so a draft that escapes the
-		// workspace refuses the whole inspection rather than leaving earlier drafts in the mirror.
+		// Every declared path is resolved before anything is written, so a draft that resolves outside
+		// the workspace refuses the whole inspection rather than leaving earlier drafts in the mirror.
 		const test = resolveWorkspaceFile(this.#workspace, subject.test.path)
 		const resolved = subject.files.map((draft) => ({
 			draft,

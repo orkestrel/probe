@@ -82,10 +82,10 @@ import { Overlay } from '../Overlay.js'
  * Vitest service after 64 specifications rather than deleting from each map that service owns. Any
  * bound holds the retention flat, because the replacement releases everything the instance held,
  * and 64 is the value chosen. The inspection that crosses the bound pays the replacement
- * synchronously: it closes the resident service and warms a new one before it runs. On 2026-08-20,
- * over this package's own workspace on the host `guides/probe.md` § Cost names, two runs of 66
- * inspections put that one at 480 ms and 269 ms against median inspections of 156 ms and 155 ms, so
- * budget one call in 64 at 110 ms to 330 ms above the rest.
+ * synchronously: it closes the resident service and warms a fresh service before it runs. On
+ * 2026-08-20, over this package's own workspace on the host `guides/probe.md` § Cost names, two
+ * runs of 66 inspections put that one at 480 ms and 269 ms against median inspections of 156 ms and
+ * 155 ms, so budget one call in 64 at 110 ms to 330 ms above the rest.
  *
  * Every issue this stage emits names its party, and the stage emits an issue for every party
  * `Party` declares. An `origin: 'claimant'` issue is a failure Vitest reported about the candidate.
@@ -233,7 +233,7 @@ export class RuntimeStage implements StageInterface {
 			// Vitest stores a specification under the exact identifier it is handed, while its deletion
 			// handler rewrites the path it is given to forward slashes before looking that key up. So on
 			// a host whose separator is a backslash the native spelling is stored and never found again:
-			// the eviction below misses, Vitest keeps the module in its file map, and every later run
+			// the following eviction misses, Vitest keeps the module in its file map, and every later run
 			// returns it among that run's own results. The module a failed arming left behind then
 			// reports as a claimant issue against a clean case and refuses its receipt. Hand Vitest one
 			// identifier for the specification, its results, and its eviction. Read the host separator
@@ -483,7 +483,7 @@ export class RuntimeStage implements StageInterface {
 		const containment = attempt(() => resolveWorkspaceFile(this.#workspace, target, true))
 		if (!containment.success) return this.#specificationFault(test, containment.error, file)
 		// The declared test directory may be absent in a fresh checkout. Its creation is a workspace
-		// operation; a refused filename after it exists is classified separately below.
+		// operation; a refused filename after it exists is classified separately later.
 		const directory = attempt(() => mkdirSync(dirname(file), { recursive: true }))
 		if (!directory.success) return this.#specificationFault(test, directory.error, file, true)
 		const written = attempt(() => {

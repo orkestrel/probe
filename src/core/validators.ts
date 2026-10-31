@@ -42,11 +42,11 @@ export const isStage: Guard<Stage> = literalOf(PROBE_STAGES)
  * Checks whether a value carries a proposed file's path and text.
  *
  * @remarks
- * Rejects an empty, absolute, or workspace-escaping path. A contained relative path may contain
- * `.` or may traverse to a parent that remains inside the workspace. Every stage resolves a file
- * by that path, so admitting an escape here would defer the refusal until a stage had already
- * accepted the draft. An `Issue` carries no such minimum because this package produces issues
- * rather than admits them.
+ * Rejects an empty path, an absolute path, or a path that resolves outside the workspace. A
+ * contained relative path may contain `.` or may traverse to a parent that remains inside the
+ * workspace. Every stage resolves a file by that path, so admitting such a path here would defer
+ * the refusal until a stage had already accepted the draft. An `Issue` carries no such minimum
+ * because this package produces issues rather than admits them.
  *
  * @param value - The value to check
  * @returns True if the value is a draft; false otherwise

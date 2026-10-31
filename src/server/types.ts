@@ -322,8 +322,8 @@ export interface TypeStageInterface extends StageInterface {
 	 *
 	 * @param project - The workspace-relative TypeScript project to resolve
 	 * @returns The resolved workspace-relative path and the digest of its compiler options
-	 * @throws When the project escapes the workspace, when the compiler refuses it, or when the
-	 * stage has already been destroyed
+	 * @throws When the project resolves outside the workspace, when the compiler refuses it, or when
+	 * the stage has already been destroyed
 	 *
 	 * @example
 	 * ```ts
