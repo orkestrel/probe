@@ -958,7 +958,10 @@ indeterminate answer preserves the resource; only confirmed absence permits the 
 **A read is contained lexically only, and that is the reach to plan for.** The mirror carries
 regular files inside the workspace only: a symbolic link is not carried, so a file reached only
 through one is absent from the mirror and the compiler reports what its absence causes, as a
-claimant issue like any other. A candidate path beneath an in-workspace symbolic link resolves to a
+claimant issue like any other. Of the workspace-root `tmp/` directory the mirror carries only
+`tmp/probes/`, because the scaffold tmp layout keeps nothing else there that an inspection reads,
+and a consumer's ignored data must never be read or copied; the match is the lowercase `tmp`
+spelling exactly, and a `tmp` directory below the root is walked like any other. A candidate path beneath an in-workspace symbolic link resolves to a
 file outside the workspace, and Oxlint, which reads the workspace directly rather than a mirror of
 it, inspects it there. A `Claim.project` that reaches outside the workspace through `extends`,
 `files`, `include`, or project references reaches nothing there: the type stage reads a project

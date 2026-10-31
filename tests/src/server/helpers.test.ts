@@ -869,6 +869,51 @@ describe('server workspace walk', () => {
 			scratch.destroy()
 		}
 	})
+
+	it('walks only tmp/probes of the root tmp directory and still walks a nested tmp', () => {
+		const scratch = createScratch({ prefix: 'probe-helper-walk-tmp-' })
+		try {
+			scratch.write('src/a.ts', 'export const A = 1\n')
+			scratch.write('src/tmp/b.ts', 'export const B = 1\n')
+			scratch.write('tmp/probes/x.test.ts', 'export const X = 1\n')
+			scratch.write('tmp/probes/deep/w.test.ts', 'export const W = 1\n')
+			scratch.write('tmp/studies/private/key.json', '{}\n')
+			scratch.write('tmp/other/y.ts', 'export const Y = 1\n')
+			scratch.write('tmp/type/z.ts', 'export const Z = 1\n')
+			const files = collectWorkspaceFiles(scratch.path)
+				.map((file) => relativeWorkspaceFile(scratch.path, file))
+				.sort()
+			expect(files).toStrictEqual([
+				'src/a.ts',
+				'src/tmp/b.ts',
+				'tmp/probes/deep/w.test.ts',
+				'tmp/probes/x.test.ts',
+			])
+		} finally {
+			scratch.destroy()
+		}
+	})
+
+	it('does not carry a linked tmp/probes of the root tmp directory', () => {
+		const outside = createScratch({ prefix: 'probe-helper-walk-outside-' })
+		const scratch = createScratch({ prefix: 'probe-helper-walk-probes-link-' })
+		try {
+			outside.write('x.test.ts', 'export const X = 1\n')
+			scratch.write('src/a.ts', 'export const A = 1\n')
+			scratch.write('tmp/loose.ts', 'export const L = 1\n')
+			try {
+				scratch.link('tmp/probes', outside.path)
+			} catch {}
+			// Whether or not this host could create the link, the exact result excludes its target.
+			const files = collectWorkspaceFiles(scratch.path)
+				.map((file) => relativeWorkspaceFile(scratch.path, file))
+				.sort()
+			expect(files).toStrictEqual(['src/a.ts'])
+		} finally {
+			scratch.destroy()
+			outside.destroy()
+		}
+	})
 })
 
 describe('scanDiagnostics', () => {

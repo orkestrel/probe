@@ -763,8 +763,12 @@ export function matchesLiveProcess(id: number): boolean {
  * Collects every regular file a target workspace holds, skipping the trees no inspection reads.
  *
  * @remarks
- * Skips a directory named `.git`, `dist`, or `node_modules` at any depth, and the directory
- * {@link TYPE_MIRROR} names, which would otherwise carry this package's own mirror into the walk. A
+ * Skips a directory named `.git`, `dist`, or `node_modules` at any depth. Of the workspace-root
+ * `tmp` directory it walks only `tmp/probes`: the scaffold tmp layout holds the runtime probes there
+ * and nothing else an inspection reads, so a consumer's ignored data under `tmp/` is never read or
+ * copied. The match is the lowercase `tmp` spelling exactly, and a `tmp` directory below the root is
+ * walked like any other. The directory {@link TYPE_MIRROR} names is skipped as well, so this
+ * package's own mirror stays out of the walk if it ever moves outside `tmp`. A
  * directory this host cannot list is skipped rather than raised, so one unreadable directory in a
  * consumer's tree is not a reason to refuse the whole walk. A symbolic link is not carried, whether
  * it names a file or a directory, so a file reached only through one is absent from the result; a
@@ -781,7 +785,9 @@ export function matchesLiveProcess(id: number): boolean {
 export function collectWorkspaceFiles(workspace: string): readonly string[] {
 	const excluded = normalizePath(resolveWorkspaceFile(workspace, TYPE_MIRROR))
 	const files: string[] = []
-	const directories = [resolve(workspace)]
+	const root = resolve(workspace)
+	const scratch = join(root, 'tmp')
+	const directories = [root]
 	while (directories.length > 0) {
 		const directory = directories.pop()
 		if (directory === undefined) break
@@ -789,6 +795,7 @@ export function collectWorkspaceFiles(workspace: string): readonly string[] {
 		const entries = reading.success ? reading.value : []
 		for (const entry of entries) {
 			if (entry.name === '.git' || entry.name === 'dist' || entry.name === 'node_modules') continue
+			if (directory === scratch && entry.name !== 'probes') continue
 			const path = join(directory, entry.name)
 			if (entry.isDirectory()) {
 				if (normalizePath(path) !== excluded) directories.push(path)
