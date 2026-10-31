@@ -1,6 +1,6 @@
 import type {
 	Case,
-	Check,
+	StageResult,
 	Claim,
 	ProbeEventMap,
 	ProbeInterface,
@@ -30,14 +30,14 @@ import {
 	ProbeError,
 	computeReceipt,
 	createDestroyedError,
-	formatCheck,
+	formatStageResult,
 	formatSpecification,
 	isProbeError,
 } from '@src/core'
 import { peerDependencies } from '../../package.json' with { type: 'json' }
 import {
 	buildRevisionPath,
-	computeDigest,
+	computeWorkspaceDigest,
 	describeUnknown,
 	overwriteFile,
 	readWorkspaceManifest,
@@ -196,7 +196,7 @@ export class Probe implements ProbeInterface {
 			// Resolve the project before any inspection runs, so a project this workspace cannot parse
 			// fails the claim outright rather than after every stage has paid for it.
 			const project = await this.#resolve(claim)
-			const digest = computeDigest(this.#workspace, {
+			const digest = computeWorkspaceDigest(this.#workspace, {
 				case: claim.case,
 				control: claim.control,
 			})
@@ -396,20 +396,20 @@ export class Probe implements ProbeInterface {
 			const beforeType = await this.#inspect(typeClaim.case, typeClaim)
 			const beforeRuntime = await this.#inspect(runtimeClaim.case, runtimeClaim)
 			const before = [...beforeType, ...beforeRuntime]
-			if (before.some((check) => check.issues.length > 0)) {
+			if (before.some((result) => result.issues.length > 0)) {
 				throw new ProbeError(
-					`The probe boot control did not begin clean\n${before.map(formatCheck).join('\n')}`,
+					`The probe boot control did not begin clean\n${before.map(formatStageResult).join('\n')}`,
 					{ origin: 'instrument', code: 'malformed' },
 				)
 			}
 			resolveWorkspaceFile(this.#workspace, relative(this.#workspace, typeDependency), true)
 			overwriteFile(typeDependency, formatSpecification('export type Signal = number\n', revision))
 			const afterType = await this.#inspect(typeClaim.control, typeClaim)
-			const type = afterType.find((check) => check.stage === typeClaim.control.stage)
-			const tolerant = afterType.find((check) => check.stage === 'runtime')
+			const type = afterType.find((result) => result.stage === typeClaim.control.stage)
+			const tolerant = afterType.find((result) => result.stage === 'runtime')
 			if (type === undefined || type.issues.length === 0) {
 				throw new ProbeError(
-					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatCheck).join('\n')}`,
+					`The probe boot type control did not detect a mutated dependency\n${afterType.map(formatStageResult).join('\n')}`,
 					{
 						origin: 'instrument',
 						code: 'malformed',
@@ -419,7 +419,7 @@ export class Probe implements ProbeInterface {
 			}
 			if (tolerant === undefined || tolerant.issues.length > 0) {
 				throw new ProbeError(
-					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatCheck).join('\n')}`,
+					`The probe boot type control did not remain runtime-clean\n${afterType.map(formatStageResult).join('\n')}`,
 					{
 						origin: 'instrument',
 						code: 'malformed',
@@ -433,10 +433,10 @@ export class Probe implements ProbeInterface {
 				formatSpecification("export const SIGNAL = 'after'\n", revision),
 			)
 			const afterRuntime = await this.#inspect(runtimeClaim.control, runtimeClaim)
-			const runtime = afterRuntime.find((check) => check.stage === runtimeClaim.control.stage)
+			const runtime = afterRuntime.find((result) => result.stage === runtimeClaim.control.stage)
 			if (runtime === undefined || runtime.issues.length === 0) {
 				throw new ProbeError(
-					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatCheck).join('\n')}`,
+					`The probe boot runtime control did not detect a mutated dependency\n${afterRuntime.map(formatStageResult).join('\n')}`,
 					{
 						origin: 'instrument',
 						code: 'malformed',
@@ -461,7 +461,7 @@ export class Probe implements ProbeInterface {
 		}
 	}
 
-	#inspect(subject: Case, claim: Claim): Promise<readonly Check[]> {
+	#inspect(subject: Case, claim: Claim): Promise<readonly StageResult[]> {
 		const inspection: Inspection = { subject, claim }
 		return Promise.all([
 			this.#inspectType(inspection),
@@ -470,7 +470,7 @@ export class Probe implements ProbeInterface {
 		])
 	}
 
-	async #inspectType(inspection: Inspection): Promise<Check> {
+	async #inspectType(inspection: Inspection): Promise<StageResult> {
 		const token = await this.#lease(this.#type)
 		return this.#inspectStage(
 			token,
@@ -479,7 +479,7 @@ export class Probe implements ProbeInterface {
 		)
 	}
 
-	async #inspectLint(inspection: Inspection): Promise<Check> {
+	async #inspectLint(inspection: Inspection): Promise<StageResult> {
 		const token = await this.#lease(this.#lint)
 		return this.#inspectStage(
 			token,
@@ -488,7 +488,7 @@ export class Probe implements ProbeInterface {
 		)
 	}
 
-	async #inspectRuntime(inspection: Inspection): Promise<Check> {
+	async #inspectRuntime(inspection: Inspection): Promise<StageResult> {
 		const token = await this.#lease(this.#runtime)
 		return this.#inspectStage(
 			token,

@@ -1,4 +1,4 @@
-import type { Case, Check, Draft, Issue, Project, Stage } from '@src/core'
+import type { Case, StageResult, Draft, Issue, Project, Stage } from '@src/core'
 import type { Diagnostic, Execution, ProjectConfig, TypeStageInterface } from '../types.js'
 import type { ChildProcess } from 'node:child_process'
 import {
@@ -25,7 +25,7 @@ import {
 } from '@src/core'
 import {
 	collectWorkspaceFiles,
-	computeDigest,
+	computeWorkspaceDigest,
 	escapesRoot,
 	filterUniqueIssues,
 	guardStage,
@@ -73,7 +73,7 @@ import { parseProjectConfig, parseRevisionOwner } from '../parsers.js'
  * @example
  * ```ts
  * const stage = new TypeStage('/srv/checkout')
- * const check = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
+ * const result = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
  * await stage.destroy()
  * ```
  */
@@ -134,7 +134,7 @@ export class TypeStage implements TypeStageInterface {
 	 * @throws When the workspace refuses the mirror, when a project the run reads is malformed, or
 	 * when the stage has already been destroyed
 	 */
-	inspect(subject: Case, project?: string): Promise<Check> {
+	inspect(subject: Case, project?: string): Promise<StageResult> {
 		return guardStage(this.stage, this.#inspect(subject, project))
 	}
 
@@ -172,7 +172,7 @@ export class TypeStage implements TypeStageInterface {
 		return this.#closing
 	}
 
-	async #inspect(subject: Case, project?: string): Promise<Check> {
+	async #inspect(subject: Case, project?: string): Promise<StageResult> {
 		this.#refuseDestroyed()
 		const started = performance.now()
 		await this.start()
@@ -234,7 +234,10 @@ export class TypeStage implements TypeStageInterface {
 			this.#refresh()
 			await this.#check(contained, [])
 		}
-		return { path: contained, digest: computeDigest(this.#workspace, config.compilerOptions) }
+		return {
+			path: contained,
+			digest: computeWorkspaceDigest(this.#workspace, config.compilerOptions),
+		}
 	}
 
 	async #destroy(): Promise<void> {

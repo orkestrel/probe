@@ -1,4 +1,4 @@
-import type { Case, Check, Draft, Issue, Stage } from '@src/core'
+import type { Case, StageResult, Draft, Issue, Stage } from '@src/core'
 import type { OverlayInterface, StageInterface } from '../types.js'
 import type {
 	TestProjectConfiguration,
@@ -110,7 +110,7 @@ import { Overlay } from '../Overlay.js'
  * @example
  * ```ts
  * const stage = new RuntimeStage('/srv/checkout')
- * const check = await stage.inspect(subject)
+ * const result = await stage.inspect(subject)
  * await stage.destroy()
  * ```
  */
@@ -172,7 +172,7 @@ export class RuntimeStage implements StageInterface {
 	 * @returns One outcome for this stage
 	 * @throws When the workspace's own tool cannot start or has already been destroyed
 	 */
-	inspect(subject: Case): Promise<Check> {
+	inspect(subject: Case): Promise<StageResult> {
 		return guardStage(this.stage, this.#inspect(subject))
 	}
 
@@ -195,7 +195,7 @@ export class RuntimeStage implements StageInterface {
 		return this.#closing
 	}
 
-	async #inspect(subject: Case): Promise<Check> {
+	async #inspect(subject: Case): Promise<StageResult> {
 		if (this.#closing !== undefined) throw createDestroyedError('runtime stage')
 		const started = performance.now()
 		await this.start()
@@ -528,7 +528,7 @@ export class RuntimeStage implements StageInterface {
 
 	// Returns the project or the issue that replaces it, never both and never neither. A pair of
 	// independent optionals would let a caller write the combination carrying neither, and that branch
-	// reports a clean check for a case whose test never ran.
+	// reports a clean stage result for a case whose test never ran.
 	#project(vitest: Vitest, path: string): TestProject | Issue {
 		// `inferTestProject` reads a workspace-relative path, and a caller declares whatever path it
 		// holds. An absolute one splits into leading segments that match no project, which silently

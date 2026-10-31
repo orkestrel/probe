@@ -5,7 +5,7 @@ import {
 import {
 	createHeavyDraft,
 	readDocumentedTimings,
-	computeSlowestCheck,
+	computeSlowestStageResult,
 	releaseProbeGate,
 	buildProbeClaim,
 } from '../../setupServer.js'
@@ -963,7 +963,7 @@ describe('probe', { concurrent: false }, () => {
 				expect(unrelated.receipt).toMatch(/^probe:/)
 				expect(unbroken.receipt).toBeUndefined()
 				expect(unexecuted.receipt).toBeUndefined()
-				expect(unexecuted.case.find((check) => check.stage === 'runtime')?.issues).toEqual([
+				expect(unexecuted.case.find((result) => result.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'instrument',
 						message: 'Vitest ran no tests in the module',
@@ -1138,7 +1138,7 @@ describe('probe', { concurrent: false }, () => {
 				const documented = readDocumentedTimings()
 
 				expect(verdict.elapsed).toBeGreaterThanOrEqual(
-					computeSlowestCheck(verdict.case) + computeSlowestCheck(verdict.control),
+					computeSlowestStageResult(verdict.case) + computeSlowestStageResult(verdict.control),
 				)
 				// The same relation applied to the contract's own example, so the documented figure
 				// cannot drift back below the accounting the preceding run demonstrated.
@@ -1196,7 +1196,7 @@ describe('probe', { concurrent: false }, () => {
 	})
 
 	it(
-		'retains all stage checks when the runtime stage cannot write its specification',
+		'retains all stage results when the runtime stage cannot write its specification',
 		{ timeout: 60_000 },
 		async () => {
 			const marker = `probe-blocked-${randomUUID()}`
@@ -1236,10 +1236,14 @@ describe('probe', { concurrent: false }, () => {
 						reason: 'the source assigns a string to a number',
 					},
 				})
-				expect(verdict.case.map((check) => check.stage)).toStrictEqual(['type', 'lint', 'runtime'])
-				expect(verdict.case.find((check) => check.stage === 'type')?.issues).toStrictEqual([])
-				expect(verdict.case.find((check) => check.stage === 'lint')?.issues).toStrictEqual([])
-				expect(verdict.case.find((check) => check.stage === 'runtime')?.issues).toEqual([
+				expect(verdict.case.map((result) => result.stage)).toStrictEqual([
+					'type',
+					'lint',
+					'runtime',
+				])
+				expect(verdict.case.find((result) => result.stage === 'type')?.issues).toStrictEqual([])
+				expect(verdict.case.find((result) => result.stage === 'lint')?.issues).toStrictEqual([])
+				expect(verdict.case.find((result) => result.stage === 'runtime')?.issues).toEqual([
 					expect.objectContaining({
 						origin: 'workspace',
 						path,
@@ -1694,7 +1698,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 				},
 			})
 			expect(served.receipt).toBeTypeOf('string')
-			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
+			expect(served.case.flatMap((result) => result.issues)).toStrictEqual([])
 		} finally {
 			await probe.destroy()
 			for (const [socket] of connections.calls) socket.destroy()
@@ -1913,7 +1917,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 					]),
 				)
 				const recycled = await probe.prove(second)
-				expect(recycled.case.flatMap((check) => check.issues)).toStrictEqual([])
+				expect(recycled.case.flatMap((result) => result.issues)).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())
@@ -2022,12 +2026,12 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 					reason: 'this control is deliberately clean',
 				},
 			})
-			expect(served.case.map((check) => check.stage).sort()).toStrictEqual([
+			expect(served.case.map((result) => result.stage).sort()).toStrictEqual([
 				'lint',
 				'runtime',
 				'type',
 			])
-			expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
+			expect(served.case.flatMap((result) => result.issues)).toStrictEqual([])
 		} finally {
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
@@ -2114,12 +2118,12 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 				// before the repair landed.
 				const served = await probe.prove(claim)
 				expect(armings.count).toBe(1)
-				expect(served.case.map((check) => check.stage).sort()).toStrictEqual([
+				expect(served.case.map((result) => result.stage).sort()).toStrictEqual([
 					'lint',
 					'runtime',
 					'type',
 				])
-				expect(served.case.flatMap((check) => check.issues)).toStrictEqual([])
+				expect(served.case.flatMap((result) => result.issues)).toStrictEqual([])
 			} finally {
 				const teardown = createTeardown()
 				teardown.add(() => scratch.destroy())
@@ -2248,7 +2252,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 			void probe.start().catch(() => {})
 			try {
 				const verdict = await probe.prove(claim)
-				expect(verdict.case.flatMap((check) => check.issues)).toEqual([
+				expect(verdict.case.flatMap((result) => result.issues)).toEqual([
 					expect.objectContaining({ origin: 'workspace', path: claim.case.test.path }),
 				])
 				expect(verdict.receipt).toBeUndefined()
@@ -2637,7 +2641,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 						.filter((line) => line.includes('/src/'))
 						.map((line) => (line.includes('/src/core/') ? 'first' : 'second')),
 				).toStrictEqual(['first', 'second', 'first', 'second'])
-				expect(verdict.map((answer) => answer.case.map((check) => check.stage).sort())).toEqual([
+				expect(verdict.map((answer) => answer.case.map((result) => result.stage).sort())).toEqual([
 					['lint', 'runtime', 'type'],
 					['lint', 'runtime', 'type'],
 				])
@@ -2777,7 +2781,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 				// workspace's own project reports the candidate and issues nothing, so a policy
 				// comparing the token's project field refuses what a token without one admitted.
 				expect(workspace.receipt).toBeUndefined()
-				expect(workspace.case.flatMap((check) => check.issues)).toEqual([
+				expect(workspace.case.flatMap((result) => result.issues)).toEqual([
 					expect.objectContaining({
 						origin: 'claimant',
 						path: `src/core/probe-forgery-${id}/helpers.ts`,

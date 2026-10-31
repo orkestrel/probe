@@ -3,13 +3,13 @@ import {
 	PROBE_EXAMPLE_PROJECT as PROJECT,
 	PROBE_EXAMPLE_TOKEN as TOKEN,
 } from '../../setup.js'
-import type { Check, Issue, Project, Verdict } from '@src/core'
+import type { StageResult, Issue, Project, Verdict } from '@src/core'
 import {
 	PROBE_STAGES,
 	RECEIPT_PREFIX,
 	RECEIPT_SEPARATOR,
 	computeReceipt,
-	formatCheck,
+	formatStageResult,
 	formatIssue,
 	formatProof,
 	formatReceipt,
@@ -63,9 +63,11 @@ describe('core formatting helpers', () => {
 	})
 
 	it('renders zero, one, and multiple issues with correct summaries and order', () => {
-		expect(formatCheck({ stage: 'lint', elapsed: 17, issues: [] })).toBe('lint: 0 issues (17 ms)')
+		expect(formatStageResult({ stage: 'lint', elapsed: 17, issues: [] })).toBe(
+			'lint: 0 issues (17 ms)',
+		)
 		expect(
-			formatCheck({
+			formatStageResult({
 				stage: 'type',
 				elapsed: 23,
 				issues: [
@@ -79,7 +81,7 @@ describe('core formatting helpers', () => {
 			}),
 		).toBe('type: 1 issue (23 ms)\n  [claimant] src/core/first.ts:4 first')
 		expect(
-			formatCheck({
+			formatStageResult({
 				stage: 'runtime',
 				elapsed: 31,
 				issues: [
@@ -104,12 +106,12 @@ describe('core formatting helpers', () => {
 	})
 
 	it('renders verdict sections in order with receipt and absence endings', () => {
-		const checks: readonly Check[] = [
+		const results: readonly StageResult[] = [
 			{ stage: 'type', elapsed: 11, issues: [] },
 			{ stage: 'lint', elapsed: 12, issues: [] },
 			{ stage: 'runtime', elapsed: 13, issues: [] },
 		]
-		const control: readonly Check[] = [
+		const control: readonly StageResult[] = [
 			{
 				stage: 'type',
 				elapsed: 14,
@@ -131,7 +133,7 @@ describe('core formatting helpers', () => {
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
 			reason: 'a string literal assigned to a number must not compile',
-			case: checks,
+			case: results,
 			control,
 			elapsed: 81,
 			receipt: 'proof-token',
@@ -309,7 +311,7 @@ describe('core receipt helper', () => {
 			path: 'src/core/control.ts',
 			message: 'not assignable',
 		}
-		const checks: readonly Check[] = PROBE_STAGES.map((stage) => ({
+		const results: readonly StageResult[] = PROBE_STAGES.map((stage) => ({
 			stage,
 			elapsed: 1,
 			issues: [],
@@ -319,18 +321,18 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			case: checks,
+			case: results,
 			control: buildControl('type', [issue]),
 			elapsed: 7,
 		}
 
-		expect(computeReceipt({ ...base, case: checks.slice(0, -1) }, 'type')).toBeUndefined()
+		expect(computeReceipt({ ...base, case: results.slice(0, -1) }, 'type')).toBeUndefined()
 		expect(
 			computeReceipt(
 				{
 					...base,
-					case: checks.map((check) =>
-						check.stage === 'lint' ? { ...check, issues: [issue] } : check,
+					case: results.map((result) =>
+						result.stage === 'lint' ? { ...result, issues: [issue] } : result,
 					),
 				},
 				'type',
@@ -401,7 +403,7 @@ describe('core receipt helper', () => {
 		for (const missing of PROBE_STAGES) {
 			expect(
 				computeReceipt(
-					{ ...base, control: control.filter((check) => check.stage !== missing) },
+					{ ...base, control: control.filter((result) => result.stage !== missing) },
 					'type',
 				),
 				`a control missing ${missing} earned a receipt`,
@@ -415,7 +417,7 @@ describe('core receipt helper', () => {
 			path: 'src/core/control.ts',
 			message: 'not assignable',
 		}
-		const checks: readonly Check[] = PROBE_STAGES.map((stage) => ({
+		const results: readonly StageResult[] = PROBE_STAGES.map((stage) => ({
 			stage,
 			elapsed: 1,
 			issues: [],
@@ -426,14 +428,14 @@ describe('core receipt helper', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			case: checks,
+			case: results,
 			control,
 			elapsed: 7,
 		}
 
 		expect(
 			computeReceipt(
-				{ ...base, case: [...checks, { stage: 'type', elapsed: 1, issues: [] }] },
+				{ ...base, case: [...results, { stage: 'type', elapsed: 1, issues: [] }] },
 				'type',
 			),
 		).toBeUndefined()
@@ -480,20 +482,20 @@ describe('core receipt helper', () => {
 			path: 'tsconfig.json',
 			message: 'The workspace contains an unrelated diagnostic',
 		}
-		const checks: readonly Check[] = PROBE_STAGES.map((stage) => ({
+		const results: readonly StageResult[] = PROBE_STAGES.map((stage) => ({
 			stage,
 			elapsed: 1,
 			issues: stage === 'lint' ? [workspace] : [],
 		}))
 		const control = buildControl('type', [
 			{ origin: 'claimant', path: 'src/core/control.ts', message: 'not assignable' },
-		]).map((check) => (check.stage === 'runtime' ? { ...check, issues: [workspace] } : check))
+		]).map((result) => (result.stage === 'runtime' ? { ...result, issues: [workspace] } : result))
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: TOOLCHAIN,
 			project: PROJECT,
-			case: checks,
+			case: results,
 			control,
 			elapsed: 7,
 		}
@@ -523,13 +525,13 @@ describe('core receipt helper', () => {
 			message:
 				'The runtime stage could not delete the generated specification (EPERM: operation not permitted)',
 		}
-		const clean: readonly Check[] = PROBE_STAGES.map((stage) => ({
+		const clean: readonly StageResult[] = PROBE_STAGES.map((stage) => ({
 			stage,
 			elapsed: 1,
 			issues: [],
 		}))
-		const faulted: readonly Check[] = clean.map((check) =>
-			check.stage === 'runtime' ? { ...check, issues: [fault] } : check,
+		const faulted: readonly StageResult[] = clean.map((result) =>
+			result.stage === 'runtime' ? { ...result, issues: [fault] } : result,
 		)
 		const base: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',

@@ -181,7 +181,7 @@ export type Party = (typeof PROBE_PARTIES)[number]
  * Carries one message a stage reported, where it reported it, and whose fault it names.
  *
  * @remarks
- * The stage is not repeated here. An issue always arrives inside the `Check` that names its
+ * The stage is not repeated here. An issue always arrives inside the `StageResult` that names its
  * stage, so a second copy could only drift from the first.
  *
  * A `claimant` issue is a tool's diagnostic about a candidate draft, and nothing else. Every
@@ -239,10 +239,10 @@ export interface Issue {
  *
  * @example
  * ```ts
- * const check: Check = { stage: 'lint', elapsed: 17, issues: [] }
+ * const result: StageResult = { stage: 'lint', elapsed: 17, issues: [] }
  * ```
  */
-export interface Check {
+export interface StageResult {
 	/** Names the stage that produced this outcome. */
 	readonly stage: Stage
 	/** Holds the milliseconds the stage took. */
@@ -319,7 +319,7 @@ export interface Project {
  * the type stage always runs and a claim always names a project, so no verdict exists without
  * either value. A verdict returned by `Probe` also carries the control's claimant-authored
  * `reason` unchanged. A hand-built verdict may omit it because the receipt helper needs only the
- * recorded checks and declared stage.
+ * recorded stage results and declared stage.
  *
  * `digest` covers these things: the case bytes, the control bytes including this `reason`, and the
  * workspace they were read against. The reason is part of the control, so two claims differing only
@@ -378,9 +378,9 @@ export interface Verdict {
 	 */
 	readonly reason?: string
 	/** Holds one outcome per stage for the claim's case. */
-	readonly case: readonly Check[]
+	readonly case: readonly StageResult[]
 	/** Holds one outcome per stage for the claim's control. */
-	readonly control: readonly Check[]
+	readonly control: readonly StageResult[]
 	/** Holds the milliseconds the whole call took, including both the case and the control. */
 	readonly elapsed: number
 	/** Holds the proof token, absent when either phase reports an instrument failure. */
@@ -508,7 +508,7 @@ export interface ProbeInterface {
 	 *
 	 * @param claim - The case, its control, and the project the candidate drafts in both cases
 	 * are checked against
-	 * @returns The verdict, carrying one check per stage for both the case and the control
+	 * @returns The verdict, carrying one stage result per stage for both the case and the control
 	 * @throws When the control repeats the case byte for byte, or when a stage cannot start, so no
 	 * verdict ever reports a stage that did not run
 	 */

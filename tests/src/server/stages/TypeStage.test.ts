@@ -387,7 +387,7 @@ describe('type stage', () => {
 			)
 			const stage = new TypeStage(scratch.path)
 			try {
-				const check = await stage.inspect(
+				const result = await stage.inspect(
 					{
 						files: [
 							{
@@ -399,8 +399,8 @@ describe('type stage', () => {
 					},
 					'tsconfig.json',
 				)
-				expect(check.issues).toHaveLength(1)
-				expect(check.issues[0]).toMatchObject({
+				expect(result.issues).toHaveLength(1)
+				expect(result.issues[0]).toMatchObject({
 					origin: 'claimant',
 					path: 'src/core/reader.ts',
 					message: expect.stringContaining("Cannot find module './linked.js'"),
@@ -496,7 +496,7 @@ describe('type stage', () => {
 		scratch.write('src/value.ts', 'export const VALUE = 1\n')
 		const stage = new TypeStage(scratch.path)
 		try {
-			const check = await stage.inspect(
+			const result = await stage.inspect(
 				{
 					files: [{ path: 'src/absent/signal.ts', text: "export const SIGNAL = 'draft'\n" }],
 					test: {
@@ -506,7 +506,7 @@ describe('type stage', () => {
 				},
 				'tsconfig.json',
 			)
-			expect(check.issues).toStrictEqual([])
+			expect(result.issues).toStrictEqual([])
 			// A candidate is text the agent supplied, so checking it never puts it in the target tree.
 			expect(existsSync(resolve(scratch.path, 'src/absent'))).toBe(false)
 			expect(existsSync(resolve(scratch.path, 'src/case.ts'))).toBe(false)
@@ -980,7 +980,7 @@ describe('type stage workspace faults', () => {
 			scratch.write('src/value.ts', 'export const VALUE = 1\n')
 			const stage = new TypeStage(scratch.path)
 			try {
-				const check = await stage.inspect(
+				const result = await stage.inspect(
 					{
 						files: [
 							{ path: 'src/settings.json', text: '{ "name": \n' },
@@ -990,9 +990,9 @@ describe('type stage workspace faults', () => {
 					},
 					'tsconfig.json',
 				)
-				expect(check.issues.length).toBeGreaterThan(0)
+				expect(result.issues.length).toBeGreaterThan(0)
 				expect(
-					check.issues.every(
+					result.issues.every(
 						(issue) => issue.origin === 'claimant' && issue.path === 'src/settings.json',
 					),
 				).toBe(true)

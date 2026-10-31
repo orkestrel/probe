@@ -1,4 +1,4 @@
-import type { Check, Issue, Stage, Verdict } from './types.js'
+import type { StageResult, Issue, Stage, Verdict } from './types.js'
 import { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } from './constants.js'
 
 /**
@@ -43,20 +43,20 @@ export function formatIssue(issue: Issue): string {
  * A clean stage renders one line. The count appears even when it is zero, because that line is
  * what shows a reader the stage ran; a silent stage and a skipped stage read the same.
  *
- * @param check - The stage outcome to render
+ * @param result - The stage outcome to render
  * @returns The summary line, then one indented line per issue
  *
  * @example
  * ```ts
- * formatCheck({ stage: 'lint', elapsed: 17, issues: [] })
+ * formatStageResult({ stage: 'lint', elapsed: 17, issues: [] })
  * // 'lint: 0 issues (17 ms)'
  * ```
  */
-export function formatCheck(check: Check): string {
-	const count = check.issues.length
+export function formatStageResult(result: StageResult): string {
+	const count = result.issues.length
 	const noun = count === 1 ? 'issue' : 'issues'
-	const summary = `${check.stage}: ${count} ${noun} (${check.elapsed} ms)`
-	const lines = check.issues.map((issue) => `  ${formatIssue(issue)}`)
+	const summary = `${result.stage}: ${count} ${noun} (${result.elapsed} ms)`
+	const lines = result.issues.map((issue) => `  ${formatIssue(issue)}`)
 	return [summary, ...lines].join('\n')
 }
 
@@ -121,8 +121,8 @@ export function formatReceipt(verdict: Verdict): string {
  * The heading lines carry everything the receipt binds, each in the name-then-value form the
  * toolchain line established: the call's identity, the claim it answered, the tools that ran, and
  * the project that judged the candidates. A verdict carrying the control's reason renders it next,
- * before either phase's checks. A reader comparing two verdicts therefore reads what differed
- * without recomputing anything.
+ * before either phase's stage results. A reader comparing two verdicts therefore reads what
+ * differed without recomputing anything.
  *
  * @param verdict - The verdict to render
  * @returns The identity, claim, toolchain, project, and reason when present, then every case and
@@ -144,8 +144,8 @@ export function formatVerdict(verdict: Verdict): string {
 		tools,
 		project,
 		...reason,
-		...verdict.case.map((check) => `case ${formatCheck(check)}`),
-		...verdict.control.map((check) => `control ${formatCheck(check)}`),
+		...verdict.case.map((result) => `case ${formatStageResult(result)}`),
+		...verdict.control.map((result) => `control ${formatStageResult(result)}`),
 		formatProof(verdict),
 	].join('\n')
 }
@@ -154,8 +154,8 @@ export function formatVerdict(verdict: Verdict): string {
  * Computes the proof token a verdict carries, or returns nothing when the claim was not proven.
  *
  * @remarks
- * A receipt is minted on these conditions together: both phases report one check per stage, the
- * case carries no issue, the control carries at least one `origin: 'claimant'` issue
+ * A receipt is minted on these conditions together: both phases report one stage result per stage,
+ * the case carries no issue, the control carries at least one `origin: 'claimant'` issue
  * at the stage it declared, and every other control stage carries no claimant issue. A control
  * that fails somewhere else has falsified the instrument rather than the claim, so no receipt is
  * minted for it.
@@ -181,7 +181,7 @@ export function formatVerdict(verdict: Verdict): string {
  * refuses the receipt. A workspace issue in the control does not decide whether the claimant's
  * candidate broke, while one in the case still means that the case did not run clean.
  *
- * @param verdict - The verdict whose case and control checks decide the outcome
+ * @param verdict - The verdict whose case and control stage results decide the outcome
  * @param stage - The stage the claim's control declared it must fail at
  * @returns The receipt token, or `undefined` when any condition fails
  *
@@ -195,17 +195,18 @@ export function formatVerdict(verdict: Verdict): string {
 export function computeReceipt(verdict: Verdict, stage: Stage): string | undefined {
 	const ran = PROBE_STAGES.every(
 		(name) =>
-			verdict.case.filter((check) => check.stage === name).length === 1 &&
-			verdict.control.filter((check) => check.stage === name).length === 1,
+			verdict.case.filter((result) => result.stage === name).length === 1 &&
+			verdict.control.filter((result) => result.stage === name).length === 1,
 	)
-	const clean = verdict.case.every((check) => check.issues.length === 0)
-	const declared = verdict.control.find((check) => check.stage === stage)
+	const clean = verdict.case.every((result) => result.issues.length === 0)
+	const declared = verdict.control.find((result) => result.stage === stage)
 	const broke = declared?.issues.some((issue) => issue.origin === 'claimant') ?? false
 	const faulted =
-		verdict.case.some((check) => check.issues.some((issue) => issue.origin === 'instrument')) ||
-		verdict.control.some((check) => check.issues.some((issue) => issue.origin === 'instrument'))
+		verdict.case.some((result) => result.issues.some((issue) => issue.origin === 'instrument')) ||
+		verdict.control.some((result) => result.issues.some((issue) => issue.origin === 'instrument'))
 	const stayed = verdict.control.every(
-		(check) => check.stage === stage || check.issues.every((issue) => issue.origin !== 'claimant'),
+		(result) =>
+			result.stage === stage || result.issues.every((issue) => issue.origin !== 'claimant'),
 	)
 	if (!ran || !clean || !broke || faulted || !stayed) return undefined
 	const { typescript, oxlint, vitest } = verdict.toolchain

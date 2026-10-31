@@ -13,7 +13,7 @@ import {
 	buildRevisionPath,
 	captureListeners,
 	collectWorkspaceFiles,
-	computeDigest,
+	computeWorkspaceDigest,
 	describeUnknown,
 	escapesRoot,
 	filterUniqueIssues,
@@ -823,20 +823,26 @@ describe('server digest leaves', () => {
 			const outside = resolve(scratch.path, 'outside')
 
 			expect(first).not.toStrictEqual(second)
-			expect(computeDigest(firstRoot, first)).toBe(computeDigest(secondRoot, second))
-			expect(computeDigest(firstRoot, first)).toMatch(/^[0-9a-f]{32}$/)
+			expect(computeWorkspaceDigest(firstRoot, first)).toBe(
+				computeWorkspaceDigest(secondRoot, second),
+			)
+			expect(computeWorkspaceDigest(firstRoot, first)).toMatch(/^[0-9a-f]{32}$/)
 			// The control: without the rewrite the same commit read at two paths digests
 			// differently, so a receipt could never be checked away from the tree that minted it.
-			expect(computeDigest(outside, first)).not.toBe(computeDigest(outside, second))
+			expect(computeWorkspaceDigest(outside, first)).not.toBe(
+				computeWorkspaceDigest(outside, second),
+			)
 		} finally {
 			scratch.destroy()
 		}
 	})
 
 	it('moves the digest for a changed value and holds it for a reordered one', () => {
-		expect(computeDigest(ROOT, { strict: true })).not.toBe(computeDigest(ROOT, { strict: false }))
-		expect(computeDigest(ROOT, { first: 1, second: 2 })).toBe(
-			computeDigest(ROOT, { second: 2, first: 1 }),
+		expect(computeWorkspaceDigest(ROOT, { strict: true })).not.toBe(
+			computeWorkspaceDigest(ROOT, { strict: false }),
+		)
+		expect(computeWorkspaceDigest(ROOT, { first: 1, second: 2 })).toBe(
+			computeWorkspaceDigest(ROOT, { second: 2, first: 1 }),
 		)
 	})
 })

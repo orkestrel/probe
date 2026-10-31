@@ -12,7 +12,7 @@ import {
 	resolveWorkspaceModule,
 } from '@src/server'
 import type { JSONValue } from '@orkestrel/contract'
-import type { Check, Claim, Draft, Party, ProbeErrorCode, ProbeInterface } from '@src/core'
+import type { StageResult, Claim, Draft, Party, ProbeErrorCode, ProbeInterface } from '@src/core'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { ChildProcess, ChildProcessByStdio } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
@@ -1177,9 +1177,9 @@ export function readDocumentedTimings(): readonly number[] {
 	)
 }
 
-/** Returns the longest elapsed time among the checks. */
-export function computeSlowestCheck(checks: readonly Check[]): number {
-	return Math.max(...checks.map((check) => check.elapsed))
+/** Returns the longest elapsed time among the stage results. */
+export function computeSlowestStageResult(results: readonly StageResult[]): number {
+	return Math.max(...results.map((result) => result.elapsed))
 }
 
 /** Checks whether mkfifo creates an owned FIFO on this host. */
@@ -1571,9 +1571,9 @@ export const PROBE_LINT_HOST = [
 	"if (refused === undefined) throw new Error('the inspection resolved against a dead server')",
 	'await dead.destroy()',
 	'const live = new LintStage(workspace)',
-	"const check = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } }, open)",
+	"const result = await live.inspect({ files: [], test: { path: 'tests/src/server/host-live.test.ts', text } }, open)",
 	'await live.destroy()',
 	'await new Promise((settle) => setTimeout(settle, 300))',
 	"console.log('refused ' + refused)",
-	"console.log('settled ' + check.stage + ' ' + check.issues.length)",
+	"console.log('settled ' + result.stage + ' ' + result.issues.length)",
 ].join('\n')

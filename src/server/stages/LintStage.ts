@@ -1,4 +1,4 @@
-import type { Case, Check, Draft, Issue, Stage } from '@src/core'
+import type { Case, StageResult, Draft, Issue, Stage } from '@src/core'
 import type { InspectionOptions, LintStageInterface } from '../types.js'
 import type { LSPClientInterface, LSPDiagnostic, LSPExit } from '@orkestrel/lsp'
 import { pathToFileURL } from 'node:url'
@@ -48,7 +48,7 @@ import {
  * @example
  * ```ts
  * const stage = new LintStage('/srv/checkout')
- * const check = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
+ * const result = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
  * await stage.destroy()
  * ```
  */
@@ -101,7 +101,7 @@ export class LintStage implements LintStageInterface {
 		return this.#warming
 	}
 
-	inspect(subject: Case, options?: InspectionOptions): Promise<Check> {
+	inspect(subject: Case, options?: InspectionOptions): Promise<StageResult> {
 		return guardStage(this.stage, this.#inspect(subject, options))
 	}
 
@@ -111,7 +111,7 @@ export class LintStage implements LintStageInterface {
 		return this.#closing
 	}
 
-	async #inspect(subject: Case, options: InspectionOptions | undefined): Promise<Check> {
+	async #inspect(subject: Case, options: InspectionOptions | undefined): Promise<StageResult> {
 		if (this.#closing !== undefined) throw createDestroyedError('lint stage')
 		// The shared stage contract takes one argument, so this bound is optional in the type and
 		// required in fact. Serving without it would mean minting a bound beside the caller's, which

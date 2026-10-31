@@ -1,4 +1,4 @@
-import type { Check, Draft, Issue, Project, Stage, Toolchain } from '@src/core'
+import type { StageResult, Draft, Issue, Project, Stage, Toolchain } from '@src/core'
 import { PROBE_STAGES, isProbeError } from '@src/core'
 import { resolveRoot } from '@orkestrel/test'
 
@@ -22,7 +22,7 @@ export class ProbeObservation<T> {
 }
 
 /** Builds every stage of a control with issues assigned to its selected stage. */
-export function buildControl(stage: Stage, issues: readonly Issue[]): readonly Check[] {
+export function buildControl(stage: Stage, issues: readonly Issue[]): readonly StageResult[] {
 	return PROBE_STAGES.map((name) => ({
 		stage: name,
 		elapsed: 1,

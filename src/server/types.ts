@@ -1,4 +1,4 @@
-import type { Case, Check, Claim, Project, Stage } from '@src/core'
+import type { Case, StageResult, Claim, Project, Stage } from '@src/core'
 import type { LSPRange } from '@orkestrel/lsp'
 
 /**
@@ -224,8 +224,8 @@ export interface OverlayInterface {
  *
  * @example
  * ```ts
- * const check = await stage.inspect(subject)
- * console.log(check.stage)
+ * const result = await stage.inspect(subject)
+ * console.log(result.stage)
  * await stage.destroy()
  * ```
  */
@@ -259,11 +259,11 @@ export interface StageInterface {
 	 *
 	 * @example
 	 * ```ts
-	 * const check = await stage.inspect(subject)
-	 * console.log(check.stage, check.elapsed, check.issues.length)
+	 * const result = await stage.inspect(subject)
+	 * console.log(result.stage, result.elapsed, result.issues.length)
 	 * ```
 	 */
-	inspect(subject: Case): Promise<Check>
+	inspect(subject: Case): Promise<StageResult>
 	/**
 	 * Tears down the resident tool or the mirror and releases its resources.
 	 *
@@ -292,7 +292,7 @@ export interface StageInterface {
  * @example
  * ```ts
  * const project = await stage.resolve('configs/src/tsconfig.core.json')
- * const check = await stage.inspect(subject, project.path)
+ * const result = await stage.inspect(subject, project.path)
  * ```
  */
 export interface TypeStageInterface extends StageInterface {
@@ -308,10 +308,10 @@ export interface TypeStageInterface extends StageInterface {
 	 *
 	 * @example
 	 * ```ts
-	 * const check = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
+	 * const result = await stage.inspect(subject, 'configs/src/tsconfig.core.json')
 	 * ```
 	 */
-	inspect(subject: Case, project?: string): Promise<Check>
+	inspect(subject: Case, project?: string): Promise<StageResult>
 	/**
 	 * Resolves one project to the path and digest the stage applies for it.
 	 * Calls `start()` before reading the project.
@@ -350,7 +350,7 @@ export interface TypeStageInterface extends StageInterface {
  *
  * @example
  * ```ts
- * const check = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
+ * const result = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
  * ```
  */
 export interface LintStageInterface extends StageInterface {
@@ -367,10 +367,10 @@ export interface LintStageInterface extends StageInterface {
 	 *
 	 * @example
 	 * ```ts
-	 * const check = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
+	 * const result = await stage.inspect(subject, { signal: AbortSignal.timeout(30_000) })
 	 * ```
 	 */
-	inspect(subject: Case, options?: InspectionOptions): Promise<Check>
+	inspect(subject: Case, options?: InspectionOptions): Promise<StageResult>
 }
 
 /**

@@ -54,7 +54,7 @@ await new GuideCommand({
 	const core = await import('@src/core')
 	const server = await import('@src/server')
 	const { PROBE_STAGES, RECEIPT_PREFIX, RECEIPT_SEPARATOR } = core
-	const { computeDigest, Probe, readWorkspaceManifest, RuntimeStage } = server
+	const { computeWorkspaceDigest, Probe, readWorkspaceManifest, RuntimeStage } = server
 	const { existsSync, rmSync } = await import('node:fs')
 	const { resolve } = await import('node:path')
 	const { describe, expect, it } = await import('vitest')
@@ -377,9 +377,10 @@ await new GuideCommand({
 			expect([...codes].sort()).toStrictEqual([...core.PROBE_ERROR_CODES].sort())
 		})
 
-		// The guide states what `verdict.digest` covers. `prove` computes it with `computeDigest` over
-		// the case and the control, read against the workspace, so these assertions read the same
-		// function through the same inputs and would break if either sentence went false again.
+		// The guide states what `verdict.digest` covers. `prove` computes it with
+		// `computeWorkspaceDigest` over the case and the control, read against the workspace, so these
+		// assertions read the same function through the same inputs and would break if either sentence
+		// went false again.
 		it('digests the reason and the workspace the guide says it digests', () => {
 			const body = { case: CLAIM.case, control: CLAIM.control }
 			const reworded = {
@@ -397,14 +398,14 @@ await new GuideCommand({
 
 			// The instrument reproduces the token the flagship fence documents, so the assertions below
 			// are read against the digest the package really ships.
-			expect(computeDigest(ROOT, body)).toBe(DIGEST)
+			expect(computeWorkspaceDigest(ROOT, body)).toBe(DIGEST)
 			// Two claims differing only in the reason's prose are two claims.
-			expect(computeDigest(ROOT, reworded)).not.toBe(DIGEST)
+			expect(computeWorkspaceDigest(ROOT, reworded)).not.toBe(DIGEST)
 			// The flagship claim carries no absolute string, so its digest is the same in any workspace.
-			expect(computeDigest('/srv/checkout', body)).toBe(DIGEST)
+			expect(computeWorkspaceDigest('/srv/checkout', body)).toBe(DIGEST)
 			// A claim that carries one is read against the workspace it runs in.
-			expect(computeDigest('/srv/checkout', anchored)).not.toBe(
-				computeDigest('/opt/other', anchored),
+			expect(computeWorkspaceDigest('/srv/checkout', anchored)).not.toBe(
+				computeWorkspaceDigest('/opt/other', anchored),
 			)
 		})
 
@@ -414,16 +415,16 @@ await new GuideCommand({
 			async () => {
 				const runtime = new RuntimeStage(ROOT)
 				try {
-					const check = await runtime.inspect(CLAIM.case)
-					expect(check.stage).toBe('runtime')
-					expect(check.issues).toStrictEqual([])
+					const result = await runtime.inspect(CLAIM.case)
+					expect(result.stage).toBe('runtime')
+					expect(result.issues).toStrictEqual([])
 					expect(GUIDE).toContain(
 						'This runs no type or lint stage and does not issue a `Probe` receipt.',
 					)
 					expect(GUIDE).toContain('const runtime = new RuntimeStage(process.cwd())')
-					expect(GUIDE).toContain('const check = await runtime.inspect(claim.case)')
-					expect(GUIDE).toContain("check.stage // 'runtime'")
-					expect(GUIDE).toContain('check.issues // []')
+					expect(GUIDE).toContain('const result = await runtime.inspect(claim.case)')
+					expect(GUIDE).toContain("result.stage // 'runtime'")
+					expect(GUIDE).toContain('result.issues // []')
 				} finally {
 					await runtime.destroy()
 				}

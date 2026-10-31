@@ -951,10 +951,10 @@ export function normalizeValue(workspace: string, value: unknown): unknown {
  *
  * @example
  * ```ts
- * computeDigest('/srv/checkout', { strict: true }).length // 32
+ * computeWorkspaceDigest('/srv/checkout', { strict: true }).length // 32
  * ```
  */
-export function computeDigest(workspace: string, value: unknown): string {
+export function computeWorkspaceDigest(workspace: string, value: unknown): string {
 	return createHash('sha256')
 		.update(JSON.stringify(normalizeValue(workspace, value)))
 		.digest('hex')

@@ -1,7 +1,7 @@
 import type { Guard } from '@orkestrel/contract'
 import type {
 	Case,
-	Check,
+	StageResult,
 	Claim,
 	Control,
 	Draft,
@@ -177,14 +177,14 @@ export const isIssue: Guard<Issue> = recordOf(
  * Checks whether a value carries one stage's outcome.
  *
  * @param value - The value to check
- * @returns True if the value is a check; false otherwise
+ * @returns True if the value is a stage result; false otherwise
  *
  * @example
  * ```ts
- * isCheck({ stage: 'lint', elapsed: 17, issues: [] }) // true
+ * isStageResult({ stage: 'lint', elapsed: 17, issues: [] }) // true
  * ```
  */
-export const isCheck: Guard<Check> = recordOf({
+export const isStageResult: Guard<StageResult> = recordOf({
 	stage: isStage,
 	elapsed: isNumber,
 	issues: arrayOf(isIssue),
@@ -233,9 +233,9 @@ export const isProject: Guard<Project> = recordOf({
  * Checks whether a value carries a complete verdict.
  *
  * @remarks
- * Accepts any check count, because arity is the coordinator's obligation rather than this guard's:
- * a stage that could not start throws before a verdict is built, so a short list can only arrive
- * from a caller that assembled one by hand.
+ * Accepts any stage result count, because arity is the coordinator's obligation rather than this
+ * guard's: a stage that could not start throws before a verdict is built, so a short list can only
+ * arrive from a caller that assembled one by hand.
  *
  * @param value - The value to check
  * @returns True if the value is a verdict; false otherwise
@@ -254,8 +254,8 @@ export const isVerdict: Guard<Verdict> = recordOf(
 		toolchain: isToolchain,
 		project: isProject,
 		reason: isNonEmptyString,
-		case: arrayOf(isCheck),
-		control: arrayOf(isCheck),
+		case: arrayOf(isStageResult),
+		control: arrayOf(isStageResult),
 		elapsed: isNumber,
 		receipt: isString,
 	},

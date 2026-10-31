@@ -761,7 +761,7 @@ describe('bin entry', () => {
 				// Measured against the installed package: its default key bound carries a verdict whose
 				// control reports one issue and refuses the next one, so a control reporting more than
 				// that is what separates the published bound from the default.
-				const broke = record.control.find((check) => check.stage === 'type')
+				const broke = record.control.find((result) => result.stage === 'type')
 				expect(broke?.issues.length).toBeGreaterThan(2)
 				expect(record.receipt).toMatch(/^probe:/)
 			} finally {

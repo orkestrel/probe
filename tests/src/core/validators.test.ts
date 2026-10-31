@@ -1,6 +1,6 @@
 import type {
 	Case,
-	Check,
+	StageResult,
 	Claim,
 	Control,
 	Draft,
@@ -14,7 +14,7 @@ import {
 	CLAIM_SHAPE,
 	PROBE_STAGES,
 	isCase,
-	isCheck,
+	isStageResult,
 	isClaim,
 	isControl,
 	isIssue,
@@ -40,7 +40,7 @@ describe('core guards', () => {
 		}
 		const claim: Claim = { project: 'configs/src/tsconfig.core.json', case: subject, control }
 		const issue: Issue = { origin: 'claimant', path: '', message: '' }
-		const check: Check = { stage: 'lint', elapsed: 17, issues: [issue] }
+		const result: StageResult = { stage: 'lint', elapsed: 17, issues: [issue] }
 		const toolchain: Toolchain = {
 			typescript: '6.0.3',
 			oxlint: '1.79.0',
@@ -55,8 +55,8 @@ describe('core guards', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain,
 			project,
-			case: [check],
-			control: [check],
+			case: [result],
+			control: [result],
 			elapsed: 17,
 		}
 
@@ -88,8 +88,8 @@ describe('core guards', () => {
 				range: { start: { line: '0', character: 0 }, end: { line: 0, character: 4 } },
 			}),
 		).toBe(false)
-		expect(isCheck(check)).toBe(true)
-		expect(isCheck({ ...check, elapsed: '17' })).toBe(false)
+		expect(isStageResult(result)).toBe(true)
+		expect(isStageResult({ ...result, elapsed: '17' })).toBe(false)
 		expect(isToolchain(toolchain)).toBe(true)
 		expect(isToolchain({ ...toolchain, vitest: 4 })).toBe(false)
 		expect(isProject(project)).toBe(true)
@@ -116,7 +116,7 @@ describe('core guards', () => {
 			message: 'not assignable',
 		}
 		const { origin: _, ...anonymous } = issue
-		const check: Check = { stage: 'runtime', elapsed: 1, issues: [issue] }
+		const result: StageResult = { stage: 'runtime', elapsed: 1, issues: [issue] }
 		const verdict: Verdict = {
 			id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
@@ -125,8 +125,8 @@ describe('core guards', () => {
 				path: 'configs/src/tsconfig.core.json',
 				digest: 'd61f11b52460b1c6707cfac2c6078d59',
 			},
-			case: [check],
-			control: [check],
+			case: [result],
+			control: [result],
 			elapsed: 17,
 		}
 
@@ -234,7 +234,7 @@ describe('core guards', () => {
 	})
 
 	it('refuses a verdict that omits what judged it or names it blankly', () => {
-		const check: Check = { stage: 'lint', elapsed: 17, issues: [] }
+		const result: StageResult = { stage: 'lint', elapsed: 17, issues: [] }
 		const project: Project = {
 			path: 'configs/src/tsconfig.core.json',
 			digest: 'd61f11b52460b1c6707cfac2c6078d59',
@@ -244,8 +244,8 @@ describe('core guards', () => {
 			digest: '6ca20c3bff623031d3955b9d1a76d71d',
 			toolchain: { typescript: '6.0.3', oxlint: '1.79.0', vitest: '4.1.11' },
 			project,
-			case: [check],
-			control: [check],
+			case: [result],
+			control: [result],
 			elapsed: 17,
 		}
 		const { digest: _digest, ...withoutDigest } = verdict

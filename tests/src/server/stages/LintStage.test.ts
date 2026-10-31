@@ -106,15 +106,15 @@ describe('lint stage', () => {
 	it('reports a workspace lint issue at the declared path', { timeout: 60_000 }, async () => {
 		const stage = new LintStage(ROOT)
 		try {
-			const check = await stage.inspect(
+			const result = await stage.inspect(
 				{
 					files: [],
 					test: { path: 'tests/src/server/lint-candidate.test.ts', text: 'debugger\n' },
 				},
 				{ signal: UNBOUNDED },
 			)
-			expect(check.issues.length).toBeGreaterThan(0)
-			expect(check.issues).toEqual(
+			expect(result.issues.length).toBeGreaterThan(0)
+			expect(result.issues).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
 						origin: 'claimant',
@@ -125,7 +125,7 @@ describe('lint stage', () => {
 			)
 			// Oxlint publishes diagnostics about the supplied text and nothing else, so every
 			// issue this stage returns carries the origin that can disprove a claim.
-			expect(check.issues.every((issue) => issue.origin === 'claimant')).toBe(true)
+			expect(result.issues.every((issue) => issue.origin === 'claimant')).toBe(true)
 		} finally {
 			await stage.destroy()
 		}
@@ -143,7 +143,7 @@ describe('lint stage', () => {
 			const stage = new LintStage(ROOT)
 			const text = ['// padding', '// padding', 'debugger', ''].join('\n')
 			try {
-				const check = await stage.inspect(
+				const result = await stage.inspect(
 					{
 						files: [],
 						test: { path: 'tests/src/server/lint-coordinates.test.ts', text },
@@ -151,7 +151,7 @@ describe('lint stage', () => {
 					{ signal: UNBOUNDED },
 				)
 
-				const issue = check.issues.find((row) => row.message.includes('debugger'))
+				const issue = result.issues.find((row) => row.message.includes('debugger'))
 				expect(issue).toBeDefined()
 				expect(issue?.range?.start.line).toBe(2)
 				expect(issue?.range?.start.character).toBe(0)
