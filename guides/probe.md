@@ -29,8 +29,6 @@ trust with a shell.
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an absent
 optional field is absent rather than empty.
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
-
 | Name                | Kind      | Signature                                                                                                                                                                              | Summary                                                                               |
 | ------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `Stage`             | type      | `(typeof PROBE_STAGES)[number]`                                                                                                                                                        | Names an inspection a claim passes through, derived from `PROBE_STAGES`.              |
@@ -51,14 +49,12 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `ProbeErrorContext` | interface | `{ stage?, path?, project?, name?, deadline?, value? }`                                                                                                                                | Carries the structured detail one probe failure reports beside its message.           |
 | `ProbeErrorOptions` | interface | `{ origin, code, context?, cause? }`                                                                                                                                                   | Configures one probe failure at construction.                                         |
 
-A row whose `Shape` cell names call-signature members after `plus` carries those members in
-[`## Methods`](#methods); the data members before `plus` stay here.
+A row whose `Signature` cell names members with parentheses carries those members in
+[`## Methods`](#methods); the data members it names without parentheses stay here.
 
 ### Constants
 
 From [`constants.ts`](../src/core/constants.ts). Each is frozen.
-
-A `Shape` cell holds the constant's declared type.
 
 | Name                   | Kind  | Signature                                                               | Summary                                                                                                                                                                                           |
 | ---------------------- | ----- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -96,8 +92,6 @@ Schema. The schema is the wire contract's shape and `isClaim` is the admission r
 narrower on `Draft.path`: see
 [The advertised schema is wider than the admission rule](#registering-the-server).
 
-A `Shape` cell holds the constant's declared type.
-
 | Name            | Kind  | Signature                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Summary                                                                                                                  |
 | --------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `DRAFT_SHAPE`   | const | `import("@orkestrel/contract").ObjectShape<{ path: import("@orkestrel/contract").StringShape; text: import("@orkestrel/contract").StringShape; }, false>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Describes one proposed file a claim carries.                                                                             |
@@ -109,8 +103,6 @@ A `Shape` cell holds the constant's declared type.
 
 Total guards, from [`validators.ts`](../src/core/validators.ts). Each returns a boolean for any
 input and never throws.
-
-In a guard table a `Shape` cell holds the type the guard narrows to.
 
 | Name            | Kind  | Signature            | Summary                                                                                         |
 | --------------- | ----- | -------------------- | ----------------------------------------------------------------------------------------------- |
@@ -144,8 +136,6 @@ Pure leaves, from [`helpers.ts`](../src/core/helpers.ts).
 ### Server contracts
 
 From [`types.ts`](../src/server/types.ts).
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                   | Kind      | Signature                                               | Summary                                                                                          |
 | ---------------------- | --------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
