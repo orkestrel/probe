@@ -48,7 +48,7 @@ export class ProbeError extends Error {
 	constructor(message: string, options: ProbeErrorOptions) {
 		const cause = options.cause
 		super(message, cause === undefined ? undefined : { cause })
-		Object.defineProperty(this, Symbol.for('@orkestrel/probe.error'), { value: this })
+		Object.defineProperty(this, Symbol.for('@orkestrel/probe.ProbeError'), { value: this })
 		this.origin = options.origin
 		this.code = options.code
 		if (options.context !== undefined) this.context = options.context
@@ -78,7 +78,7 @@ export function isProbeError(value: unknown): value is ProbeError {
 	if (!isError(value)) return false
 	return holds(() => {
 		if (INTRINSICS.prototype(value) === Error.prototype) return false
-		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/probe.error'))
+		const descriptor = INTRINSICS.describe(value, Symbol.for('@orkestrel/probe.ProbeError'))
 		if (descriptor?.value !== value) return false
 		const origin: unknown = INTRINSICS.reflect.read(value, 'origin')
 		const code: unknown = INTRINSICS.reflect.read(value, 'code')

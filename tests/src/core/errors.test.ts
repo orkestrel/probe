@@ -58,7 +58,7 @@ describe('probe error', () => {
 				code: 'stalled',
 				name: 'ProbeError',
 			}),
-			Symbol.for('@orkestrel/probe.error'),
+			Symbol.for('@orkestrel/probe.ProbeError'),
 			{ value: true },
 		)
 		expect(isProbeError(undeclared)).toBe(false)
@@ -106,7 +106,7 @@ describe('probe error', () => {
 		])
 		const lookalike = Object.defineProperty(
 			new Error('The prove tool requires a valid claim'),
-			Symbol.for('@orkestrel/probe.error'),
+			Symbol.for('@orkestrel/probe.ProbeError'),
 			{ value: true },
 		)
 

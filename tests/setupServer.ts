@@ -1409,7 +1409,7 @@ export function createProbeErrorDriver(): string {
 		'const roots = process.argv.slice(2)',
 		"const copies = await Promise.all(roots.flatMap((root) => [import(pathToFileURL(join(root, 'dist/src/core/index.js')).href), require(join(root, 'dist/src/core/index.cjs'))]))",
 		'assert.equal(new Set(copies.map((copy) => copy.ProbeError)).size, copies.length)',
-		"const brand = Symbol.for('@orkestrel/probe.error')",
+		"const brand = Symbol.for('@orkestrel/probe.ProbeError')",
 		'for (const source of copies) {',
 		"  const error = new source.ProbeError('fixture', { origin: 'claimant', code: 'refused', context: { path: 'fixture.ts' } })",
 		"  class Derived extends source.ProbeError { constructor() { super('derived', { origin: 'workspace', code: 'missing' }); Object.defineProperty(this, 'name', { value: 'Derived' }) } }",
