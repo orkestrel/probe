@@ -1,4 +1,4 @@
-import { buildRecord, readCall, readInput, readSignals } from '../../setupServer.js'
+import { buildRecord, readProveAnswer, readInput, readSignals } from '../../setupServer.js'
 import type { ProbeServerHost } from '../../setupServer.js'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -604,17 +604,17 @@ describe('probe server', () => {
 	// publishes them to a dispatcher it owns, so `main.test.ts` drives the built entry against a real
 	// claim on each side of the bound instead.
 	it('refuses a record-bearing result under the installed default key bound', async () => {
-		expect(await readCall(buildRecord(1), {})).toMatchObject({
+		expect(await readProveAnswer(buildRecord(1), {})).toMatchObject({
 			id: 1,
 			result: { structuredContent: buildRecord(1) },
 		})
-		expect(await readCall(buildRecord(8), {})).toMatchObject({
+		expect(await readProveAnswer(buildRecord(8), {})).toMatchObject({
 			id: 1,
 			error: { message: 'Server execution returned an invalid tool result' },
 		})
 		// The same record under the leaf `ProbeServer` supplies, read from the constant the server
 		// passes rather than from a second copy of its value.
-		expect(await readCall(buildRecord(8), { keys: PROBE_KEYS })).toMatchObject({
+		expect(await readProveAnswer(buildRecord(8), { keys: PROBE_KEYS })).toMatchObject({
 			id: 1,
 			result: {
 				structuredContent: buildRecord(8),

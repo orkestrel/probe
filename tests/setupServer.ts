@@ -1098,7 +1098,7 @@ export function buildRecord(issues: number): Readonly<Record<string, JSONValue>>
 }
 
 /** Reads the response from a real MCP dispatcher with the requested content limit. */
-export async function readCall(
+export async function readProveAnswer(
 	record: Readonly<Record<string, JSONValue>>,
 	limit: MCPLimitOptions,
 ): Promise<unknown> {
