@@ -276,9 +276,7 @@ describe('bin entry', () => {
 				const refusedAnswer = readAnswer(refused)
 				expect(refusedAnswer).toMatchObject({ isError: true })
 				if (refusedAnswer === undefined) return
-				expect(readProbeContent(refusedAnswer)).toContain(
-					'The prove tool requires a claim matching the advertised schema',
-				)
+				expect(readProbeContent(refusedAnswer)).toContain('project: missing; expected string')
 				const admitted = answered.get(4)
 				expect({ ...evidence, admitted }).toMatchObject({ admitted: expect.any(String) })
 				if (admitted === undefined) return
