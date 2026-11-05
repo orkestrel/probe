@@ -5,7 +5,7 @@ import type { ProbeServerInterface } from './types.js'
 import { resolve } from 'node:path'
 import { addAbortListener } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { compileSchema, schemaToParameters } from '@orkestrel/contract'
+import { compileSchema, isRecord, schemaToParameters } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer, isBoundedJSON } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -307,14 +307,15 @@ export class ProbeServer implements ProbeServerInterface {
 		// returned: the record beside its rendering, the rendering alone, then the receipt block. A
 		// result those bounds refuse reaches the client as a JSON-RPC internal error instead, which
 		// costs the receipt as well as the record, so each arm drops what the bounds refused rather
-		// than dropping the answer. `isBoundedJSON` is also what admits a `Verdict` into a field the
-		// protocol types as JSON, which is why the record is read against the bounds before the pair
-		// carrying it is composed. The last arm returns whether or not it is admitted: it is a
+		// than dropping the answer. `isBoundedJSON` and `isRecord` are also what admit a `Verdict` into
+		// a field the protocol types as a JSON object, which is why the record is read against the
+		// bounds before the pair carrying it is composed. The last arm returns whether or not it is admitted: it is a
 		// handful of keys and a few short lines, so bounds that refuse it belong to a server that
 		// could produce no answer at all.
-		const arms: readonly MCPCallResult[] = isBoundedJSON(record, bounds)
-			? [{ ...rendered, structuredContent: record }, rendered, minimal]
-			: [rendered, minimal]
+		const arms: readonly MCPCallResult[] =
+			isBoundedJSON(record, bounds) && isRecord(record)
+				? [{ ...rendered, structuredContent: record }, rendered, minimal]
+				: [rendered, minimal]
 		return arms.find((arm) => isBoundedJSON(arm, bounds)) ?? minimal
 	}
 }

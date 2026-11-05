@@ -1070,7 +1070,7 @@ export async function findProbePipeLimit(low: number, high: number): Promise<num
 }
 
 /** Builds an inert verdict carrying the requested number of issues. */
-export function buildRecord(issues: number): JSONValue {
+export function buildRecord(issues: number): Readonly<Record<string, JSONValue>> {
 	return {
 		id: '88a5addc-7d33-40dc-9a5a-104b71f8787d',
 		digest: '6ca20c3bff623031d3955b9d1a76d71d',
@@ -1098,7 +1098,10 @@ export function buildRecord(issues: number): JSONValue {
 }
 
 /** Reads the response from a real MCP dispatcher with the requested content limit. */
-export async function readCall(record: JSONValue, limit: MCPLimitOptions): Promise<unknown> {
+export async function readCall(
+	record: Readonly<Record<string, JSONValue>>,
+	limit: MCPLimitOptions,
+): Promise<unknown> {
 	const tools = createToolManager()
 	tools.add(
 		createTool({
