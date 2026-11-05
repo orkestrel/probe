@@ -2135,7 +2135,7 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 
 	it(
 		"writes its boot dependencies under the sweep's revision identity",
-		{ timeout: 240_000 },
+		{ timeout: 60_000 },
 		async () => {
 			// The boot controls write real files into the target's `tmp/probes`, and a host killed
 			// before the boot's own cleanup runs leaves them there. They carry the revision marker
@@ -2153,18 +2153,25 @@ if (fs.existsSync(active) && !fs.existsSync(held) && !process.argv.includes('--s
 				"import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { projects: [{ test: { name: { label: 'probe' }, include: ['tmp/probes/**/*.test.ts'], environment: 'node' } }] } })\n",
 			)
 			const directory = resolve(scratch.path, 'tmp/probes')
-			const probe = new Probe({ workspace: scratch.path, deadline: 200_000 })
-			void probe.start().catch(() => {})
+			const aborted = new AbortController()
+			const probe = new Probe({
+				workspace: scratch.path,
+				deadline: 60_000,
+				on: { error: (error) => aborted.abort(error) },
+			})
 
 			try {
+				await probe.start()
 				const observed = await retryUntil(
 					'the probe boot dependencies to appear',
 					() =>
 						existsSync(directory)
-							? readdirSync(directory).filter((name) => name.startsWith('arm-'))
+							? readdirSync(directory).filter(
+									(name) => name.startsWith('arm-') && !name.includes('.test.'),
+								)
 							: [],
 					(names) => names.length === 2,
-					{ budget: 180_000, interval: 5 },
+					{ budget: 30_000, interval: 5, signal: aborted.signal },
 				)
 				const revision = `probe-${process.pid}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 				expect([...observed].sort()).toStrictEqual([
