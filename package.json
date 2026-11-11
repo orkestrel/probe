@@ -92,25 +92,25 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.22",
-		"@orkestrel/emitter": "^0.0.15",
-		"@orkestrel/lsp": "^0.0.14",
-		"@orkestrel/mcp": "^0.0.42",
-		"@orkestrel/pool": "^0.0.20",
-		"@orkestrel/process": "^0.0.18",
-		"@orkestrel/timeout": "^0.0.16",
-		"@orkestrel/tool": "^0.0.22"
+		"@orkestrel/contract": "^0.0.23",
+		"@orkestrel/emitter": "^0.0.16",
+		"@orkestrel/lsp": "^0.0.15",
+		"@orkestrel/mcp": "^0.0.43",
+		"@orkestrel/pool": "^0.0.21",
+		"@orkestrel/process": "^0.0.19",
+		"@orkestrel/timeout": "^0.0.17",
+		"@orkestrel/tool": "^0.0.23"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.60.1",
-		"@orkestrel/guide": "^0.0.30",
-		"@orkestrel/scaffold": "^0.0.125",
-		"@orkestrel/test": "^0.0.33",
+		"@orkestrel/guide": "^0.0.31",
+		"@orkestrel/scaffold": "^0.0.132",
+		"@orkestrel/test": "^0.0.35",
 		"@types/node": "^24.19.2",
-		"oxfmt": "^0.77.0",
-		"oxlint": "^1.92.0",
+		"oxfmt": "^0.78.0",
+		"oxlint": "^1.93.0",
 		"typescript": "^7.0.2",
-		"vite": "^8.3.6",
+		"vite": "^8.3.8",
 		"vitest": "^5.1.0"
 	},
 	"peerDependencies": {
