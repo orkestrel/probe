@@ -97,14 +97,14 @@
 		"@orkestrel/lsp": "^0.0.16",
 		"@orkestrel/mcp": "^0.0.44",
 		"@orkestrel/pool": "^0.0.22",
-		"@orkestrel/process": "^0.0.20",
+		"@orkestrel/process": "^0.0.21",
 		"@orkestrel/timeout": "^0.0.18",
 		"@orkestrel/tool": "^0.0.24"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.60.1",
 		"@orkestrel/guide": "^0.0.32",
-		"@orkestrel/scaffold": "^0.0.136",
+		"@orkestrel/scaffold": "^0.0.137",
 		"@orkestrel/test": "^0.0.40",
 		"@types/node": "^24.19.2",
 		"oxfmt": "^0.78.0",
